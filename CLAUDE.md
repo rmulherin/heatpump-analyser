@@ -10,6 +10,9 @@ README.md — reference it instead.
 - Architecture and data flow → `~/Documents/git-repos/praxis-claude-hub/projects/tools/heatpump-analyser/architecture.md`
 - Agent protocols and formats → `~/Documents/git-repos/claude-coding-hub/coding/agents/`
 - Generic coding standards → `~/Documents/git-repos/claude-coding-hub/coding/rules/general-principles.md`
+- JS learnings → `~/Documents/git-repos/claude-coding-hub/coding/languages/javascript/learnings.md`
+- JS patterns → `~/Documents/git-repos/claude-coding-hub/coding/languages/javascript/patterns.md`
+- Session memory → `~/Documents/git-repos/claude-coding-hub/context/heatpump-memory.md`
 
 ---
 
@@ -136,7 +139,7 @@ review via claude.ai. → See planner.md Completion Protocol.
 | **Verify** | Browser testing — see Verification below. |
 | **Deviations** | Append to plan file immediately — requires implementation context. |
 | **Commit** | Code + deviations + CLAUDE.md status update. Push. |
-| **Document+Learn** | GATE: load `doc-updater.md`. Update README, CLAUDE.md status. |
+| **Document+Learn** | GATE: load `doc-updater.md`. Update README, CLAUDE.md status. Write learnings to `~/Documents/git-repos/claude-coding-hub/coding/languages/javascript/learnings.md`. |
 | **User-Test** | Rhiannon tests in browser. Approved when she says so. |
 
 ### Continuous flow: Verify → Commit → Document
@@ -235,6 +238,42 @@ Phase Gates). The items below are **project-specific only:**
 - [ ] No hardcoded Octopus account data (Rhiannon's or anyone's)
 - [ ] CLAUDE.md status current in same commit
 - [ ] Design doc deviations recorded in plan file
+
+---
+
+## Learnings
+
+**Language stack:** JavaScript (vanilla). Learnings go to the JS-specific file, NOT
+the Python learnings file.
+
+- **Learnings file:** `~/Documents/git-repos/claude-coding-hub/coding/languages/javascript/learnings.md`
+- **Patterns file:** `~/Documents/git-repos/claude-coding-hub/coding/languages/javascript/patterns.md`
+
+**When to write:** During the Document+Learn pipeline phase. Any reusable insight about
+vanilla JS, Chart.js, browser APIs, GitHub Pages, or client-side architecture that would
+help a future session.
+
+**Do NOT load** Python or C#/F# learnings files. They are for other projects and will
+waste context.
+
+---
+
+## Session Memory
+
+Lightweight session state for recovery. Since this project runs locally (not EC2),
+there is no spot-instance risk, but mid-session context exhaustion is still possible.
+
+**Memory file:** `~/Documents/git-repos/claude-coding-hub/context/heatpump-memory.md`
+
+**After every commit:** Update the memory file with:
+1. Which module/plan was just completed
+2. What is in progress
+3. What remains
+
+**Priority order when context pressure is high:**
+1. Commit and push code
+2. Update memory file
+3. Documentation tasks
 
 ---
 
