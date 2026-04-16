@@ -8,7 +8,9 @@
 
 ## Task description
 
-Wire the baseload separation module (`js/baseload.js` from Phase 3a) into the app orchestration and display results, warnings, and method transparency to the user. This phase connects the pure computation to the running application.
+Wire the baseload separation module (`js/baseload.js` from Phase 3a) into the app orchestration and display results to the user. This includes the primary separation results (method, daily baseload, absence count, validation status), all warnings, and the supplementary electric load detection results (electric heating, AC, limitations).
+
+This phase connects the pure computation to the running application.
 
 ---
 
@@ -22,7 +24,15 @@ Wire the baseload separation module (`js/baseload.js` from Phase 3a) into the ap
 
 Module 3 will follow this identical pattern.
 
-**UI approach:** No new HTML sections needed for this phase. Warnings and status messages use the existing `showStatus()` / `showCsvStatus()` infrastructure. The baseload summary (method used, daily baseload, absence count) appends to the existing results display. The HH heatmap visualisation is Module 9 scope, not this module.
+**UI approach:** No new HTML sections needed. Warnings and status messages use the existing `showStatus()` / `showCsvStatus()` infrastructure. The supplementary loads results (electric heating, AC) are displayed as informational or warning status messages depending on confidence level. The HH heatmap visualisation is Module 9 scope, not this module.
+
+**Supplementary loads display logic:** The design doc specifies that `supplementary_loads` outputs are consumed by `ui-design` for several distinct messaging purposes:
+- Electric heating: accuracy caveat on the heat-loss panel ("your home also uses some electricity for heating")
+- AC: cooling messaging reframe (three phrasing sets: AC present, no AC, couldn't tell)
+- `electric_heating_is_primary`: framing in the no-gas case
+- `limitations`: "what this doesn't cover" note
+
+For 3b, we surface the detection results and limitations as status messages. The full UI treatment (panel-specific messaging, heatmap labelling) is Module 9 scope.
 
 ---
 
@@ -47,50 +57,10 @@ import {
 } from './baseload.js';
 ```
 
-### Step 2 — `runBaseloadSeparation()` orchestration function (Medium complexity)
+### Step 2 — Method and confidence label mappings (Low complexity)
 
-Add function `runBaseloadSeparation(showProgressFn, showStatusFn)`:
+Add label-mapping objects in `app.js`:
 
-1. Retrieve upstream data:
-   ```js
-   const ingestion = getIngestionResult();
-   const externalResult = getExternalResult();
-   if (!ingestion || !externalResult) return;
-   ```
-2. Show progress: `'Separating heating demand from baseload…'`
-3. Call `separateBaseload(ingestion.consumption, externalResult.external)`.
-4. Store result via `setBaseloadResult(result)`.
-5. Display summary status message:
-   - Method used (human-readable label)
-   - Daily baseload (mean and median from metadata)
-   - Absence days detected
-   - Validation status
-6. Display each warning from `result.baseload_metadata.warnings` via `showStatusFn(warning, 'warning')`.
-7. If `validation_status === "poor"`, show the R² warning as a warning-type status.
-
-### Step 3 — Wire into Octopus flow (Low complexity)
-
-In `continueWithProperty()`, after the Module 2 call (`await runExternalData(...)` at line ~397), add:
-```js
-await runBaseloadSeparation(
-  (text) => showProgress(text, undefined),
-  (msg, type) => showStatus(msg, type)
-);
-```
-
-### Step 4 — Wire into CSV flow (Low complexity)
-
-In the CSV `btnCsvAnalyse` click handler, after the Module 2 call (~line 746), add the same pattern:
-```js
-await runBaseloadSeparation(
-  (text) => showCsvProgress(text),
-  (msg, type) => showCsvStatus(msg, type)
-);
-```
-
-### Step 5 — Method label mapping (Low complexity)
-
-Add a helper function (or object) in `app.js` to map method codes to user-facing labels:
 ```js
 const BASELOAD_METHOD_LABELS = {
   'summer-hh-profile-weekday-split': 'Summer weekday/weekend profile (best)',
@@ -100,7 +70,86 @@ const BASELOAD_METHOD_LABELS = {
   'literature-default': 'UK average estimate (insufficient data)',
   'no-gas': 'No gas supply detected',
 };
+
+const CONFIDENCE_LABELS = {
+  'high': 'high confidence',
+  'moderate': 'moderate confidence',
+  'low': 'low confidence — treat with caution',
+  'none': '',
+};
 ```
+
+### Step 3 — `runBaseloadSeparation()` orchestration function (Medium complexity)
+
+Add function `runBaseloadSeparation(showProgressFn, showStatusFn)`:
+
+1. **Retrieve upstream data:**
+   ```js
+   const ingestion = getIngestionResult();
+   const externalResult = getExternalResult();
+   if (!ingestion || !externalResult) return;
+   ```
+
+2. **Show progress:** `'Separating heating demand from baseload…'`
+
+3. **Call `separateBaseload(ingestion.consumption, externalResult.external)`.**
+
+4. **Store result** via `setBaseloadResult(result)`.
+
+5. **Display primary separation summary:**
+   - Method used (via `BASELOAD_METHOD_LABELS`)
+   - Daily baseload: mean and median from metadata (formatted to 1 decimal place, kWh/day)
+   - Validation status and R² value (if available)
+   - Absence days detected (if any)
+
+6. **Display warnings** from `result.baseload_metadata.warnings` via `showStatusFn(warning, 'warning')`.
+
+7. **Display supplementary load results** (Step H output):
+
+   **Electric heating:**
+   - If `electric_heating_detected` and not `electric_heating_is_primary`:
+     - Show as warning: "Supplementary electric heating detected ({confidence}). Estimated {X} kWh over the data period ({Y} kWh per degree-day). Your gas-derived heat loss may underestimate your home's true heating demand."
+   - If `electric_heating_is_primary` (no-gas case):
+     - Show as info: "Electric heating detected ({confidence}). Estimated {X} kWh over the data period. Your home appears to heat with electricity rather than gas."
+   - If confidence = `"low"`:
+     - Show as info: "Weak signal for supplementary electric heating (low confidence) — not included in heat loss adjustment."
+
+   **Air conditioning:**
+   - If `air_conditioning_detected`:
+     - Show as info: "Air conditioning detected ({confidence}). An air-source heat pump could replace your existing cooling system as well as providing heating."
+   - If `ac_detection_note === "insufficient_cdd_data"`:
+     - Show as info: "Not enough warm-weather data to assess whether you have air conditioning."
+   - If not detected and no note (evaluated, genuinely no signal): no message.
+
+   **Limitations:**
+   - If any detection ran (method = `"regression"`), show a compact note: "Note: supplementary load detection has limitations — see details below." followed by each limitation string from `result.supplementary_loads.limitations` as info-type status messages.
+   - If method is `"skipped_insufficient_data"` or `"skipped_no_electricity"`: no limitations displayed (the module didn't run, so caveats don't apply).
+
+### Step 4 — Wire into Octopus flow (Low complexity)
+
+In `continueWithProperty()`, after the Module 2 call (`await runExternalData(...)` at ~line 397), add:
+```js
+await runBaseloadSeparation(
+  (text) => showProgress(text, undefined),
+  (msg, type) => showStatus(msg, type)
+);
+```
+
+### Step 5 — Wire into CSV flow (Low complexity)
+
+In the CSV `btnCsvAnalyse` click handler, after the Module 2 call (~line 746), add:
+```js
+await runBaseloadSeparation(
+  (text) => showCsvProgress(text),
+  (msg, type) => showCsvStatus(msg, type)
+);
+```
+
+### Step 6 — Error handling (Low complexity)
+
+Wrap `separateBaseload()` call in try/catch matching the existing Module 2 pattern:
+- On error: show error status message, log to console, do not block user from seeing Module 1+2 results.
+- `getBaseloadResult()` returns null — downstream modules will guard on this.
 
 ---
 
@@ -108,9 +157,11 @@ const BASELOAD_METHOD_LABELS = {
 
 | Risk | Mitigation |
 |------|-----------|
-| `separateBaseload()` throws unexpectedly, breaking the Octopus/CSV flow | Wrap in try/catch matching the existing Module 2 pattern. Show error status, don't block the user from seeing Module 1+2 results. |
+| `separateBaseload()` throws unexpectedly, breaking the Octopus/CSV flow | Wrap in try/catch matching Module 2 pattern. Show error status, don't block Module 1+2 results. |
 | Module 2 result not available (weather fetch failed earlier) | Guard clause at top of `runBaseloadSeparation()` — if `getExternalResult()` is null, skip silently (Module 2 already showed the error). |
 | Progress message ordering unclear to user | Use distinct progress text ("Separating heating demand…") that clearly follows the external data step. |
+| Supplementary load messages overwhelming the user | Only show detection messages when relevant (detected or low confidence). Limitations shown as a compact group. Skipped/no-electricity cases produce no output. |
+| Phrasing confusion between "supplementary" and "primary" electric heating | `electric_heating_is_primary` flag drives distinct phrasing. No-gas case says "heats with electricity" not "supplementary electric heating". |
 
 ---
 
@@ -120,6 +171,10 @@ const BASELOAD_METHOD_LABELS = {
 - [ ] Baseload method, daily baseload estimate, and validation status displayed to user
 - [ ] All warnings from `baseload_metadata.warnings` surfaced in the UI
 - [ ] Absence count displayed when absences detected
+- [ ] Electric heating detection result displayed with appropriate phrasing and confidence level
+- [ ] AC detection result displayed (three cases: detected, insufficient data, no signal)
+- [ ] `electric_heating_is_primary` drives correct framing in no-gas case
+- [ ] Limitations displayed when Step H regression ran; suppressed when skipped
 - [ ] Failure in Module 3 does not prevent user from seeing Module 1+2 results
 - [ ] `getBaseloadResult()` returns the stored result for downstream modules
 - [ ] No new HTML elements needed — uses existing status/progress infrastructure
