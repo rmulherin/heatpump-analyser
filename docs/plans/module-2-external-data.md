@@ -548,7 +548,7 @@ Verdict: APPROVED WITH EDITS — all eight findings resolved inline; ready for i
 ## Implementation Deviations
 
 **Date:** 2026-04-16
-**Commit:** (to be filled after commit)
+**Commit:** 5319d04
 
 1. **CSV lat/lon reuse not possible (Step 10).** Plan said "If CSV path and Module 1
    already validated the postcode: reuse lat/lon from Module 1's validation result."
