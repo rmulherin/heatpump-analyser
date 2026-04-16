@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Heat Pump Analyser</title>
+  <meta name="description" content="Should you install a heat pump? Find out using your own smart meter data.">
+  <link rel="stylesheet" href="css/styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js" defer></script>
+</head>
+<body>
+  <div class="container">
+
+    <header>
+      <h1>Heat Pump Analyser</h1>
+      <p>Should you install a heat pump? Find out using your own smart meter data.</p>
+    </header>
+
+    <!-- Data Input Card -->
+    <section class="card" id="data-input-card">
+      <h2>Your Energy Data</h2>
+
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="octopus">Octopus Energy</button>
+        <button class="tab-btn" data-tab="csv">CSV Upload</button>
+      </div>
+
+      <!-- Octopus Tab -->
+      <div class="tab-panel active" id="tab-octopus">
+        <div class="form-group">
+          <label for="api-key">API Key</label>
+          <input type="password" id="api-key" autocomplete="off"
+                 placeholder="Your Octopus API key">
+          <p class="form-hint">Find yours at <a href="https://octopus.energy/dashboard/new/accounts/personal-details/api-access" target="_blank" rel="noopener">octopus.energy/dashboard</a></p>
+        </div>
+
+        <div class="form-group">
+          <label for="account-number">Account Number</label>
+          <input type="text" id="account-number" autocomplete="off"
+                 placeholder="A-1234ABCD">
+        </div>
+
+        <button class="btn btn-primary btn-full" id="btn-fetch">Fetch Data</button>
+
+        <!-- Property selection (shown when multiple properties) -->
+        <div id="property-selection" class="hidden">
+          <h3 style="font-size: 0.95rem; margin: 1rem 0 0.5rem; color: var(--colour-navy);">Select a property</h3>
+          <ul class="property-list" id="property-list"></ul>
+          <button class="btn btn-primary btn-full" id="btn-confirm-property">Use Selected Property</button>
+        </div>
+
+        <!-- Gas unit sanity check -->
+        <div id="gas-check-area" class="hidden">
+          <div class="gas-check">
+            <p>Your estimated daily gas cost:</p>
+            <p class="costs">
+              Summer (<span id="gas-check-summer-month"></span>): <span id="gas-check-summer">—</span> &middot;
+              Winter (<span id="gas-check-winter-month"></span>): <span id="gas-check-winter">—</span>
+            </p>
+            <p>Does this look right? If costs seem very low, your meter may read in cubic metres.</p>
+            <div class="toggle-wrap">
+              <input type="checkbox" id="gas-m3-toggle">
+              <label for="gas-m3-toggle">My meter reads in cubic metres (m&sup3;)</label>
+            </div>
+            <button class="btn btn-primary" id="btn-gas-confirm" style="margin-top: 0.75rem;">Continue</button>
+          </div>
+        </div>
+
+        <!-- Progress -->
+        <div id="progress-area" class="progress-area hidden">
+          <p class="progress-text" id="progress-text">Contacting Octopus…</p>
+          <div class="progress-bar-wrap">
+            <div class="progress-bar-fill" id="progress-bar"></div>
+          </div>
+        </div>
+
+        <!-- Status messages -->
+        <div class="status-area" id="status-area"></div>
+      </div>
+
+      <!-- CSV Tab -->
+      <div class="tab-panel" id="tab-csv">
+        <p class="form-hint" style="margin-bottom: 1rem;">Coming in Phase 2</p>
+      </div>
+    </section>
+
+    <!-- Results Summary -->
+    <section class="card hidden" id="results-card">
+      <h2>Data Summary</h2>
+      <div class="results-summary" id="results-summary"></div>
+    </section>
+
+    <!-- Placeholder sections for downstream modules -->
+    <section class="card hidden" id="analysis-card">
+      <h2>Analysis</h2>
+      <p class="form-hint">Modules 2–9 will appear here as they are implemented.</p>
+    </section>
+
+  </div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

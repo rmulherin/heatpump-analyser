@@ -458,7 +458,9 @@ Verdict: APPROVED WITH EDITS — all eight findings resolved inline; ready for i
 
 ## Implementation Deviations
 
-**Date:**
-**Commit:**
+**Date:** 2026-04-16
+**Commit:** (Phase 1 implementation)
 
-[If no deviations: "None."]
+1. **Pagination helpers consolidated** — Plan implied two separate functions for paginated fetches (with and without progress callback). Implemented as a single `fetchAllPages(url, headers, onProgress)` function. No behavioural change; `onProgress` is optional.
+
+2. **HTML escaping added** — API-sourced values (address, postcode) injected via innerHTML are now escaped through `escapeHtml()`. Not specified in the plan but required by the project security standard (OWASP XSS prevention).
