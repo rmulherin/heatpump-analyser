@@ -89,25 +89,25 @@ export async function fetchAccount(apiKey, accountNumber) {
     const elecPoint = elecPoints[0];
     const gasPoint = gasPoints[0];
 
-    let mpan = null, elecSerial = null, elecAgreements = [];
+    let mpan = null, elecSerial = null, elecMeters = [], elecAgreements = [];
     if (elecPoint) {
       mpan = elecPoint.mpan;
-      const meters = elecPoint.meters || [];
-      if (meters.length > 1) {
-        console.log('Multiple electricity meters found:', meters.map(m => m.serial_number));
+      elecMeters = elecPoint.meters || [];
+      if (elecMeters.length > 1) {
+        console.log('Multiple electricity meters found:', elecMeters.map(m => m.serial_number));
       }
-      elecSerial = meters.length > 0 ? meters[meters.length - 1].serial_number : null;
+      elecSerial = elecMeters.length > 0 ? elecMeters[elecMeters.length - 1].serial_number : null;
       elecAgreements = elecPoint.agreements || [];
     }
 
-    let mprn = null, gasSerial = null, gasAgreements = [];
+    let mprn = null, gasSerial = null, gasMeters = [], gasAgreements = [];
     if (gasPoint) {
       mprn = gasPoint.mprn;
-      const meters = gasPoint.meters || [];
-      if (meters.length > 1) {
-        console.log('Multiple gas meters found:', meters.map(m => m.serial_number));
+      gasMeters = gasPoint.meters || [];
+      if (gasMeters.length > 1) {
+        console.log('Multiple gas meters found:', gasMeters.map(m => m.serial_number));
       }
-      gasSerial = meters.length > 0 ? meters[meters.length - 1].serial_number : null;
+      gasSerial = gasMeters.length > 0 ? gasMeters[gasMeters.length - 1].serial_number : null;
       gasAgreements = gasPoint.agreements || [];
     }
 
@@ -116,6 +116,8 @@ export async function fetchAccount(apiKey, accountNumber) {
       mprn,
       elecSerial,
       gasSerial,
+      elecMeters,
+      gasMeters,
       postcode: prop.postcode || null,
       address: prop.address_line_1 || prop.postcode || 'Unknown address',
       elecAgreements,
@@ -352,6 +354,240 @@ export async function buildTariffTimeline(agreements, fuelType, paymentMethod, o
   }
 
   return allRates;
+}
+
+
+// ===== Step 10: CSV Parsing =====
+
+function londonToUtc(dateStr) {
+  // Parse a naive datetime string as Europe/London and return UTC ISO string.
+  // Uses Intl to detect the offset for the given date in Europe/London.
+  const parts = dateStr.trim().match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (!parts) return null;
+
+  const [, year, month, day, hour, minute, second] = parts;
+  const sec = second || '00';
+
+  // Build a Date assuming UTC, then use Intl to find London's offset at that moment
+  const utcGuess = new Date(`${year}-${month}-${day}T${hour}:${minute}:${sec}Z`);
+
+  // Get London's UTC offset at this moment
+  const formatter = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/London',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  });
+  const londonParts = formatter.formatToParts(utcGuess);
+  const lp = {};
+  for (const p of londonParts) lp[p.type] = p.value;
+  const londonDate = new Date(`${lp.year}-${lp.month}-${lp.day}T${lp.hour}:${lp.minute}:${lp.second}Z`);
+  const offsetMs = londonDate.getTime() - utcGuess.getTime();
+
+  // The actual UTC time = naive time - offset
+  const actualUtc = new Date(utcGuess.getTime() - offsetMs);
+
+  // Verify round-trip: converting actualUtc back to London should give us the original values
+  const checkParts = formatter.formatToParts(actualUtc);
+  const cp = {};
+  for (const p of checkParts) cp[p.type] = p.value;
+
+  if (cp.hour !== hour || cp.minute !== minute || cp.day !== day) {
+    // Spring gap: the local time doesn't exist
+    return { error: 'spring_gap' };
+  }
+
+  return actualUtc.toISOString();
+}
+
+export function parseCSV(fileContent) {
+  const lines = fileContent.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+  const errors = [];
+
+  if (lines.length === 0) {
+    errors.push("CSV file is empty.");
+    return { records: [], errors };
+  }
+
+  // Validate header
+  const headerLine = lines[0].toLowerCase().replace(/\s/g, '');
+  if (headerLine !== 'datetime,gas_kwh,electricity_kwh') {
+    errors.push("CSV format doesn't match the template. Expected columns: datetime, gas_kwh, electricity_kwh.");
+    return { records: [], errors };
+  }
+
+  const records = [];
+  const utcTimestampMap = new Map(); // track duplicates for autumn clock change
+
+  for (let i = 1; i < lines.length; i++) {
+    const rowNum = i + 1;
+    const fields = lines[i].split(',');
+
+    if (fields.length !== 3) {
+      errors.push(`Row ${rowNum}: expected 3 columns, found ${fields.length}.`);
+      continue;
+    }
+
+    const rawTimestamp = fields[0].trim();
+    const rawGas = fields[1].trim();
+    const rawElec = fields[2].trim();
+
+    // Parse timestamp
+    let utcIso;
+    if (rawTimestamp.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(rawTimestamp)) {
+      // Explicit timezone — honour it
+      const d = new Date(rawTimestamp);
+      if (isNaN(d.getTime())) {
+        errors.push(`Row ${rowNum}: timestamp "${rawTimestamp}" is not a valid date.`);
+        continue;
+      }
+      utcIso = d.toISOString();
+    } else {
+      // Assume Europe/London
+      const result = londonToUtc(rawTimestamp);
+      if (result === null) {
+        errors.push(`Row ${rowNum}: timestamp "${rawTimestamp}" is not a valid date format. Use YYYY-MM-DD HH:MM.`);
+        continue;
+      }
+      if (result.error === 'spring_gap') {
+        errors.push(`Timestamp at row ${rowNum} falls in the spring clock-forward gap and is invalid.`);
+        continue;
+      }
+      utcIso = result;
+    }
+
+    // Validate HH interval (00 or 30 minutes)
+    const mins = new Date(utcIso).getUTCMinutes();
+    if (mins !== 0 && mins !== 30) {
+      errors.push("Timestamps must be at half-hour intervals (e.g. 09:00, 09:30, 10:00).");
+      continue;
+    }
+
+    // Check for autumn clock-change duplicates — reject both rows
+    if (utcTimestampMap.has(utcIso)) {
+      const prevRow = utcTimestampMap.get(utcIso);
+      errors.push(`Rows ${prevRow} and ${rowNum} resolve to the same UTC timestamp (autumn clock change). Please resolve the ambiguity in your CSV.`);
+      // Remove the first row's record too
+      const idx = records.findIndex(r => r.interval_start === utcIso);
+      if (idx !== -1) records.splice(idx, 1);
+      continue;
+    }
+    utcTimestampMap.set(utcIso, rowNum);
+
+    // Parse consumption values
+    const gasKwh = parseFloat(rawGas);
+    const elecKwh = parseFloat(rawElec);
+
+    if (isNaN(gasKwh) || isNaN(elecKwh)) {
+      errors.push(`Row ${rowNum}: gas_kwh and electricity_kwh must be numbers.`);
+      continue;
+    }
+
+    if (gasKwh < 0) {
+      errors.push(`Negative consumption value at row ${rowNum}. Check your data — consumption should be ≥ 0.`);
+      continue;
+    }
+    if (elecKwh < 0) {
+      errors.push(`Negative consumption value at row ${rowNum}. Check your data — consumption should be ≥ 0.`);
+      continue;
+    }
+
+    records.push({
+      interval_start: utcIso,
+      gas_kwh: gasKwh,
+      elec_kwh: elecKwh,
+    });
+  }
+
+  // Minimum data check
+  if (records.length > 0 && errors.length === 0) {
+    const timestamps = records.map(r => new Date(r.interval_start).getTime());
+    const rangeMs = Math.max(...timestamps) - Math.min(...timestamps);
+    const rangeDays = rangeMs / (24 * 60 * 60 * 1000);
+    if (rangeDays < CONFIG.MIN_DAYS_FOR_ANALYSIS) {
+      errors.push(`Only ${Math.round(rangeDays)} days of data. At least ${CONFIG.MIN_DAYS_FOR_ANALYSIS} days needed for a meaningful analysis.`);
+    }
+  }
+
+  return { records, errors };
+}
+
+
+// ===== Step 11: Postcode Validation =====
+
+export async function validatePostcode(postcode) {
+  const trimmed = postcode.trim().replace(/\s+/g, '+');
+  const url = `${CONFIG.POSTCODES_BASE_URL}/${trimmed}`;
+
+  let resp;
+  try {
+    resp = await fetch(url);
+  } catch (e) {
+    return { valid: false, error: 'Could not reach the postcode lookup service. Check your internet connection.' };
+  }
+
+  if (resp.status === 404) {
+    return { valid: false, error: 'Postcode not recognised. Check the format (e.g. SW1A 1AA) and try again.' };
+  }
+
+  if (!resp.ok) {
+    return { valid: false, error: 'Postcode lookup failed. Try again.' };
+  }
+
+  const data = await resp.json();
+  return {
+    valid: true,
+    lat: data.result.latitude,
+    lon: data.result.longitude,
+  };
+}
+
+
+// ===== Step 13: Meter Replacement Stitching =====
+
+export async function fetchConsumptionStitched(apiKey, mpan, mprn, meters, fuelType) {
+  // meters: array of { serial_number, ... } in chronological order
+  // Fetches consumption from all meters and concatenates
+  const periodTo = new Date();
+  const periodFrom = new Date(Date.now() - CONFIG.LOOKBACK_MS);
+  periodFrom.setUTCHours(0, 0, 0, 0);
+
+  const fromStr = periodFrom.toISOString();
+  const toStr = periodTo.toISOString();
+  const headers = { 'Authorization': authHeader(apiKey) };
+
+  const allRecords = [];
+  const serialsUsed = [];
+
+  for (const meter of meters) {
+    const meterPoint = fuelType === 'electricity'
+      ? `electricity-meter-points/${mpan}`
+      : `gas-meter-points/${mprn}`;
+    const url = `${CONFIG.OCTOPUS_BASE_URL}/${meterPoint}/meters/${meter.serial_number}/consumption/?period_from=${fromStr}&period_to=${toStr}&page_size=${CONFIG.CONSUMPTION_PAGE_SIZE}&order_by=period`;
+
+    try {
+      const data = await fetchAllPages(url, headers);
+      if (data.results.length > 0) {
+        allRecords.push(...data.results);
+        serialsUsed.push(meter.serial_number);
+      }
+    } catch (e) {
+      console.warn(`No data from meter ${meter.serial_number} (${fuelType})`);
+    }
+  }
+
+  // Deduplicate by interval_start (prefer later meter's data)
+  const byTimestamp = new Map();
+  for (const rec of allRecords) {
+    byTimestamp.set(rec.interval_start, rec);
+  }
+
+  // Sort chronologically
+  const stitched = [...byTimestamp.values()].sort(
+    (a, b) => new Date(a.interval_start) - new Date(b.interval_start)
+  );
+
+  return { records: stitched, serialsUsed, metersStitched: serialsUsed.length > 1 };
 }
 
 

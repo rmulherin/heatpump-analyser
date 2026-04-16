@@ -5,10 +5,13 @@ import {
   CONFIG,
   fetchAccount,
   fetchConsumption,
+  fetchConsumptionStitched,
   buildGasUnitCheck,
   convertM3ToKwh,
   buildTariffTimeline,
   normaliseConsumption,
+  parseCSV,
+  validatePostcode,
   setIngestionResult,
   getIngestionResult,
 } from './data-ingestion.js';
@@ -33,6 +36,19 @@ const gasM3Toggle = document.getElementById('gas-m3-toggle');
 const btnGasConfirm = document.getElementById('btn-gas-confirm');
 const resultsCard = document.getElementById('results-card');
 const resultsSummary = document.getElementById('results-summary');
+
+// CSV DOM references
+const csvFileInput = document.getElementById('csv-file');
+const csvPostcodeInput = document.getElementById('csv-postcode');
+const csvGasRateInput = document.getElementById('csv-gas-rate');
+const csvElecRateInput = document.getElementById('csv-elec-rate');
+const csvGasStandingInput = document.getElementById('csv-gas-standing');
+const csvElecStandingInput = document.getElementById('csv-elec-standing');
+const btnCsvAnalyse = document.getElementById('btn-csv-analyse');
+const csvPostcodeNote = document.getElementById('csv-postcode-note');
+const csvProgressArea = document.getElementById('csv-progress-area');
+const csvProgressText = document.getElementById('csv-progress-text');
+const csvStatusArea = document.getElementById('csv-status-area');
 
 // ===== Tab Switching =====
 const tabBtns = document.querySelectorAll('.tab-btn');
@@ -184,11 +200,61 @@ btnConfirmProperty.addEventListener('click', async () => {
 async function continueWithProperty(apiKey) {
   const prop = fetchedProperties[selectedPropertyIndex];
 
-  // Step 2: Fetch consumption
+  // Step 2: Fetch consumption (with meter stitching if multiple meters)
   showProgress('Fetching consumption data…', 30);
-  const { elecRecords, gasRecords } = await fetchConsumption(
-    apiKey, prop.mpan, prop.mprn, prop.elecSerial, prop.gasSerial
-  );
+
+  let elecRecords, gasRecords;
+  let metersStitched = false;
+  let serialsUsed = [];
+
+  const hasMultipleElecMeters = prop.elecMeters.length > 1;
+  const hasMultipleGasMeters = prop.gasMeters.length > 1;
+
+  if (hasMultipleElecMeters || hasMultipleGasMeters) {
+    // Meter stitching path
+    const elecResult = hasMultipleElecMeters && prop.mpan
+      ? await fetchConsumptionStitched(apiKey, prop.mpan, prop.mprn, prop.elecMeters, 'electricity')
+      : null;
+    const gasResult = hasMultipleGasMeters && prop.mprn
+      ? await fetchConsumptionStitched(apiKey, prop.mpan, prop.mprn, prop.gasMeters, 'gas')
+      : null;
+
+    if (elecResult) {
+      elecRecords = elecResult.records;
+      if (elecResult.metersStitched) metersStitched = true;
+      serialsUsed.push(...elecResult.serialsUsed);
+    }
+    if (gasResult) {
+      gasRecords = gasResult.records;
+      if (gasResult.metersStitched) metersStitched = true;
+      serialsUsed.push(...gasResult.serialsUsed);
+    }
+
+    // Fall back to single-meter fetch for fuels that didn't need stitching
+    if (!elecResult && prop.mpan && prop.elecSerial) {
+      const single = await fetchConsumption(apiKey, prop.mpan, null, prop.elecSerial, null);
+      elecRecords = single.elecRecords;
+    }
+    if (!gasResult && prop.mprn && prop.gasSerial) {
+      const single = await fetchConsumption(apiKey, null, prop.mprn, null, prop.gasSerial);
+      gasRecords = single.gasRecords;
+    }
+
+    elecRecords = elecRecords || [];
+    gasRecords = gasRecords || [];
+
+    if (elecRecords.length === 0 && gasRecords.length === 0) {
+      throw new Error('No half-hourly data found. This tool requires a smart meter (SMETS1 or SMETS2).');
+    }
+  } else {
+    // Standard single-meter path
+    const result = await fetchConsumption(
+      apiKey, prop.mpan, prop.mprn, prop.elecSerial, prop.gasSerial
+    );
+    elecRecords = result.elecRecords;
+    gasRecords = result.gasRecords;
+  }
+
   fetchedElecRecords = elecRecords;
   fetchedGasRecords = gasRecords;
   currentGasRecords = gasRecords;
@@ -299,6 +365,8 @@ async function continueWithProperty(apiKey) {
     mprn: prop.mprn,
     gas_unit_source: gasM3Toggle.checked ? 'm3_converted' : 'kwh_native',
     input_path: 'octopus',
+    meters_stitched: metersStitched,
+    serials_used: serialsUsed.length > 0 ? serialsUsed : undefined,
   };
 
   setIngestionResult({
@@ -374,7 +442,204 @@ function showSuccessSummary(normalised, tariffRates, metadata) {
   showStatus('Data loaded successfully.', 'success');
 }
 
-// ===== Init =====
-document.addEventListener('DOMContentLoaded', () => {
-  // Nothing else needed at init for Phase 1
+// ===== CSV Helpers =====
+
+function showCsvProgress(text) {
+  csvProgressArea.classList.remove('hidden');
+  csvProgressText.textContent = text;
+}
+
+function hideCsvProgress() {
+  csvProgressArea.classList.add('hidden');
+}
+
+function showCsvStatus(message, type) {
+  const div = document.createElement('div');
+  div.className = `status-msg ${type}`;
+  div.textContent = message;
+  csvStatusArea.appendChild(div);
+}
+
+function clearCsvStatus() {
+  csvStatusArea.innerHTML = '';
+}
+
+// ===== CSV Orchestration (Step 12) =====
+
+// Postcode touched detection (state-based, not value-based)
+csvPostcodeInput.addEventListener('input', () => {
+  csvPostcodeInput.dataset.touched = 'true';
+}, { once: true });
+
+btnCsvAnalyse.addEventListener('click', async () => {
+  clearCsvStatus();
+  hideCsvProgress();
+  csvPostcodeNote.classList.add('hidden');
+  resultsCard.classList.add('hidden');
+  btnCsvAnalyse.disabled = true;
+
+  try {
+    // Step 1: Read file
+    const file = csvFileInput.files[0];
+    if (!file) {
+      showCsvStatus('Please select a CSV file.', 'error');
+      btnCsvAnalyse.disabled = false;
+      return;
+    }
+
+    showCsvProgress('Reading file…');
+    const fileContent = await readFileAsText(file);
+
+    // Step 2: Parse CSV
+    showCsvProgress('Parsing CSV…');
+    const { records, errors } = parseCSV(fileContent);
+
+    if (errors.length > 0) {
+      hideCsvProgress();
+      for (const err of errors) {
+        showCsvStatus(err, 'error');
+      }
+      btnCsvAnalyse.disabled = false;
+      return;
+    }
+
+    // Step 3: Determine postcode
+    showCsvProgress('Validating postcode…');
+    const postcodeValue = csvPostcodeInput.value.trim();
+    const postcodeTouched = csvPostcodeInput.dataset.touched === 'true';
+
+    let postcode;
+    let postcodeSource;
+
+    if (!postcodeValue) {
+      // Empty field — use default
+      postcode = CONFIG.DEFAULT_POSTCODE;
+      postcodeSource = 'default';
+      csvPostcodeNote.classList.remove('hidden');
+    } else if (postcodeTouched) {
+      // User-entered value — validate
+      const result = await validatePostcode(postcodeValue);
+      if (!result.valid) {
+        hideCsvProgress();
+        showCsvStatus(result.error, 'error');
+        btnCsvAnalyse.disabled = false;
+        return;
+      }
+      postcode = postcodeValue;
+      postcodeSource = 'user';
+    } else {
+      // Placeholder still showing, field empty — shouldn't reach here but handle
+      postcode = CONFIG.DEFAULT_POSTCODE;
+      postcodeSource = 'default';
+      csvPostcodeNote.classList.remove('hidden');
+    }
+
+    // Step 4: Build tariff rates from form fields
+    const gasRate = parseFloat(csvGasRateInput.value) || CONFIG.DEFAULT_GAS_RATE_P_KWH;
+    const elecRate = parseFloat(csvElecRateInput.value) || CONFIG.DEFAULT_ELEC_RATE_P_KWH;
+    const gasStanding = parseFloat(csvGasStandingInput.value) || CONFIG.DEFAULT_GAS_STANDING_P_DAY;
+    const elecStanding = parseFloat(csvElecStandingInput.value) || CONFIG.DEFAULT_ELEC_STANDING_P_DAY;
+
+    const timestamps = records.map(r => r.interval_start).sort();
+    const dataStart = timestamps[0];
+    const dataEnd = timestamps[timestamps.length - 1];
+
+    const tariffRates = {
+      electricity: [{
+        valid_from: dataStart,
+        valid_to: null,
+        rate_p_kwh: elecRate,
+        standing_p_day: elecStanding,
+        tariff_type: 'csv_manual',
+        product_code: null,
+      }],
+      gas: [{
+        valid_from: dataStart,
+        valid_to: null,
+        rate_p_kwh: gasRate,
+        standing_p_day: gasStanding,
+        tariff_type: 'csv_manual',
+        product_code: null,
+      }],
+    };
+
+    // Step 5: Normalise
+    showCsvProgress('Normalising data…');
+
+    // Convert CSV records to the format normaliseConsumption expects
+    const elecRecords = records.map(r => ({
+      interval_start: r.interval_start,
+      consumption: r.elec_kwh,
+    }));
+    const gasRecords = records.map(r => ({
+      interval_start: r.interval_start,
+      consumption: r.gas_kwh,
+    }));
+
+    const normalised = normaliseConsumption(elecRecords, gasRecords, dataStart, dataEnd);
+
+    // Step 6: Data quality gate
+    const meta = normalised.metadata;
+
+    if (meta.total_days < CONFIG.MIN_DAYS_FOR_ANALYSIS) {
+      hideCsvProgress();
+      showCsvStatus(
+        'At least 30 days of data needed for a meaningful analysis.',
+        'error'
+      );
+      btnCsvAnalyse.disabled = false;
+      return;
+    }
+
+    if (meta.total_days < CONFIG.WARNING_DAYS_THRESHOLD) {
+      showCsvStatus(
+        'Less than 3 months of data. Seasonal analysis will be limited.',
+        'warning'
+      );
+    }
+
+    if (meta.gap_percentage > CONFIG.GAP_WARNING_PERCENTAGE) {
+      showCsvStatus(
+        `Your data has significant gaps (${meta.gap_percentage}%). Results may be less accurate.`,
+        'warning'
+      );
+    }
+
+    // Step 7: Store result
+    const fullMetadata = {
+      ...meta,
+      postcode,
+      postcode_source: postcodeSource,
+      mpan: null,
+      mprn: null,
+      gas_unit_source: 'csv',
+      input_path: 'csv',
+    };
+
+    setIngestionResult({
+      consumption: normalised.consumption,
+      tariff_rates: tariffRates,
+      metadata: fullMetadata,
+    });
+
+    // Step 8: Show success
+    hideCsvProgress();
+    showSuccessSummary(normalised, tariffRates, fullMetadata);
+    showCsvStatus('Data loaded successfully.', 'success');
+
+  } catch (err) {
+    hideCsvProgress();
+    showCsvStatus(err.message || 'An unexpected error occurred.', 'error');
+  }
+
+  btnCsvAnalyse.disabled = false;
 });
+
+function readFileAsText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('Failed to read file.'));
+    reader.readAsText(file);
+  });
+}

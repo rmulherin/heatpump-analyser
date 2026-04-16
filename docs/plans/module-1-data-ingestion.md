@@ -464,3 +464,10 @@ Verdict: APPROVED WITH EDITS — all eight findings resolved inline; ready for i
 1. **Pagination helpers consolidated** — Plan implied two separate functions for paginated fetches (with and without progress callback). Implemented as a single `fetchAllPages(url, headers, onProgress)` function. No behavioural change; `onProgress` is optional.
 
 2. **HTML escaping added** — API-sourced values (address, postcode) injected via innerHTML are now escaped through `escapeHtml()`. Not specified in the plan but required by the project security standard (OWASP XSS prevention).
+
+**Date:** 2026-04-16
+**Commit:** (Phase 2 implementation)
+
+3. **`fetchAccount` returns full meter arrays** — Added `elecMeters` and `gasMeters` arrays to the property object returned by `fetchAccount()`, alongside the existing `elecSerial`/`gasSerial` (most recent). This enables the meter stitching logic in Step 13 without a separate API call.
+
+4. **No deviations in CSV parsing, postcode validation, or meter stitching** — Steps 9–13 implemented as specified.
