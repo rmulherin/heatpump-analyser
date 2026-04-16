@@ -16,6 +16,18 @@ import {
   getIngestionResult,
 } from './data-ingestion.js';
 
+import {
+  lookupPostcode,
+  fetchWeather,
+  fetchWeatherFallback,
+  fetchWholesalePrices,
+  needsFallback,
+  buildExpectedHours,
+  alignExternalData,
+  buildExternalMetadata,
+  setExternalResult,
+} from './external-data.js';
+
 // ===== DOM References =====
 const apiKeyInput = document.getElementById('api-key');
 const accountInput = document.getElementById('account-number');
@@ -378,6 +390,13 @@ async function continueWithProperty(apiKey) {
   // Step 8: Show success
   hideProgress();
   showSuccessSummary(normalised, tariffRates, fullMetadata);
+
+  // Step 9: Trigger Module 2 — External Data
+  await runExternalData(
+    (text) => showProgress(text, undefined),
+    (msg, type) => showStatus(msg, type)
+  );
+  hideProgress();
   setFetchEnabled(true);
 }
 
@@ -440,6 +459,99 @@ function showSuccessSummary(normalised, tariffRates, metadata) {
 
   resultsCard.classList.remove('hidden');
   showStatus('Data loaded successfully.', 'success');
+}
+
+
+// ===== Module 2: External Data Orchestration =====
+
+async function runExternalData(showProgressFn, showStatusFn) {
+  const ingestion = getIngestionResult();
+  if (!ingestion) return;
+
+  const { consumption, metadata } = ingestion;
+
+  // Step 1: Determine coordinates — always via lookupPostcode
+  showProgressFn('Looking up postcode coordinates…');
+  let coords;
+  try {
+    coords = await lookupPostcode(metadata.postcode);
+  } catch (e) {
+    showStatusFn(e.message, 'error');
+    return;
+  }
+
+  const { latitude, longitude, elevation_m } = coords;
+
+  // Step 2: Fetch weather and prices in parallel
+  showProgressFn('Fetching weather data and wholesale prices…');
+
+  const [weatherResult, priceResult] = await Promise.allSettled([
+    fetchWeather(latitude, longitude, metadata.data_start, metadata.data_end),
+    fetchWholesalePrices(metadata.data_start, metadata.data_end),
+  ]);
+
+  // Step 3: Handle results with asymmetric rejection
+  // Weather failure blocks — it's essential for heat loss regression
+  if (weatherResult.status === 'rejected') {
+    showStatusFn(weatherResult.reason?.message || 'Weather data fetch failed. Cannot proceed with analysis.', 'error');
+    return;
+  }
+
+  // Price failure warns — wholesale scenarios degrade gracefully
+  let priceLookup = new Map();
+  let priceSource = 'elexon-mid-n2ex';
+  let priceWarnings = [];
+
+  if (priceResult.status === 'rejected') {
+    const msg = priceResult.reason?.message || 'Wholesale price fetch failed.';
+    showStatusFn(msg + ' Wholesale price scenarios will be incomplete.', 'warning');
+    priceWarnings.push(msg);
+  } else {
+    priceLookup = priceResult.value.priceLookup;
+    priceSource = priceResult.value.source;
+    priceWarnings = priceResult.value.warnings;
+    for (const w of priceWarnings) {
+      showStatusFn(w, 'warning');
+    }
+  }
+
+  // Step 4: Check weather fallback for recent days
+  let { weatherMap } = weatherResult.value;
+  const expectedHours = buildExpectedHours(metadata.data_start, metadata.data_end);
+  let weatherSource = 'open-meteo-archive';
+
+  if (needsFallback(weatherMap, expectedHours, metadata.data_end)) {
+    showProgressFn('Fetching recent weather data…');
+    const fallbackResult = await fetchWeatherFallback(
+      latitude, longitude, weatherMap, expectedHours, metadata.data_end
+    );
+    weatherMap = fallbackResult.weatherMap;
+    if (fallbackResult.usedFallback) {
+      weatherSource = 'open-meteo-forecast';
+    }
+  }
+
+  // Step 5: Align external data to consumption timeline
+  showProgressFn('Aligning external data…');
+  const external = alignExternalData(consumption, weatherMap, priceLookup);
+
+  // Step 6: Build metadata
+  const externalMetadata = buildExternalMetadata(
+    latitude, longitude, elevation_m, weatherSource, priceSource, priceWarnings
+  );
+
+  // Step 7: Store result
+  setExternalResult({ external, external_metadata: externalMetadata });
+
+  // Step 8: Show summary
+  const weatherCount = external.filter(e => e.temp_c !== null).length;
+  const priceCount = external.filter(e => e.wholesale_p_kwh !== null).length;
+  const gapCount = external.filter(e => e.temp_c === null).length;
+
+  showStatusFn(
+    `External data loaded. Weather: ${weatherCount} periods. Wholesale prices: ${priceCount} periods (${priceSource}). Gaps: ${gapCount}.`,
+    'success'
+  );
 }
 
 // ===== CSV Helpers =====
@@ -626,6 +738,13 @@ btnCsvAnalyse.addEventListener('click', async () => {
     hideCsvProgress();
     showSuccessSummary(normalised, tariffRates, fullMetadata);
     showCsvStatus('Data loaded successfully.', 'success');
+
+    // Step 9: Trigger Module 2 — External Data
+    await runExternalData(
+      (text) => showCsvProgress(text),
+      (msg, type) => showCsvStatus(msg, type)
+    );
+    hideCsvProgress();
 
   } catch (err) {
     hideCsvProgress();

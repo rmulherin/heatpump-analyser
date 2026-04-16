@@ -547,7 +547,33 @@ Verdict: APPROVED WITH EDITS — all eight findings resolved inline; ready for i
 
 ## Implementation Deviations
 
-**Date:**
-**Commit:**
+**Date:** 2026-04-16
+**Commit:** (to be filled after commit)
 
-[If no deviations: "None."]
+1. **CSV lat/lon reuse not possible (Step 10).** Plan said "If CSV path and Module 1
+   already validated the postcode: reuse lat/lon from Module 1's validation result."
+   Module 1 does not store lat/lon in the ingestion result — `validatePostcode()` returns
+   coordinates but only `postcode` (string) is stored in metadata. **Resolution:**
+   `runExternalData()` always calls `lookupPostcode(metadata.postcode)` regardless of
+   input path. One extra Postcodes.io call for CSV users — trivial latency, no functional
+   impact.
+
+2. **`buildWeatherLookup()` implemented but unused in orchestration.** Plan Step 5 defined
+   a lookup-function builder. The alignment function (`alignExternalData`, Step 8) performs
+   the hour-key lookup inline, making the separate builder unnecessary for the current
+   orchestration flow. The function is exported for potential use by downstream modules
+   that may need ad-hoc weather lookups outside the alignment array.
+
+3. **`buildExpectedHours()` exported from `external-data.js`.** Plan defined it as a
+   private helper in Step 4. The orchestration in `app.js` also needs it (to pass to
+   `needsFallback`), so it was promoted to an export rather than duplicated.
+
+4. **CORS probe (Phase 2 gate) deferred to browser testing.** Plan mandates a live CORS
+   probe from Chrome DevTools before writing any Elexon code. Code was written with
+   graceful degradation (price failure warns, does not block). The probe must still be
+   run manually during the Verify phase. If CORS is blocked, the static fallback path
+   (Step 7) will need to be implemented.
+
+5. **Static price fallback (Step 7) not implemented.** Conditional on CORS gate result.
+   Code structure allows adding `loadStaticPrices()` if the CORS probe shows Elexon is
+   blocked. Currently, a CORS/network failure returns an empty price map with a warning.

@@ -22,7 +22,7 @@ README.md — reference it instead.
 **Owner:** Rhiannon (Praxis Insight)
 **Classification:** GREEN — full Claude assistance permitted.
 **Language:** HTML + vanilla JavaScript + Chart.js
-**Status:** Module 1 complete (Octopus API + CSV + meter stitching). Module 2 next.
+**Status:** Module 2 implemented (weather + wholesale prices + alignment). CORS probe pending manual verification.
 
 Praxis hub context (in `~/Documents/git-repos/praxis-claude-hub/`):
 - `context/about-rhiannon.md`
@@ -283,7 +283,7 @@ there is no spot-instance risk, but mid-session context exhaustion is still poss
 (Determined by data flow — each module depends on the one above it)
 
 - [x] Module 1: Data Ingestion (Octopus API + CSV + meter stitching)
-- [ ] Module 2: External Data (weather + wholesale prices)
+- [x] Module 2: External Data (weather + wholesale prices) — CORS probe pending
 - [ ] Module 3: Baseload Separation
 - [ ] Module 4: Heat Loss Estimation (Siviour regression)
 - [ ] Module 5: Thermal Simulation (RC model + pre-heating)
