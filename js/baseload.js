@@ -2,7 +2,7 @@
 // Gas separation: 48-slot HH profile (Methods A–E), absence detection (Step F),
 // validation against degree-days (Step G). Step H added by module-3a-step-h plan.
 
-import { HDD_BASE_TEMP, CDD_BASE_TEMP } from './constants.js'; // CDD_BASE_TEMP imported pre-emptively for the step-h extension.
+import { HDD_BASE_TEMP, CDD_BASE_TEMP } from './constants.js';
 
 const { DateTime } = luxon;
 
@@ -26,6 +26,26 @@ const BASELOAD_CONFIG = {
   BALANCE_POINT_FLATNESS_FRACTION: 0.20,
   BALANCE_POINT_MIN_DAYS_PER_BIN: 3,
 };
+
+// ===== Step H configuration =====
+
+const STEP_H_CONFIG = {
+  MIN_DAYS: 30,
+  ELECTRIC_HEATING_COEFF_THRESHOLD: 0.2,  // kWh/K·day
+  AC_COEFF_THRESHOLD: 0.2,                 // kWh/K·day
+  P_VALUE_DETECT: 0.05,
+  P_VALUE_HIGH: 0.01,
+  COEFF_HIGH: 0.5,
+  COEFF_LOW: 0.1,
+  P_VALUE_LOW_UPPER: 0.20,
+  MIN_SUM_CDD_FOR_AC: 20,                  // K·day
+};
+
+const STEP_H_LIMITATIONS = [
+  'Solar PV generation is not modelled. If your electricity consumption excludes generation (net metering) or exported energy, the fitted baseline may be distorted. Slope coefficients (HDD, CDD) are less affected because they measure gradient, not level.',
+  "If you already have a heat pump or electric immersion tied to heating, it will show here as 'electric heating'. The tool cannot distinguish an existing heat pump from supplementary resistance heating.",
+  'Electric water heating (e.g. immersion on a timer) is typically weather-independent and appears in the baseline rather than as heating. Usually acceptable but may inflate the baseline estimate.',
+];
 
 // ===== Shared state =====
 
@@ -91,6 +111,115 @@ function buildDayIndexMap(consumption) {
     map.get(day).push(i);
   }
   return map;
+}
+
+// ===== Step H math: exact t-distribution p-value via incomplete beta =====
+
+function lgamma(z) {
+  const c = [76.18009172947146, -86.50532032941677, 24.01409824083091,
+             -1.231739572450155, 0.001208650973866179, -0.000005395239384953];
+  let y = z;
+  let tmp = z + 5.5;
+  tmp -= (z + 0.5) * Math.log(tmp);
+  let ser = 1.000000000190015;
+  for (let j = 0; j < 6; j++) { y += 1; ser += c[j] / y; }
+  return -tmp + Math.log(2.5066282746310005 * ser / z);
+}
+
+function betaCF(x, a, b) {
+  const FPMIN = 1e-300;
+  const qab = a + b;
+  const qap = a + 1;
+  const qam = a - 1;
+  let c = 1.0;
+  let d = 1 - qab * x / qap;
+  if (Math.abs(d) < FPMIN) d = FPMIN;
+  d = 1 / d;
+  let h = d;
+  for (let m = 1; m <= 200; m++) {
+    const m2 = 2 * m;
+    let aa = m * (b - m) * x / ((qam + m2) * (a + m2));
+    d = 1 + aa * d; if (Math.abs(d) < FPMIN) d = FPMIN;
+    c = 1 + aa / c; if (Math.abs(c) < FPMIN) c = FPMIN;
+    d = 1 / d; h *= d * c;
+    aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
+    d = 1 + aa * d; if (Math.abs(d) < FPMIN) d = FPMIN;
+    c = 1 + aa / c; if (Math.abs(c) < FPMIN) c = FPMIN;
+    d = 1 / d;
+    const delta = d * c;
+    h *= delta;
+    if (Math.abs(delta - 1) < 1e-10) break;
+  }
+  return h;
+}
+
+function incompleteBeta(x, a, b) {
+  if (x === 0) return 0;
+  if (x === 1) return 1;
+  const logBetaNorm = lgamma(a) + lgamma(b) - lgamma(a + b);
+  if (x < (a + 1) / (a + b + 2)) {
+    return Math.exp(a * Math.log(x) + b * Math.log(1 - x) - logBetaNorm) * betaCF(x, a, b) / a;
+  }
+  return 1 - Math.exp(b * Math.log(1 - x) + a * Math.log(x) - logBetaNorm) * betaCF(1 - x, b, a) / b;
+}
+
+function tDistPValue(t, df) {
+  const x = df / (df + t * t);
+  return incompleteBeta(x, df / 2, 0.5);
+}
+
+// ===== Step H math: multi-variable OLS via Gauss-Jordan with partial pivoting =====
+
+function computeMultiOls(ys, xMatrix) {
+  const n = ys.length;
+  const p = xMatrix[0].length;
+  if (n < p + 1) return null;
+
+  // Build XtX (p×p) and Xty (p-vector)
+  const XtX = Array.from({ length: p }, () => new Array(p).fill(0));
+  const Xty = new Array(p).fill(0);
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < p; j++) {
+      Xty[j] += xMatrix[i][j] * ys[i];
+      for (let k = 0; k < p; k++) XtX[j][k] += xMatrix[i][j] * xMatrix[i][k];
+    }
+  }
+
+  // Augment [XtX | I] for Gauss-Jordan inversion
+  const aug = XtX.map((row, i) => {
+    const id = new Array(p).fill(0);
+    id[i] = 1;
+    return [...row, ...id];
+  });
+
+  for (let col = 0; col < p; col++) {
+    let maxVal = Math.abs(aug[col][col]);
+    let maxRow = col;
+    for (let row = col + 1; row < p; row++) {
+      if (Math.abs(aug[row][col]) > maxVal) { maxVal = Math.abs(aug[row][col]); maxRow = row; }
+    }
+    const rowMax = aug[maxRow].slice(0, p).reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+    if (rowMax === 0 || maxVal / rowMax < 1e-10) return null;
+    [aug[col], aug[maxRow]] = [aug[maxRow], aug[col]];
+    const pivot = aug[col][col];
+    for (let k = 0; k < 2 * p; k++) aug[col][k] /= pivot;
+    for (let row = 0; row < p; row++) {
+      if (row === col) continue;
+      const factor = aug[row][col];
+      for (let k = 0; k < 2 * p; k++) aug[row][k] -= factor * aug[col][k];
+    }
+  }
+
+  const invXtX = aug.map(row => row.slice(p));
+  const coefficients = invXtX.map(row => row.reduce((s, v, j) => s + v * Xty[j], 0));
+  const yhat = xMatrix.map(row => row.reduce((s, v, j) => s + v * coefficients[j], 0));
+  const rss = ys.reduce((s, y, i) => s + (y - yhat[i]) ** 2, 0);
+  const residualVariance = rss / (n - p);
+  const standardErrors = invXtX.map((row, j) => Math.sqrt(residualVariance * row[j]));
+  const tStatistics = coefficients.map((b, j) => b / standardErrors[j]);
+  const pValues = tStatistics.map(t => tDistPValue(Math.abs(t), n - p));
+
+  return { coefficients, standardErrors, tStatistics, pValues, residualVariance };
 }
 
 // ===== Pre-flight =====
@@ -394,6 +523,129 @@ export function validateSeparation(heating, external, warnings) {
   return { r2, validation_status };
 }
 
+// ===== Step H: Supplementary electric load detection =====
+
+export function detectSupplementaryLoads(consumption, external, heating, baseloadMethod) {
+  const noGasCase = baseloadMethod === 'no-gas';
+
+  function skipped(method, days_used_in_fit) {
+    return {
+      method, days_used_in_fit,
+      baseline_kwh_per_day: null,
+      hdd_coefficient_kwh_per_dd: null, cdd_coefficient_kwh_per_dd: null,
+      hdd_p_value: null, cdd_p_value: null,
+      sum_hdd_k_day: null, sum_cdd_k_day: null,
+      electric_heating_detected: false, electric_heating_kwh_per_dd: null,
+      electric_heating_kwh_estimate: null, electric_heating_confidence: 'none',
+      electric_heating_is_primary: false,
+      air_conditioning_detected: false, air_conditioning_kwh_per_dd: null,
+      air_conditioning_kwh_estimate: null, air_conditioning_confidence: 'none',
+      ac_detection_note: null,
+      warnings: [], limitations: STEP_H_LIMITATIONS,
+    };
+  }
+
+  // H0 — No electricity data at all
+  if (consumption.every(rec => rec.elec_kwh === null || rec.elec_kwh === undefined)) {
+    return skipped('skipped_no_electricity', 0);
+  }
+
+  // H0 — Build daily regression dataset
+  const dayIndexMap = buildDayIndexMap(consumption);
+  const dailyData = [];
+
+  for (const [, indices] of dayIndexMap) {
+    if (indices.length !== 48) continue;
+    if (indices.some(i => consumption[i].elec_kwh === null || consumption[i].elec_kwh === undefined)) continue;
+    if (indices.some(i => heating[i].is_absence)) continue;
+    const tempVals = indices.map(i => external?.[i]?.temp_c);
+    if (tempVals.some(v => v === null || v === undefined)) continue;
+    // M1: in normal (non-no-gas) case, also require all 48 gas HH periods non-null
+    if (!noGasCase && indices.some(i => consumption[i].gas_kwh === null || consumption[i].gas_kwh === undefined)) continue;
+
+    const daily_mean_temp_c = tempVals.reduce((s, v) => s + v, 0) / 48;
+    dailyData.push({
+      daily_elec_kwh: indices.reduce((s, i) => s + consumption[i].elec_kwh, 0),
+      daily_hdd: Math.max(0, HDD_BASE_TEMP - daily_mean_temp_c),
+      daily_cdd: Math.max(0, daily_mean_temp_c - CDD_BASE_TEMP),
+    });
+  }
+
+  if (dailyData.length < STEP_H_CONFIG.MIN_DAYS) {
+    return skipped('skipped_insufficient_data', dailyData.length);
+  }
+
+  // H1 — OLS regression: design matrix [HDD, CDD, 1]
+  const ys = dailyData.map(d => d.daily_elec_kwh);
+  const xMatrix = dailyData.map(d => [d.daily_hdd, d.daily_cdd, 1]);
+  const olsResult = computeMultiOls(ys, xMatrix);
+  if (!olsResult) return skipped('skipped_insufficient_data', dailyData.length);
+
+  const a = olsResult.coefficients[0]; // HDD slope
+  const b = olsResult.coefficients[1]; // CDD slope
+  const c = olsResult.coefficients[2]; // intercept — baseline
+  const p_a = olsResult.pValues[0];
+  const p_b = olsResult.pValues[1];
+  const sum_hdd = dailyData.reduce((s, d) => s + d.daily_hdd, 0);
+  const sum_cdd = dailyData.reduce((s, d) => s + d.daily_cdd, 0);
+
+  // H2 — Electric heating detection
+  const electric_heating_detected = a > STEP_H_CONFIG.ELECTRIC_HEATING_COEFF_THRESHOLD && p_a < STEP_H_CONFIG.P_VALUE_DETECT;
+  let electric_heating_confidence;
+  if (electric_heating_detected) {
+    electric_heating_confidence = (a >= STEP_H_CONFIG.COEFF_HIGH && p_a < STEP_H_CONFIG.P_VALUE_HIGH) ? 'high' : 'moderate';
+  } else {
+    electric_heating_confidence = (a > STEP_H_CONFIG.COEFF_LOW && p_a >= STEP_H_CONFIG.P_VALUE_DETECT && p_a < STEP_H_CONFIG.P_VALUE_LOW_UPPER) ? 'low' : 'none';
+  }
+
+  // H3 — AC detection
+  let air_conditioning_detected = false;
+  let air_conditioning_confidence = 'none';
+  let air_conditioning_kwh_per_dd = null;
+  let air_conditioning_kwh_estimate = null;
+  let ac_detection_note = null;
+
+  if (sum_cdd < STEP_H_CONFIG.MIN_SUM_CDD_FOR_AC) {
+    ac_detection_note = 'insufficient_cdd_data';
+  } else {
+    air_conditioning_detected = b > STEP_H_CONFIG.AC_COEFF_THRESHOLD && p_b < STEP_H_CONFIG.P_VALUE_DETECT;
+    if (air_conditioning_detected) {
+      air_conditioning_kwh_per_dd = b;
+      air_conditioning_kwh_estimate = b * sum_cdd;
+      air_conditioning_confidence = (b >= STEP_H_CONFIG.COEFF_HIGH && p_b < STEP_H_CONFIG.P_VALUE_HIGH) ? 'high' : 'moderate';
+    } else {
+      air_conditioning_confidence = (b > STEP_H_CONFIG.COEFF_LOW && p_b >= STEP_H_CONFIG.P_VALUE_DETECT && p_b < STEP_H_CONFIG.P_VALUE_LOW_UPPER) ? 'low' : 'none';
+    }
+  }
+
+  // H4 — No-gas framing
+  const electric_heating_is_primary = noGasCase && electric_heating_detected;
+
+  return {
+    method: 'regression',
+    days_used_in_fit: dailyData.length,
+    baseline_kwh_per_day: c,
+    hdd_coefficient_kwh_per_dd: a,
+    cdd_coefficient_kwh_per_dd: b,
+    hdd_p_value: p_a,
+    cdd_p_value: p_b,
+    sum_hdd_k_day: sum_hdd,
+    sum_cdd_k_day: sum_cdd,
+    electric_heating_detected,
+    electric_heating_kwh_per_dd: electric_heating_detected ? a : null,
+    electric_heating_kwh_estimate: electric_heating_detected ? a * sum_hdd : null,
+    electric_heating_confidence,
+    electric_heating_is_primary,
+    air_conditioning_detected,
+    air_conditioning_kwh_per_dd,
+    air_conditioning_kwh_estimate,
+    air_conditioning_confidence,
+    ac_detection_note,
+    warnings: [],
+    limitations: STEP_H_LIMITATIONS,
+  };
+}
+
 // ===== Main orchestrator (gas-separation stub — extended by step-h plan) =====
 
 export function separateBaseload(consumption, external) {
@@ -421,8 +673,8 @@ export function separateBaseload(consumption, external) {
       validation_status: 'no_gas',
       warnings,
     };
-    // step-h plan extends here before return
-    return { heating, baseload_metadata };
+    const supplementary_loads = detectSupplementaryLoads(consumption, external, heating, baseload_metadata.method);
+    return { heating, baseload_metadata, supplementary_loads };
   }
 
   // Method cascade: A → B → C → D → E
@@ -478,6 +730,6 @@ export function separateBaseload(consumption, external) {
     warnings,
   };
 
-  // step-h plan extends this to: return { heating, baseload_metadata, supplementary_loads }
-  return { heating, baseload_metadata };
+  const supplementary_loads = detectSupplementaryLoads(consumption, external, heating, baseload_metadata.method);
+  return { heating, baseload_metadata, supplementary_loads };
 }

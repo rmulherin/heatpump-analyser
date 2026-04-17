@@ -38,7 +38,7 @@ to Rhiannon rather than proceeding. The Opus window is the right place for that 
 **Owner:** Rhiannon (Praxis Insight)
 **Classification:** GREEN — full Claude assistance permitted.
 **Language:** HTML + vanilla JavaScript + Chart.js
-**Status:** Module 2 implemented (weather + wholesale prices + alignment). CORS probe pending manual verification. Module 3a gas separation implemented (constants.js, baseload.js Methods A–E, Step F, Step G, orchestrator stub). Step H and 3b integration pending.
+**Status:** Module 2 implemented (weather + wholesale prices + alignment). CORS probe pending manual verification. Module 3a fully implemented (constants.js, baseload.js — Methods A–E, Step F, Step G, Step H with exact t-CDF). Module 3b integration pending.
 
 Praxis hub context (in `~/Documents/git-repos/praxis-claude-hub/`):
 - `context/about-rhiannon.md`

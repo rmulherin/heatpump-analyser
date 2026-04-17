@@ -363,7 +363,11 @@ Verdict: APPROVE WITH CLARIFICATIONS — implementable once M1 is applied.
 
 ### Resolution of review changes
 
-[To be completed by Sonnet during implementation. Confirm M1 disposition in this section.]
+**M1 applied.** In `detectSupplementaryLoads` H0 eligibility, the non-no-gas path now includes:
+```js
+if (!noGasCase && indices.some(i => consumption[i].gas_kwh === null || ...)) continue;
+```
+This matches the design doc spec exactly. No other deviations.
 
 ---
 
@@ -379,4 +383,8 @@ Verdict: APPROVE WITH CLARIFICATIONS — implementable once M1 is applied.
 
 ## Implementation Deviations
 
-[To be completed during implementation]
+**Implemented 2026-04-17 by Sonnet.**
+
+**No deviations from the plan spec.** M1 clarification applied (gas_kwh whole-day guard in normal case). All verification spot checks pass:
+- `tDistPValue(2.042, 30) = 0.050029` (within ±0.001) ✓
+- `tDistPValue(2.750, 30) = 0.010000` (within ±0.001) ✓
