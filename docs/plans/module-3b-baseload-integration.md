@@ -1,7 +1,7 @@
 # Module 3b — Baseload Separation: Orchestration & UI Integration
 
 **Date:** 2026-04-16
-**Status:** Awaiting approval — review via claude.ai before implementation begins.
+**Status:** ✅ Approved — implementation may begin. 2 clarification(s) apply (see review below).
 **Depends on:** Module 3a (must be implemented and verified first)
 
 ---
@@ -181,17 +181,46 @@ Wrap `separateBaseload()` call in try/catch matching the existing Module 2 patte
 
 ---
 
-## Claude.ai Review — yyyy-mm-dd
+## Design Review
 
-**Reviewer:** Claude (claude.ai)
+**Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Date:** 2026-04-17
+**Review type:** Plan review (pre-implementation)
+**Authoritative design:** `design/baseload-separation.md` § Dependencies (downstream consumers)
 
-**Overall verdict:** [Pending]
+### Context
+
+Pre-implementation review of the Module 3 orchestration and UI-wiring plan. Plan structure is sound — imports, method labels, orchestration pattern match the established Module 2 flow; error handling and guard clauses are in place; no new HTML required; scope split from Module 9 (full UI treatment) is correctly observed. Two LOW-severity clarifications for implementation.
+
+### Clarifications to apply during implementation
+
+**C1. Remove stale line-number anchors.** Steps 4 and 5 reference `~line 397` (the `runExternalData` call in `continueWithProperty`) and `~line 746` (the `runExternalData` call in the `btnCsvAnalyse` handler). Line numbers drift between sessions and are an anti-pattern per Praxis plan-authoring guidance. Function/handler names are the stable references — when applying these steps during implementation, anchor the insertion points as "immediately after the `runExternalData` call in `continueWithProperty()`" and similarly for the CSV handler. Update the plan body inline if revising; otherwise just apply during implementation and note in the Resolution section.
+
+**C2. Dependency scope may need updating if 3a splits.** Header currently says "Depends on: Module 3a (must be implemented and verified first)". If plan 3a's H3 finding is actioned and 3a is split into `3a-gas-separation` + `3a-step-h-electric-detection`, update the dependency line to reference both resulting plans. If 3a stays single-plan, current wording is fine.
+
+### Review Summary
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| CRITICAL | 0 | ✓ pass |
+| HIGH | 0 | — |
+| MEDIUM | 0 | — |
+| LOW | 2 | ℹ apply during implementation |
+
+**Verdict: APPROVE WITH CLARIFICATIONS** — implementable once C1 and C2 applied. Contingent on plan 3a (or its successors) completing first.
+
+### Resolution of review changes
+
+[To be completed by Sonnet during implementation. C1 and C2 applied; confirm disposition here.]
 
 ---
 
 ## Approval
 
-**Status:** [Pending]
+**Status:** ✅ Approved — implementation may begin. 2 clarification(s) apply (see review below).
+**Date:** 2026-04-17
+**Approved by:** Rhiannon (via Opus review)
+**Clarifications confirmed:** C1 (line-number anchors removed in favour of function/handler names), C2 (dependency scope updated to reflect 3a's final structure).
 
 ---
 

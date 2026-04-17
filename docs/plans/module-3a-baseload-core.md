@@ -1,7 +1,7 @@
 # Module 3a — Baseload Separation: Core Computation
 
 **Date:** 2026-04-16
-**Status:** Awaiting approval — review via claude.ai before implementation begins.
+**Status:** Revise and resubmit — see Design Review below.
 
 ---
 
@@ -322,17 +322,69 @@ This is the public API — called from app.js in Phase 3b.
 
 ---
 
-## Claude.ai Review — yyyy-mm-dd
+## Design Review
 
-**Reviewer:** Claude (claude.ai)
+**Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Date:** 2026-04-17
+**Review type:** Plan review (pre-implementation)
+**Authoritative design:** `design/baseload-separation.md`
 
-**Overall verdict:** [Pending]
+### Context
+
+Pre-implementation review against the baseload-separation design doc. The plan is largely faithful — structure, invariants, method cascade, absence thresholds, and Step G validation match the design; British English and project conventions are clean. Three substantive issues need resolution and five specification gaps need closing before implementation begins. A sizing observation is included as a structural recommendation.
+
+### Required changes for implementation
+
+Sonnet to revise the plan body (or split into multiple plans if H3 is accepted), then resubmit for re-review.
+
+**HIGH**
+
+1. **Step H p-value approximation is measurably too aggressive at low df.** The plan uses the Abramowitz & Stegun normal-CDF approximation, justified as "t with df > 25 ≈ normal". At df=30, α=0.01, normal-CDF gives p ≈ 0.006 for a true t-critical of 2.750 (true p = 0.010) — a ~6% bias. At df=30, α=0.05, t-critical = 2.042 vs z = 1.960 (~4% bias). Since `p < 0.01` is the threshold between `moderate` and `high` confidence, and those two tiers are the ones that drive the Check 4D HTC correction in module 4 (heat-loss), normal approximation will silently inflate `high` classifications and over-correct module 4's HTC. Replace with a proper t-CDF — candidates: (a) incomplete regularised beta function via Lentz's continued fraction (Numerical Recipes §6.4); (b) Hill's 1970 algorithm; or (c) inflate the thresholds when using normal approximation (e.g. use `p < 0.007` where the design says `< 0.01`, df-dependent). Pick one and be explicit.
+
+2. **Cross-module `HDD_BASE_TEMP` sharing not addressed.** Design Test 16 pre-flags this: "Verify the base temperature used in Step G (15.5°C) is the same constant as used in the heat-loss module. Cross-module constant mismatch is a silent bug category — grep for it." The plan puts `HDD_BASE_TEMP` in a local `BASELOAD_CONFIG` object inside `baseload.js`. When module 4's plan lands, its author will either need to import it (requires this plan to export it as a named constant) or redeclare it (the bug the design warns about). Options: (a) extract to `js/constants.js`; (b) export `HDD_BASE_TEMP` as a named module export from `baseload.js` with a comment that module 4 must import from here; (c) explicitly defer with a note in this plan's Deviations-candidates for module 4's planner. Any is acceptable — needs to be explicit.
+
+3. **Plan sizing — recommend splitting Step H out.** Per the Opus brief's sizing guidance (80–150 lines of plan text; touches 2–4 files; 3–8 functions), this plan's implementation steps run ~250 lines and cover two structurally independent pipelines: (i) gas separation (Methods A–E + F + G) with shared state and `heating[]` + `baseload_metadata` outputs, and (ii) electricity regression (Step H) with independent inputs (elec, not gas), independent output object (`supplementary_loads`), and a different algorithm class (multi-var OLS with p-values vs robust medians). Splitting into `3a-gas-separation` + `3a-step-h-electric-detection` would keep each in the sizing envelope, allow Step H (the more novel, higher-risk work) to be reviewed and verified independently, and require minor coordination on the `separateBaseload` orchestrator (whichever plan lands later extends it). This is a structural recommendation from the reviewer — Sonnet decides the final structure. If staying single-plan, defend the size in the Research findings section.
+
+**MEDIUM**
+
+4. **Null-gas record passthrough not specified in the output.** Design output spec: "`null` where `consumption[i].gas_kwh` is null. `is_absence` is `false` for null-gas records." The plan's method steps describe behaviour for non-null records only. Add an explicit orchestrator step: for every consumption record where `gas_kwh === null`, emit `{ heating_kwh: null, baseload_kwh: null, is_absence: false }` without applying any method. Also restate the invariant explicitly in the success criteria.
+
+5. **`baseload_metadata.warnings` accumulation flow not stated.** The design specifies ~7 distinct canonical warning strings (no-gas, Method C limited summer, Method D balance-point, Method E literature, absence > 30, absence > 300, poor R²). The plan references them indirectly ("generate warning per design doc") but does not say where `warnings` is initialised or appended, nor does it enumerate the canonical strings. Implementer risks inventing ad-hoc phrasing that diverges from the design. Add: initialise `baseload_metadata.warnings = []` at orchestrator start; each method/step appends using exact design-doc strings; ideally enumerate them in a Warnings Registry table within the plan.
+
+6. **`baseline_kwh_per_day` field mapping not explicit in Step H.** H1 says "c = intercept (baseline kWh/day)" but does not state the assignment to `supplementary_loads.baseline_kwh_per_day`. Design Test 18 specifically requires this field populated and ≈ 10 on the test dataset. Easy to miss without explicit mapping. Add an output field-mapping section in Step H naming every `supplementary_loads` field and its source variable.
+
+7. **`baseload_mean/median_kwh_per_day` derivation not described.** Design requires both fields; plan does not say how they are computed. Read: mean and median of whole-day gas-baseload totals computed across the **full dataset's whole days** (not the summer window) — these are user-facing sanity checks that should reflect baseload as applied to the full year. Specify explicitly in the metadata-assembly step.
+
+8. **Design doc test coverage not mapped.** Project verification is manual + structural, spot-checking against the design doc's 22 test criteria. Plan's Success Criteria lists behaviours, not cases. Add a verification block in Success Criteria mapping to specific tests (e.g. Tests 1, 2, 5, 6 — happy path, median robustness, clamping, invariant; Tests 3, 4 — HH fidelity, weekday/weekend; Test 7 — no-gas; Tests 8, 9 — Method C, Method D; Tests 10, 11, 12, 13, 14, 15 — R², absence edge cases; Test 16 — degree-day base consistency; Tests 17–22 — Step H).
+
+**LOW**
+
+9. Method D balance-point phrasing: plan says "≤ 1.2× warmest-bin median"; design says "within 20% of warmest-bin median". One-sided vs two-sided; functionally equivalent given monotonicity but phrasing differs.
+10. Normal equations for multi-OLS: fine for 3 parameters on 30+ rows, but no condition-number check. Step 9's singularity catch is sufficient — leave as is.
+11. Public surface: plan exports individual methods A–E and helpers; only `separateBaseload` + getter/setter are consumed externally by plan 3b. Minor cleanup candidate (underscore-prefix convention or closures).
+12. `summer_window.start/end` derivation not specified. Presumably earliest/latest qualifying summer day — implementer will reach the right answer.
+13. Step H `daily_mean_temp_c` phrasing ambiguous ("mean of 24 hourly values, derived from 48 HH temp values"). Mathematically equivalent either way since Open-Meteo hourly is replicated across both HH slots. Cleaner: "mean of the 48 HH `temp_c` values for the day".
+
+### Review Summary
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| CRITICAL | 0 | ✓ pass |
+| HIGH | 3 | ⚠ revise and resubmit |
+| MEDIUM | 5 | ⚠ revise and resubmit |
+| LOW | 5 | ℹ informational |
+
+**Verdict: REVISE AND RESUBMIT** — structural and specification changes needed before implementation. After revision, resubmit for re-review.
+
+### Resolution of review changes
+
+[To be completed by Sonnet during revision. Each numbered change above needs a disposition: accepted (describe how applied), rejected (reasoning), or modified (describe).]
 
 ---
 
 ## Approval
 
-**Status:** [Pending]
+**Status:** [Pending — revise and resubmit]
 
 ---
 
