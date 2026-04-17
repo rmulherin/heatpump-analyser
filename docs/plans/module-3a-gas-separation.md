@@ -491,4 +491,16 @@ Verdict: APPROVE WITH CLARIFICATIONS — implementable once L14–L17 are applie
 
 ## Implementation Deviations
 
-[To be completed during implementation]
+**Implemented 2026-04-17 by Sonnet.**
+
+**D1 — Calendar-adjacency guard in absence run-finding (Step F)**
+Plan describes "runs of ≥3 consecutive low-gas days" without specifying gap handling. Implementation adds a check that adjacent entries in the sorted days array are exactly 1 calendar day apart (Luxon `.diff(..., 'days').days === 1`). This prevents data gaps (days with no records) from silently bridging two separate low-gas periods into one absence run. No spec conflict — consistent with the design intent of detecting contiguous absences.
+
+**D2 — `warnings` passed as parameter to sub-functions**
+The plan specifies warnings being pushed within `detectAbsences` and the method functions (Steps 6–8), with the orchestrator owning the single `warnings = []` array. Implemented by passing `warnings` as a parameter to `methodC`, `methodD`, `methodE`, `detectAbsences`, and `validateSeparation`. All pushes accumulate in the orchestrator's array. The alternative (returning warnings from each function and merging) would have been more complex with no benefit.
+
+**Clarifications applied (L14–L17):**
+- L14: 4c (baseload mean/median) computed before 4b (absence detection) — implemented in correct order.
+- L15: `CDD_BASE_TEMP` imported in `baseload.js` with inline comment explaining pre-emptive import.
+- L16: Step G aggregation uses whole-gas days (`indices.length !== 48` check on non-null `heating_kwh` slots).
+- L17: "Absence > 30 days" warning uses updated string from `design/baseload-separation.md` (acknowledges de-icing setpoint limitation).
