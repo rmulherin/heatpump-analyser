@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-16
 **Status:** ✅ Approved — implementation may begin. 2 clarification(s) apply (see review below).
-**Depends on:** Module 3a (must be implemented and verified first)
+**Depends on:** `module-3a-gas-separation.md` and `module-3a-step-h.md` — both must be implemented and verified first.
 
 ---
 
@@ -220,7 +220,7 @@ Pre-implementation review of the Module 3 orchestration and UI-wiring plan. Plan
 **Status:** ✅ Approved — implementation may begin. 2 clarification(s) apply (see review below).
 **Date:** 2026-04-17
 **Approved by:** Rhiannon (via Opus review)
-**Clarifications confirmed:** C1 (line-number anchors removed in favour of function/handler names), C2 (dependency scope updated to reflect 3a's final structure).
+**Clarifications confirmed:** C1 (line-number anchors removed in favour of function/handler names), C2 (dependency updated — 3a split into `module-3a-gas-separation.md` + `module-3a-step-h.md`; both listed in Depends on header).
 
 ---
 
