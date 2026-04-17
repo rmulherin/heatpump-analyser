@@ -1,7 +1,7 @@
 # Module 3a — Baseload Separation: Step H (Supplementary Electric Load Detection)
 
 **Date:** 2026-04-17
-**Status:** Awaiting approval — review via claude.ai before implementation begins.
+**Status:** ✅ Approved — implementation may begin. 1 clarification applies (see review below).
 **Depends on:** `module-3a-gas-separation.md` — must be implemented and verified first.
 
 ---
@@ -321,13 +321,59 @@ Tests 1–16 (gas separation) are in `module-3a-gas-separation.md`.
 
 ## Design Review
 
-[To be completed by Opus on resubmission]
+**Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Date:** 2026-04-17
+**Review type:** Plan review (pre-implementation)
+**Authoritative design:** `design/baseload-separation.md` § Step H
+
+### Context
+
+New plan, split from the original `module-3a-baseload-core.md` during the initial Opus review per finding H3. Scope: OLS machinery (multi-var OLS with exact t-CDF via incomplete beta), `detectSupplementaryLoads()`, and orchestrator extension.
+
+### Resolution of original review findings (carried forward)
+
+- **H1 (p-value approximation too aggressive).** Resolved. Uses exact t-CDF via regularised incomplete beta function (Lentz's continued fraction) + Lanczos g=5 lgamma. Verification targets specified at t=2.042 and t=2.750 for df=30. Numerical Recipes §6.4 coefficients confirmed correct.
+- **M6 (baseline_kwh_per_day field mapping).** Resolved. Complete output field-mapping table in Step 3 H5.
+- **L13 (daily_mean_temp_c phrasing).** Resolved. "Mean of temp_c over 48 corresponding external records."
+
+### New findings on revised plan
+
+**MEDIUM**
+
+**M1. Step H eligibility gap — `gas_kwh` whole-day check absent in normal case.**
+
+Design doc Step H H0 requires: *"48 HH periods non-null for gas **and** elec, `is_absence == false`, non-null `temp_c` for the day"*.
+
+Plan Step 3 H0 eligibility currently lists: elec_kwh whole-day, `is_absence === false` for all 48 heating records, temp_c non-null for all 48 external records. The `gas_kwh` whole-day check is absent in the normal (non-no-gas) case.
+
+In practice, a day with gas gaps but complete elec won't be marked `is_absence = true` (Step F operates on whole-gas days; partial-gas days retain the passthrough's `is_absence: false`). That day would pass Step H's eligibility and enter the fit — contrary to the design spec. Gas and elec meter gaps usually coincide (same smart meter infrastructure), so the practical impact is near-zero. But it's a spec deviation worth closing.
+
+**Resolution (apply during implementation):** Add `all 48 HH periods non-null for gas_kwh` to Step H H0 eligibility in the non-no-gas case. One-line addition; matches design exactly.
+
+### Review Summary
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| CRITICAL | 0 | ✓ pass |
+| HIGH | 0 | ✅ resolved |
+| MEDIUM | 1 | ℹ apply during implementation |
+| LOW | 0 | — |
+
+Verdict: APPROVE WITH CLARIFICATIONS — implementable once M1 is applied.
+
+### Resolution of review changes
+
+[To be completed by Sonnet during implementation. Confirm M1 disposition in this section.]
 
 ---
 
 ## Approval
 
-**Status:** Awaiting approval — review via claude.ai before implementation begins.
+**Status:** ✅ Approved — implementation may begin. 1 clarification applies (see review below).
+**Date:** 2026-04-17
+**Approved by:** Rhiannon (via Opus review)
+**Clarifications confirmed:**
+- M1 — Add `gas_kwh` whole-day check to Step H H0 eligibility in the non-no-gas case. Matches design doc.
 
 ---
 

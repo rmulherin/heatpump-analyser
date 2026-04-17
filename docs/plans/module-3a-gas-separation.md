@@ -1,7 +1,7 @@
 # Module 3a — Baseload Separation: Gas Separation
 
 **Date:** 2026-04-17
-**Status:** Awaiting approval — review via claude.ai before implementation begins.
+**Status:** ✅ Approved — implementation may begin. 4 clarification(s) apply (see review below).
 
 ---
 
@@ -445,9 +445,47 @@ criteria, Tests 1–16 mapped here, Tests 17–22 in step-h plan.
 
 ---
 
+### Re-review (2026-04-17, Opus — revised plan post-split)
+
+The revised plan addresses all original findings cleanly. New observations below.
+
+**MEDIUM** — M1 applies to the step-h plan, not this one. See `module-3a-step-h.md` Design Review.
+
+**LOW clarifications to apply during implementation**
+
+- **L14. Step 9 orchestrator ordering.** The list shows 4b (`detectAbsences`) before 4c (compute `baseload_mean/median`), but 4b consumes `baseloadMedianKwhPerDay` produced by 4c. Parenthetical "see 4c below" clarifies intent but the list order is reversed. Swap 4b and 4c during implementation.
+- **L15. `CDD_BASE_TEMP` import in Step 2.** Imports both `HDD_BASE_TEMP` and `CDD_BASE_TEMP` from `constants.js`, but `CDD_BASE_TEMP` is only used by the step-h plan. Either move the `CDD_BASE_TEMP` import into the step-h plan's modification, or leave and add a comment explaining it's imported pre-emptively to avoid a second import edit. Implementer's choice.
+- **L16. Step 8 "for each whole day".** Design requires Step G's daily aggregation to use whole-gas-days only (matching Step F's definition). Tighten the wording during implementation to "whole-gas day".
+
+**Design-level amendment — absence warning string**
+
+Rhiannon flagged during re-review that the Step F absence rule catches the "boiler fully off" pattern cleanly but misses the more common "de-icing setpoint" case. Magnitude analysis: missed de-icing absences produce ~5% systematic downward bias on HTC, within the Siviour method's inherent ±15–20% accuracy envelope — not worth adding a second detection rule in MVP. Instead, the user-facing warning is updated to acknowledge what is NOT caught. `design/baseload-separation.md` Step F warning string updated accordingly.
+
+- **L17. Update Warnings Registry "Absence > 30 days" entry** in this plan to match the revised canonical string in `design/baseload-separation.md` at implementation time.
+
+### Review Summary
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| CRITICAL | 0 | ✓ pass |
+| HIGH | 0 | — |
+| MEDIUM | 0 | — (M1 is on the step-h plan) |
+| LOW | 4 | ℹ apply during implementation |
+
+Verdict: APPROVE WITH CLARIFICATIONS — implementable once L14–L17 are applied.
+
+---
+
 ## Approval
 
-**Status:** Awaiting approval — review via claude.ai before implementation begins.
+**Status:** ✅ Approved — implementation may begin. 4 clarification(s) apply (see review below).
+**Date:** 2026-04-17
+**Approved by:** Rhiannon (via Opus review)
+**Clarifications confirmed:**
+- L14 — Step 9 4b/4c ordering swapped at implementation
+- L15 — CDD_BASE_TEMP import location is implementer's choice
+- L16 — Step 8 "whole day" interpreted as whole-gas-day
+- L17 — Warnings Registry "Absence > 30 days" string updated to match revised `design/baseload-separation.md` at implementation time
 
 ---
 
