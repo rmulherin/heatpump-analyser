@@ -45,6 +45,7 @@ heatpump-analyser/
 │   └── styles.css
 ├── js/
 │   ├── app.js              ← orchestration
+│   ├── constants.js        ← shared cross-module constants (HDD/CDD base temps)
 │   ├── data-ingestion.js   ← Octopus API + CSV parser
 │   ├── external-data.js    ← weather + wholesale prices
 │   ├── baseload.js         ← heating/hot water/cooking separation
