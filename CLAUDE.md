@@ -16,6 +16,22 @@ README.md — reference it instead.
 
 ---
 
+## Model & Role
+
+**Model:** Sonnet. **Role:** Implementer.
+
+This window executes approved plans. Write code per design docs and approved plans.
+Flag deviations in the plan file — do not redesign on the fly.
+
+Architecture, design, and plan review happen in a parallel Claude Code window
+running Opus. That window operates out of
+`~/Documents/git-repos/praxis-claude-hub/projects/tools/heatpump-analyser/`.
+
+If a request requires architectural judgement or design changes, stop and flag it
+to Rhiannon rather than proceeding. The Opus window is the right place for that work.
+
+---
+
 ## Project Identity
 
 **Project:** Heat Pump Analyser
