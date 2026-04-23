@@ -1,7 +1,7 @@
 # Module 1 Patch — Tariff Windowing, Meter Stitching, M3b kWh Display
 
 **Date:** 2026-04-23
-**Status:** Awaiting review — review via claude.ai before implementation begins.
+**Status:** ⚠ Approved with edits — 2026-04-23. H1–H3 + M1–M3 applied inline per Design Review below; L1–L3 apply during implementation per Resolution.
 **Depends on:** M1 and M3b approved specs (no new design required)
 
 ---
@@ -110,10 +110,14 @@ Step 5 (normalisation) is unchanged — it is needed for `normaliseConsumption`.
 - **T2 — Tariff switch mid-window:** Account with product A (Jan–Jun) followed by product B
   (Jul–present); data window Jan–Dec. Both products fetched; no 400; rate timeline has
   entries from both products.
-- **T3 — Dated SVT outside data range:** `VAR-21-07-02` active Jul 2021–Apr 2023;
-  data starts Aug 2021, ends Apr 2023. Clipped query window `[Aug 2021, Apr 2023]` —
-  no 400. Query for the same product with data starting Jun 2021 (before product live)
-  clips `period_from` to agreement start.
+- **T3 — Dated SVT outside data range (stubbed URL-parameter test):** With
+  `buildTariffTimeline`'s network layer stubbed, supply an agreement whose
+  product is stubbed as "live Jul 2021 – Apr 2023". Data window Jun 2021 – Dec
+  2023. Assert that the constructed URL's `period_from` clips to the
+  agreement's `valid_from` (not the earlier data start) and `period_to` clips
+  to the agreement's `valid_to` (not the later data end). No live API call.
+  Live-end-to-end verification against Rhiannon's own account — where the
+  current code produces a 400 — remains as an informal post-fix check.
 
 ---
 
@@ -165,18 +169,35 @@ per-meter unit detection is genuinely needed.
 
 **2a. Tier 1 — Newest-meter-sufficient check (primary path)**
 
-At the start of `fetchConsumptionStitched`, before iterating all meters, fetch records
-from the **newest** meter only (last element of the `meters` array). Compute the span
-covered:
+At the start of `fetchConsumptionStitched`, before iterating all meters,
+fetch records from the **newest meter** only. "Newest" is identified by the
+**same stable criterion used by the existing `elecSerial`/`gasSerial`
+'most recent' selection** from M1 Phase 2 (deviation D3) — typically by
+`install_date` or `effective_from` descending. **Do not rely on array
+index.** If the existing "most recent" selection itself depends on array
+ordering, audit and fix as part of this patch (add the affected function
+to Files to modify).
+
+The threshold for "newest meter sufficient" is `0.9 × CONFIG.LOOKBACK_MS`
+(~328 days at the current 365-day lookback), not a hard-coded 365.
+Tracking a relative fraction of `LOOKBACK_MS` keeps the threshold coherent
+if the lookback ever changes, and the 10% slack absorbs minor
+install-date boundary gaps without over-firing Tier 2.
+
+Before implementation, grep for callers of `fetchConsumptionStitched` and
+confirm no caller treats `metersStitched` as always-set or always-true.
+Record the result (affected call-sites, or "none found") in the Design
+Review Resolution section below (L3).
 
 ```js
-const newestMeter = meters[meters.length - 1];
+const newestMeter = selectNewestMeter(meters); // stable criterion — same as elecSerial/gasSerial selection
 // ... fetch newestData from newestMeter ...
 if (newestData.results.length > 0) {
   const ts = newestData.results.map(r => new Date(r.interval_start).getTime());
   const spanDays = (Math.max(...ts) - Math.min(...ts)) / (24 * 60 * 60 * 1000);
-  if (spanDays >= 365) {
-    // Newest meter covers the full lookback window — use it alone
+  const sufficientDays = 0.9 * CONFIG.LOOKBACK_MS / (24 * 60 * 60 * 1000);
+  if (spanDays >= sufficientDays) {
+    // Newest meter covers >=90% of the lookback window — use it alone
     const sorted = newestData.results.sort(
       (a, b) => new Date(a.interval_start) - new Date(b.interval_start)
     );
@@ -197,9 +218,9 @@ same as the single-meter path.
 
 **2b. Tier 2 — Per-meter unit detection (stitching path)**
 
-Only reached when the newest meter spans <12 months. Apply a plausibility heuristic
-per meter before stitching. Private helper `inferGasUnit` in `data-ingestion.js`
-(gas only — electricity is always kWh from the Octopus API):
+Only reached when the newest meter spans <90% of `CONFIG.LOOKBACK_MS`. Apply a
+plausibility heuristic per meter before stitching. Private helper `inferGasUnit`
+in `data-ingestion.js` (gas only — electricity is always kWh from the Octopus API):
 
 ```js
 function inferGasUnit(records) {
@@ -213,14 +234,44 @@ function inferGasUnit(records) {
     const d = r.interval_start.slice(0, 10);
     byDay.set(d, (byDay.get(d) ?? 0) + r.consumption);
   }
-  const vals = [...byDay.values()].sort((a, b) => a - b);
-  const med = vals[Math.floor(vals.length / 2)];
-  return med < 2.0 ? 'm3' : 'kwh';
+  const vals = [...byDay.values()];
+  const sorted = [...vals].sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)];
+  const maxDay = Math.max(...vals);
+  // Two-point rule: m³ classification requires BOTH median < 2.5 AND
+  // max-day < 5. Prevents misclassifying low-gas kWh households
+  // (gas-cooking-only, small flats) where median might be <2 kWh/day but
+  // occasional days push above 5 kWh. Real m³ households have summer max
+  // days around 1–2 m³; real kWh households have summer max days >5 kWh
+  // even if the median is low.
+  return (median < 2.5 && maxDay < 5) ? 'm3' : 'kwh';
 }
 ```
 
-Threshold 2.0: summer m³/day is 0.2–1.8 for most households;
-summer kWh/day is 3–12. Boundary risk is low.
+**Threshold rationale (two-point rule):** The single-threshold version
+(`median < 2.0`) misclassifies gas-cooking-only households (summer daily
+gas 0.2–0.8 kWh/day) and very small flats on combi boilers (1–2 kWh/day).
+Requiring both a low median AND a low maximum prevents the kWh household
+with legitimately sparse summer use from being multiplied ×11.19 by
+spurious m³ classification. Typical m³ households: median 0.3–1.0,
+max-day 1–2. Typical kWh households with low usage: median 1–4, max-day
+5–15. Gap is clean. Fallback behaviour unchanged: insufficient summer
+data (<48 HH records) still assumes kWh as the safer default.
+
+**In addition, log the detection per meter** — serial, unit classified,
+observed summer median, observed summer max-day — via `console.info`,
+so an edge-case user can see the decision in devtools if the result
+looks wrong. This is a debug aid; the sanity-check UI (Fix 2d below) is
+where user-visible review of the unit happens.
+
+**New `gas_unit_source` enum value — pre-implementation audit.**
+This patch introduces `'m3_converted_per_meter'` as a new value for the
+`gas_unit_source` metadata field. Before applying Fix 2b, grep for
+`gas_unit_source` across all `js/*.js` files. If any code branches on
+specific values (e.g. `if (source === 'm3_converted')`), extend that
+code to handle the new value explicitly in this same patch. Record the
+result (affected call-sites, or "none found") in the Design Review
+Resolution section (M3).
 
 Within the existing meter-iteration loop (for the stitching path), convert before
 appending:
@@ -248,6 +299,42 @@ After normalisation, display total gas kWh over the data span:
 - Add guidance note: "Compare to your annual figure in the Octopus app. They should
   be within ~5%. If the figure looks wrong, use the unit override above."
 
+**2d. Dual-unit display in the gas sanity check (`buildGasUnitCheck`).**
+
+The gas sanity check is the first UI where unit-misreading can occur — it is
+the gate where the user decides whether to toggle m³. The current
+implementation shows only a £/day figure (summer-day, winter-day samples).
+This is precisely the UX that caused Rhiannon to miss the unit bug during
+user-testing: a £0.03/day figure is ambiguous on its own, while "0.64 kWh"
+in kWh terms is obviously implausible for a gas-using household.
+
+Modify `buildGasUnitCheck` to show **both kWh and £** for each sample day,
+side by side. Suggested format:
+
+> Estimated daily gas use — summer day: **7.2 kWh** ≈ £0.58; winter day:
+> **42.1 kWh** ≈ £3.35. If these look wrong in kWh terms, toggle the unit
+> below.
+
+The displayed kWh is whatever the current (pre-toggle) interpretation
+produces — so a raw reading of 0.64 m³ treated as kWh renders as
+"0.64 kWh ≈ £0.05", which a user can immediately see is wrong even if the £
+figure alone might not be alarming. That visibility is the whole point:
+kWh makes unit-misinterpretation legible in a way £ does not.
+
+The £ value follows from kWh × the most recent fetched gas unit rate (same
+path as Fix 3a). Omit the £ portion gracefully if no gas rate is available.
+
+### Tests
+
+- **T8b — Gas sanity check shows both units:** The sanity-check dialog
+  includes kWh and £ values for summer-day and winter-day samples, in that
+  order. If the raw reading is m³ (pre-toggle), the kWh value displayed
+  is the raw m³ number (intentionally — makes the unit problem visible).
+- **T8c — Gas sanity check degrades gracefully without a gas rate:** If
+  `tariff_rates.gas` is empty or unavailable (e.g. tariff fetch failed),
+  the kWh values still render; the £ suffixes are omitted. No crash, no
+  "£NaN" string.
+
 ### Tests
 
 - **T4 — Single SMETS1 kWh meter (no change):** No conversion; `gas_unit_source = 'kwh_native'`;
@@ -260,9 +347,15 @@ After normalisation, display total gas kWh over the data span:
 - **T6b — Two gas meters, newest has <12m data:** Tier 2 path fires; `inferGasUnit`
   called per meter; SMETS1 records untouched; SMETS2 records converted; stitched array
   is fully in kWh; toggle suppressed.
+- **T6c — Tier 1 relative-threshold boundary (M2):** Two gas meters, newest has
+  340 days of data. With threshold `0.9 × CONFIG.LOOKBACK_MS` (≈328 days at
+  current 365-day lookback), Tier 1 fires. Assert `metersStitched = false` and
+  only the newest meter's records returned. A corresponding test at 320 days
+  (below threshold) should fall through to Tier 2.
 - **T7 — Total-kWh assertion:** Post-fix total gas kWh over data period is within
-  ±5% of Rhiannon's Octopus-app annual figure (she supplies this value before the
-  verification step).
+  ±5% of Rhiannon's Octopus-app annual figure. **Sonnet must request this value
+  from Rhiannon before implementation begins**, so T7 is a real pre-implementation
+  gate rather than a post-hoc verification step.
 
 ---
 
@@ -345,14 +438,14 @@ Deviations section:
 Add to `js/app.js` (window-level only — not exported from the module):
 
 ```js
-// debug-only — remove before release
+// debug-only — remove in post-launch cleanup (after 28-Apr-2026 launch)
 window.__getIngestionResult = () => getIngestionResult();
 window.__getBaseloadResult = () => getBaseloadResult();
 ```
 
 These are needed immediately to inspect raw meter objects (Symptom 2 Fix 2a) and
-verify per-meter unit detection. They should be removed in a later cleanup commit
-(note in TODO comment).
+verify per-meter unit detection. **Removal trigger:** post-launch cleanup commit,
+on or after 2026-04-28. Named rather than open-ended to prevent drift.
 
 ### Tests
 
@@ -375,7 +468,9 @@ verify per-meter unit detection. They should be removed in a later cleanup commi
 | `js/app.js` | Update `waitForGasConfirmation` to show per-meter detection results; update `gas_unit_source` metadata |
 | `js/app.js` | `showSuccessSummary`: add total gas kWh line with assertion guidance |
 | `js/app.js` | `runBaseloadSeparation`: add optional £/day equivalent to kWh display |
-| `js/app.js` | Add debug getters (`window.__getIngestionResult`, `window.__getBaseloadResult`) |
+| `js/app.js` | Add debug getters (`window.__getIngestionResult`, `window.__getBaseloadResult`) with post-launch removal comment |
+| `js/data-ingestion.js` | `buildGasUnitCheck` (Fix 2d): show both kWh and £ for summer-day and winter-day sample values |
+| `js/data-ingestion.js` or wherever it lives | Audit the existing `elecSerial`/`gasSerial` "most recent meter" selection logic; confirm it uses a stable criterion (install_date / effective_from), or fix if it relies on array ordering (H1) |
 | `docs/plans/module-3b-baseload-integration.md` | Append D3 to Deviations section |
 
 ---
@@ -395,48 +490,159 @@ verify per-meter unit detection. They should be removed in a later cleanup commi
 
 - M4 implementation — separate track, currently under architect review
 - M3a changes — hypothesis 3 eliminated; no changes required
-- UI redesign of the gas sanity check section — functional fix only
-- Production removal of debug getters — deferred to a later cleanup commit
+- Broader UI redesign of the gas sanity check beyond the kWh + £ dual-unit
+  display added in Fix 2d — functional fix only
+- Removal of debug getters within this patch — named trigger is post-launch
+  cleanup commit on or after 2026-04-28 (see Step 4 above)
 
 ---
 
-## Open question for Opus review
-
-**Symptom 2 — Tier 1 threshold:** The plan uses 365 days as the "newest meter sufficient"
-threshold. The lookback window is also 365 days (`CONFIG.LOOKBACK_MS`). Is this the right
-threshold, or should it be slightly shorter (e.g. 350 days) to account for minor data gaps
-at the meter installation date? The stitching path is only needed when the newer meter
-genuinely lacks enough history; a few missing days at the boundary shouldn't trigger it.
-
----
-
-## Claude.ai Review — yyyy-mm-dd
+## Design Review
 
 **Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Date:** 2026-04-23
+**Review type:** Plan review (pre-implementation)
+**Authoritative specs:** `docs/plans/module-1-data-ingestion.md`,
+`docs/plans/module-3b-baseload-integration.md`, and
+`~/Documents/git-repos/praxis-claude-hub/projects/tools/heatpump-analyser/design/data-ingestion.md`.
 
-**Overall verdict:** [Approved / Approved with clarifications / Revise and resubmit]
+### Context
 
-### What is solid
+Bug-fix plan arising from Rhiannon's M3b user-test. Three symptoms surfaced:
+(1) 400 errors on historical tariff fetches, (2) baseload estimate ~20× too
+low (kWh-space factor ~15; £-space factor ~20 inflated by standing-charge
+drag), and (3) M3b UI lacked the kWh cross-check needed to distinguish a
+calculation bug from a display bug. Root causes are M1 defects (tariff
+windowing, mixed-meter unit handling) plus one M3b plan deviation (kWh
+display). Investigation confirmed hypothesis 3 (M3a scaling slip) is
+refuted.
 
-[What the plan gets right. Be specific.]
+Review identified one additional UX-correctness gap (H3) in the gas
+sanity check — the first UI where unit-misreading can occur and the
+precise screen that let Rhiannon miss the unit bug during testing. My
+original debug prompt scoped Symptom 3 narrowly around M3b; that scope
+left the gate-point UI unchanged. H3 corrects that.
 
-### Clarifications required before implementation
+### Required changes for implementation
 
-[Any ambiguity, missing specification, or underdefined behaviour that would force
-Claude Code to make an undocumented decision mid-build. Each item must include
-the resolution — not just the problem.]
+**1. H1 — Stable "newest meter" selection (Fix 2a).**
 
-### Minor observations (not blockers)
+Replace `meters[meters.length - 1]` with a selection that uses the same
+stable criterion as the existing `elecSerial`/`gasSerial` "most recent"
+logic from M1 Phase 2 (deviation D3) — typically `install_date` or
+`effective_from` descending. Array-index ordering is not guaranteed by
+the Octopus API and would regress Rhiannon's case if the active meter
+is not returned last. If the existing selection itself relies on array
+order, audit and fix it in this patch.
 
-[Optional. Suggestions for V2, style notes, things to keep in mind.]
+**2. H2 — Two-point rule in `inferGasUnit` (Fix 2b).**
+
+Raise the classification bar so low-gas-usage kWh households (gas-cooking
+only, very small flats, holiday homes) are not misclassified as m³ and
+spuriously multiplied ×11.19. Require both `median < 2.5` AND
+`max-day < 5` to classify as m³. Kept the existing "insufficient summer
+data → assume kWh" fallback. Added per-meter detection logging for
+devtools visibility.
+
+**3. H3 — Dual-unit display in the gas sanity check (Fix 2d, new).**
+
+`buildGasUnitCheck` previously showed £/day only — the UI that failed
+Rhiannon during testing. Add kWh alongside £ for summer-day and
+winter-day samples. A 0.64 m³ reading mis-interpreted as kWh renders as
+"0.64 kWh ≈ £0.05" — obviously wrong in kWh terms even when the £ alone
+might not alarm. Graceful fallback if no gas rate is available.
+
+**4. M1 — T3 reframed as stubbed URL-parameter test.**
+
+T3 rewritten to state explicitly that it stubs `buildTariffTimeline`'s
+network layer and asserts on the constructed URL's `period_from` /
+`period_to` parameters. Live-API end-to-end remains an informal post-fix
+check against Rhiannon's own account (which currently produces the 400).
+
+**5. M2 — Relative Tier 1 threshold `0.9 × CONFIG.LOOKBACK_MS` (Fix 2a).**
+
+Replaced the hard-coded 365-day threshold. Relative-to-`LOOKBACK_MS` keeps
+the gate coherent if the lookback ever changes; the 10% slack absorbs
+install-date boundary gaps without over-firing Tier 2. Added boundary
+test T6c (340 days above threshold, 320 days below).
+
+**6. M3 — Pre-implementation audit of `gas_unit_source` enum (Fix 2b).**
+
+Before applying Fix 2b, grep for `gas_unit_source` across `js/*.js`. If
+any code branches on specific values, extend it to handle the new
+`'m3_converted_per_meter'` value explicitly in the same patch. Document
+the grep result in the Resolution section below.
+
+**7. L1 — Named removal trigger for debug getters (Step 4).**
+
+"Production removal" changed from open-ended TODO to a named trigger:
+post-launch cleanup commit on or after 2026-04-28. Mirrored in
+Not-in-scope.
+
+**8. L2 — T7 ground-truth gathered pre-implementation.**
+
+Sonnet must request Rhiannon's Octopus-app annual gas kWh figure before
+implementation begins, so T7 is a real gate rather than a post-hoc
+check.
+
+**9. L3 — Call-site compatibility check for `fetchConsumptionStitched` (Fix 2a).**
+
+Before implementation, grep for callers and confirm none treats
+`metersStitched` as always-set or always-true. Document the result in
+the Resolution section.
+
+### Resolution of review changes
+
+1. **H1** — Applied inline to Fix 2a. Narrative + code updated to use
+   `selectNewestMeter(meters)` with a pointer to the existing
+   `elecSerial`/`gasSerial` selection criterion. Audit line added to
+   Files to modify.
+2. **H2** — Applied inline to Fix 2b. Two-point rule codified; rationale
+   section added explaining the gap between typical m³ and typical
+   low-gas kWh households. Per-meter logging added.
+3. **H3** — New Fix 2d added under Symptom 2, with T8b and T8c tests.
+   `buildGasUnitCheck` listed in Files to modify.
+4. **M1** — T3 rewritten in place to state the stubbed nature and the
+   URL-parameter assertion target.
+5. **M2** — Applied inline to Fix 2a (`0.9 × CONFIG.LOOKBACK_MS`) and
+   Fix 2b (threshold reference). T6c added. Open Question section
+   removed (now resolved).
+6. **M3** — Pre-implementation grep note added to Fix 2b. Result line
+   placeholder: Sonnet populates during implementation.
+7. **L1** — Applied inline to Step 4. Removal trigger now "on or after
+   2026-04-28". Not-in-scope updated to match.
+8. **L2** — Applied inline to T7. "Sonnet must request this value…
+   before implementation begins" wording.
+9. **L3** — Pre-implementation grep note added to Fix 2a. Result line
+   placeholder: Sonnet populates during implementation.
+
+## Review Summary
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| CRITICAL | 0     | ✓ pass |
+| HIGH     | 3     | ✅ resolved (inline) |
+| MEDIUM   | 3     | ✅ resolved (inline) |
+| LOW      | 3     | ℹ resolved (inline); grep placeholders populated during implementation |
+
+Verdict: **APPROVE WITH EDITS** — all nine findings resolved inline. Plan
+is implementable. Sonnet to populate the M3 and L3 grep-result placeholders
+as part of implementation and record in the Deviations section below.
 
 ---
 
 ## Approval
 
-**Status:** Awaiting review — yyyy-mm-dd
-**Approved by:** [Rhiannon (via Opus review)]
-**Clarifications confirmed:** [None yet]
+**Status:** ⚠ Approved with edits — 2026-04-23. Implementation may begin.
+**Approved by:** Rhiannon (via Opus review)
+**Clarifications confirmed:** Two HIGH findings (H1 newest-meter-selection
+stability, H2 heuristic two-point rule) plus one HIGH scope-gap (H3 dual-unit
+sanity check) reshape Fix 2a / 2b and add Fix 2d. Three MEDIUM items (M1
+stubbed T3, M2 relative Tier 1 threshold, M3 enum-value audit) tightened
+tests and pre-implementation checks. L1–L3 named the debug-getters removal
+trigger, pre-sequenced T7 ground-truth gathering, and added the
+`fetchConsumptionStitched` call-site grep. Open-question on Tier 1
+threshold resolved in favour of `0.9 × CONFIG.LOOKBACK_MS`.
 
 ---
 
