@@ -38,7 +38,7 @@ to Rhiannon rather than proceeding. The Opus window is the right place for that 
 **Owner:** Rhiannon (Praxis Insight)
 **Classification:** GREEN — full Claude assistance permitted.
 **Language:** HTML + vanilla JavaScript + Chart.js
-**Status:** Module 2 implemented (weather + wholesale prices + alignment). CORS probe pending manual verification. Module 3a fully implemented (constants.js, baseload.js — Methods A–E, Step F, Step G, Step H with exact t-CDF). Module 3b implemented (app.js integration + UI display). User test pending.
+**Status:** Modules 1–3 implemented. CORS probe confirmed PASS (2026-04-23). Elexon MID endpoint fixed (correct params + dataProvider). Module 3b user test pending.
 
 Praxis hub context (in `~/Documents/git-repos/praxis-claude-hub/`):
 - `context/about-rhiannon.md`
@@ -214,8 +214,9 @@ Design docs live in praxis-claude-hub, NOT in this repo:
     ├── external-data.md
     ├── baseload-separation.md
     ├── heat-loss.md
-    ├── thermal-simulation.md
+    ├── thermal-character.md
     ├── heatpump-model.md
+    ├── scenario-consumption.md
     ├── pricing-engine.md
     ├── financial-analysis.md
     └── ui-design.md
@@ -299,13 +300,14 @@ there is no spot-instance risk, but mid-session context exhaustion is still poss
 (Determined by data flow — each module depends on the one above it)
 
 - [x] Module 1: Data Ingestion (Octopus API + CSV + meter stitching)
-- [x] Module 2: External Data (weather + wholesale prices) — CORS probe pending
+- [x] Module 2: External Data (weather + wholesale prices)
 - [x] Module 3: Baseload Separation
 - [ ] Module 4: Heat Loss Estimation (Siviour regression)
-- [ ] Module 5: Thermal Simulation (RC model + pre-heating)
+- [ ] Module 5: Thermal Character (setpoint, thermal mass, time constant, occupancy weights)
 - [ ] Module 6: Heat Pump Model (COP curves)
-- [ ] Module 7: Pricing Engine (6 scenarios)
-- [ ] Module 8: Financial Analysis (payback, sensitivity)
-- [ ] Module 9: UI & Presentation (charts, heatmap, sliders)
+- [ ] Module 7: Scenario Consumption (RC model + pre-heating optimiser + dumb scenarios)
+- [ ] Module 8: Pricing Engine (tariff application)
+- [ ] Module 9: Financial Analysis (payback, sensitivity)
+- [ ] Module 10: UI & Presentation (charts, heatmap, sliders)
 
 Update this checklist as modules complete.
