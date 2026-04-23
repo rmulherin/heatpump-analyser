@@ -38,7 +38,7 @@ to Rhiannon rather than proceeding. The Opus window is the right place for that 
 **Owner:** Rhiannon (Praxis Insight)
 **Classification:** GREEN — full Claude assistance permitted.
 **Language:** HTML + vanilla JavaScript + Chart.js
-**Status:** Module 2 implemented (weather + wholesale prices + alignment). CORS probe pending manual verification. Module 3a fully implemented (constants.js, baseload.js — Methods A–E, Step F, Step G, Step H with exact t-CDF). Module 3b integration pending.
+**Status:** Module 2 implemented (weather + wholesale prices + alignment). CORS probe pending manual verification. Module 3a fully implemented (constants.js, baseload.js — Methods A–E, Step F, Step G, Step H with exact t-CDF). Module 3b implemented (app.js integration + UI display). User test pending.
 
 Praxis hub context (in `~/Documents/git-repos/praxis-claude-hub/`):
 - `context/about-rhiannon.md`
@@ -300,7 +300,7 @@ there is no spot-instance risk, but mid-session context exhaustion is still poss
 
 - [x] Module 1: Data Ingestion (Octopus API + CSV + meter stitching)
 - [x] Module 2: External Data (weather + wholesale prices) — CORS probe pending
-- [ ] Module 3: Baseload Separation
+- [x] Module 3: Baseload Separation
 - [ ] Module 4: Heat Loss Estimation (Siviour regression)
 - [ ] Module 5: Thermal Simulation (RC model + pre-heating)
 - [ ] Module 6: Heat Pump Model (COP curves)

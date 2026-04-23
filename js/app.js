@@ -26,7 +26,32 @@ import {
   alignExternalData,
   buildExternalMetadata,
   setExternalResult,
+  getExternalResult,
 } from './external-data.js';
+
+import {
+  separateBaseload,
+  setBaseloadResult,
+  getBaseloadResult,
+} from './baseload.js';
+
+// ===== Module 3 — Label maps =====
+
+const BASELOAD_METHOD_LABELS = {
+  'summer-hh-profile-weekday-split': 'Summer weekday/weekend profile (best)',
+  'summer-hh-profile-flat': 'Summer profile (no weekday/weekend split)',
+  'summer-daily-flat': 'Summer daily average (limited summer data)',
+  'balance-point': 'Warm-weather estimation (no summer data)',
+  'literature-default': 'UK average estimate (insufficient data)',
+  'no-gas': 'No gas supply detected',
+};
+
+const CONFIDENCE_LABELS = {
+  'high': 'high confidence',
+  'moderate': 'moderate confidence',
+  'low': 'low confidence — treat with caution',
+  'none': '',
+};
 
 // ===== DOM References =====
 const apiKeyInput = document.getElementById('api-key');
@@ -396,6 +421,13 @@ async function continueWithProperty(apiKey) {
     (text) => showProgress(text, undefined),
     (msg, type) => showStatus(msg, type)
   );
+
+  // Step 10: Trigger Module 3 — Baseload Separation
+  await runBaseloadSeparation(
+    (text) => showProgress(text, undefined),
+    (msg, type) => showStatus(msg, type)
+  );
+
   hideProgress();
   setFetchEnabled(true);
 }
@@ -552,6 +584,99 @@ async function runExternalData(showProgressFn, showStatusFn) {
     `External data loaded. Weather: ${weatherCount} periods. Wholesale prices: ${priceCount} periods (${priceSource}). Gaps: ${gapCount}.`,
     'success'
   );
+}
+
+// ===== Module 3: Baseload Separation Orchestration =====
+
+async function runBaseloadSeparation(showProgressFn, showStatusFn) {
+  const ingestion = getIngestionResult();
+  const externalResult = getExternalResult();
+  if (!ingestion || !externalResult) return;
+
+  showProgressFn('Separating heating demand from baseload…');
+
+  let result;
+  try {
+    result = separateBaseload(ingestion.consumption, externalResult.external);
+  } catch (err) {
+    showStatusFn('Baseload separation failed: ' + err.message, 'error');
+    console.error('runBaseloadSeparation error:', err);
+    return;
+  }
+
+  setBaseloadResult(result);
+
+  const meta = result.baseload_metadata;
+  const sl = result.supplementary_loads;
+
+  // Primary separation summary
+  const methodLabel = BASELOAD_METHOD_LABELS[meta.method] ?? meta.method;
+  const meanStr = meta.baseload_mean_kwh_per_day.toFixed(1);
+  const medianStr = meta.baseload_median_kwh_per_day.toFixed(1);
+  let validationStr = '';
+  if (meta.validation_status === 'good' || meta.validation_status === 'acceptable' || meta.validation_status === 'poor') {
+    const r2Str = meta.heating_vs_degree_days_r2 !== null ? ` (R² = ${meta.heating_vs_degree_days_r2.toFixed(2)})` : '';
+    validationStr = ` Validation: ${meta.validation_status}${r2Str}.`;
+  } else if (meta.validation_status === 'insufficient_data') {
+    validationStr = ' Validation: insufficient data.';
+  }
+  const absenceStr = meta.absence_days_total > 0 ? ` Absences detected: ${meta.absence_days_total} days.` : '';
+
+  showStatusFn(
+    `Baseload separation complete. Method: ${methodLabel}. Daily non-heating gas: mean ${meanStr} kWh/day, median ${medianStr} kWh/day.${validationStr}${absenceStr}`,
+    'info'
+  );
+
+  // Warnings from gas separation
+  for (const warning of meta.warnings) {
+    showStatusFn(warning, 'warning');
+  }
+
+  // Supplementary load messages
+  const ehConf = sl.electric_heating_confidence;
+  if (sl.electric_heating_detected && !sl.electric_heating_is_primary) {
+    const confLabel = CONFIDENCE_LABELS[ehConf] ?? ehConf;
+    const est = sl.electric_heating_kwh_estimate !== null ? sl.electric_heating_kwh_estimate.toFixed(0) : '—';
+    const perDd = sl.electric_heating_kwh_per_dd !== null ? sl.electric_heating_kwh_per_dd.toFixed(2) : '—';
+    showStatusFn(
+      `Supplementary electric heating detected (${confLabel}). Estimated ${est} kWh over the data period (${perDd} kWh per degree-day). Your gas-derived heat loss may underestimate your home's true heating demand.`,
+      'warning'
+    );
+  } else if (sl.electric_heating_is_primary) {
+    const confLabel = CONFIDENCE_LABELS[ehConf] ?? ehConf;
+    const est = sl.electric_heating_kwh_estimate !== null ? sl.electric_heating_kwh_estimate.toFixed(0) : '—';
+    showStatusFn(
+      `Electric heating detected (${confLabel}). Estimated ${est} kWh over the data period. Your home appears to heat with electricity rather than gas.`,
+      'info'
+    );
+  } else if (ehConf === 'low') {
+    showStatusFn(
+      'Weak signal for supplementary electric heating (low confidence) — not included in heat loss adjustment.',
+      'info'
+    );
+  }
+
+  // AC messages
+  if (sl.air_conditioning_detected) {
+    const acConf = CONFIDENCE_LABELS[sl.air_conditioning_confidence] ?? sl.air_conditioning_confidence;
+    showStatusFn(
+      `Air conditioning detected (${acConf}). An air-source heat pump could replace your existing cooling system as well as providing heating.`,
+      'info'
+    );
+  } else if (sl.ac_detection_note === 'insufficient_cdd_data') {
+    showStatusFn(
+      'Not enough warm-weather data to assess whether you have air conditioning.',
+      'info'
+    );
+  }
+
+  // Limitations (only when regression ran)
+  if (sl.method === 'regression') {
+    showStatusFn('Note: supplementary load detection has limitations — see details below.', 'info');
+    for (const limitation of sl.limitations) {
+      showStatusFn(limitation, 'info');
+    }
+  }
 }
 
 // ===== CSV Helpers =====
@@ -744,6 +869,13 @@ btnCsvAnalyse.addEventListener('click', async () => {
       (text) => showCsvProgress(text),
       (msg, type) => showCsvStatus(msg, type)
     );
+
+    // Step 10: Trigger Module 3 — Baseload Separation
+    await runBaseloadSeparation(
+      (text) => showCsvProgress(text),
+      (msg, type) => showCsvStatus(msg, type)
+    );
+
     hideCsvProgress();
 
   } catch (err) {

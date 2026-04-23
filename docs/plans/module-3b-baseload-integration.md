@@ -211,7 +211,9 @@ Pre-implementation review of the Module 3 orchestration and UI-wiring plan. Plan
 
 ### Resolution of review changes
 
-[To be completed by Sonnet during implementation. C1 and C2 applied; confirm disposition here.]
+**C1 applied.** Steps 4 and 5 insertion points anchored to `continueWithProperty()` and the `btnCsvAnalyse` click handler by function/handler name. No line-number anchors used.
+
+**C2 applied.** Dependency header updated to reference both `module-3a-gas-separation.md` and `module-3a-step-h.md`. Both were fully implemented and verified before this plan was executed.
 
 ---
 
@@ -226,4 +228,16 @@ Pre-implementation review of the Module 3 orchestration and UI-wiring plan. Plan
 
 ## Implementation Deviations
 
-[To be completed during implementation]
+**Implemented 2026-04-23 by Sonnet.**
+
+**D1 — `getExternalResult` import added to `external-data.js` import block**
+The plan Step 1 specifies only imports from `baseload.js`. However, `runBaseloadSeparation` calls `getExternalResult()`, which was not yet imported in `app.js` (only `setExternalResult` was). Added `getExternalResult` to the `external-data.js` import in `app.js`. No spec conflict — the function exists and is exported from `external-data.js`; the plan assumes it is available without specifying the import step.
+
+**D2 — `getBaseloadResult` imported but not yet called in 3b**
+Imported per plan Step 1 as the downstream getter. Not used within 3b itself (only `setBaseloadResult` is called). Intentional — future module plans will call `getBaseloadResult()` from `app.js`.
+
+**3a deviation impact assessment (confirmed no-impact):**
+- 3a D1 (calendar-adjacency guard): internal to `detectAbsences` — no interface change.
+- 3a D2 (warnings as parameter): `baseload_metadata.warnings` still populated correctly.
+- 3a L17 (updated absence warning string): 3b displays warnings as-is; longer string presents fine.
+- Step-H M1 (gas_kwh whole-day check): internal to `detectSupplementaryLoads` H0.
