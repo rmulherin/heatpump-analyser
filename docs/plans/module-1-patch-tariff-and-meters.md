@@ -159,46 +159,47 @@ position for the single toggle.
 
 ### Fix
 
-Per-meter unit detection and conversion before stitching.
+The fix has two tiers. Tier 1 handles Rhiannon's case (new meter has years of data)
+and will resolve the immediate bug. Tier 2 handles the general stitching case where
+per-meter unit detection is genuinely needed.
 
-**2a. Investigate Octopus API meter object**
+**2a. Tier 1 — Newest-meter-sufficient check (primary path)**
 
-`fetchAccount` (`data-ingestion.js:58–133`) collects `elecPoint.meters` and stores only
-`serial_number` at the property level. The full meter object from the Octopus API may
-include generation metadata (e.g. a `meter_type` or `is_smart_meter_120` flag).
-
-Before implementing Fix 2b, use the debug getter added in Step 4 to inspect the raw meter
-objects:
-
-```js
-window.__getIngestionResult()  // inspect .metadata.meters_detail
-```
-
-**Fix 2b depends on what the API returns:**
-
-- **If meter type is available** in the meter object: map type to expected unit
-  (SMETS1 → kWh, SMETS2 → m³) and convert m³ meters before stitching.
-- **If meter type is NOT available**: implement the per-meter plausibility heuristic
-  described in Fix 2c.
-
-**2b. Modify `fetchAccount`** to store raw meter objects alongside serial numbers:
+At the start of `fetchConsumptionStitched`, before iterating all meters, fetch records
+from the **newest** meter only (last element of the `meters` array). Compute the span
+covered:
 
 ```js
-properties.push({
-  ...existing fields...,
-  elecMeters,         // already returned (Phase 2 deviation D3 from M1 plan)
-  gasMeters,          // already returned
-  gasMeters_raw: gasMeters,  // full API objects — for unit detection
-});
+const newestMeter = meters[meters.length - 1];
+// ... fetch newestData from newestMeter ...
+if (newestData.results.length > 0) {
+  const ts = newestData.results.map(r => new Date(r.interval_start).getTime());
+  const spanDays = (Math.max(...ts) - Math.min(...ts)) / (24 * 60 * 60 * 1000);
+  if (spanDays >= 365) {
+    // Newest meter covers the full lookback window — use it alone
+    const sorted = newestData.results.sort(
+      (a, b) => new Date(a.interval_start) - new Date(b.interval_start)
+    );
+    return {
+      records: sorted,
+      serialsUsed: [newestMeter.serial_number],
+      metersStitched: false,
+    };
+  }
+}
 ```
 
-(If the full meter objects are already in `gasMeters`, no new field needed — just
-inspect `gasMeters[i].meter_type` or equivalent.)
+When this path triggers, the returned array is from a single meter.
+The existing all-or-nothing `convertM3ToKwh` toggle in `waitForGasConfirmation`
+applies correctly to a single-unit array — no per-meter detection needed.
+`gas_unit_source` remains `'kwh_native'` or `'m3_converted'` as set by the toggle,
+same as the single-meter path.
 
-**2c. Per-meter plausibility heuristic** (fallback if API provides no type info):
+**2b. Tier 2 — Per-meter unit detection (stitching path)**
 
-In `fetchConsumptionStitched`, after fetching each meter's records, check the
-first available summer month (July or August) if present:
+Only reached when the newest meter spans <12 months. Apply a plausibility heuristic
+per meter before stitching. Private helper `inferGasUnit` in `data-ingestion.js`
+(gas only — electricity is always kWh from the Octopus API):
 
 ```js
 function inferGasUnit(records) {
@@ -207,16 +208,13 @@ function inferGasUnit(records) {
     return m === 7 || m === 8;
   });
   if (summerRecs.length < 48) return 'kwh'; // insufficient summer data — assume kWh (safer)
-  const dailyValues = [];
-  // group into days, take daily totals
   const byDay = new Map();
   for (const r of summerRecs) {
     const d = r.interval_start.slice(0, 10);
-    if (!byDay.has(d)) byDay.set(d, 0);
-    byDay.set(d, byDay.get(d) + r.consumption);
+    byDay.set(d, (byDay.get(d) ?? 0) + r.consumption);
   }
-  const vals = [...byDay.values()];
-  const med = vals.sort((a, b) => a - b)[Math.floor(vals.length / 2)];
+  const vals = [...byDay.values()].sort((a, b) => a - b);
+  const med = vals[Math.floor(vals.length / 2)];
   return med < 2.0 ? 'm3' : 'kwh';
 }
 ```
@@ -224,55 +222,47 @@ function inferGasUnit(records) {
 Threshold 2.0: summer m³/day is 0.2–1.8 for most households;
 summer kWh/day is 3–12. Boundary risk is low.
 
-**2d. Convert before stitching** in `fetchConsumptionStitched`:
+Within the existing meter-iteration loop (for the stitching path), convert before
+appending:
 
 ```js
 for (const meter of meters) {
-  ...fetch records...
+  // ... fetch data ...
   if (data.results.length > 0) {
-    const unit = inferGasUnit(data.results);
-    const converted = unit === 'm3'
-      ? convertM3ToKwh(data.results)
-      : data.results;
+    const unit = fuelType === 'gas' ? inferGasUnit(data.results) : 'kwh';
+    const converted = unit === 'm3' ? convertM3ToKwh(data.results) : data.results;
     allRecords.push(...converted);
     serialsUsed.push(meter.serial_number);
-    unitBySer[meter.serial_number] = unit;
   }
 }
 ```
 
-Return `unitBySer` from `fetchConsumptionStitched` so `app.js` can record
-per-meter unit state in `metadata`.
+`gas_unit_source` in metadata: set to `'m3_converted_per_meter'` when the stitching
+path fires and any meter was detected as m³. The all-or-nothing toggle is suppressed
+on this path (records are already in kWh).
 
-**2e. Update `waitForGasConfirmation` and gas check UI:**
-
-The per-meter detection means the gas check UI can now confirm detected units:
-- Show a line per meter if detection ran: "Meter E6S...: kWh (native) | Meter G4A...: m³ → converted"
-- Retain a single "override" toggle: "Override: treat all gas data as m³" (advanced)
-  — applies `convertM3ToKwh` to records that were NOT already converted
-
-Update `gas_unit_source` in `metadata` to reflect the detected state (e.g.
-`'m3_converted_per_meter'` when mixed).
-
-**2f. Total-kWh assertion in success summary:**
+**2c. Total-kWh assertion in success summary:**
 
 After normalisation, display total gas kWh over the data span:
-- Add to the `showSuccessSummary` `<dl>`: "Total gas consumption: X,XXX kWh over N days"
+- Add to `showSuccessSummary` `<dl>`: "Total gas consumption: X,XXX kWh over N days"
 - Add guidance note: "Compare to your annual figure in the Octopus app. They should
   be within ~5%. If the figure looks wrong, use the unit override above."
 
 ### Tests
 
-- **T4 — Single SMETS1 kWh meter:** No conversion; `gas_unit_source = 'kwh_native'`;
-  total kWh in summary matches raw sum.
-- **T5 — Single SMETS2 m³ meter:** `inferGasUnit` returns `'m3'`; conversion applied;
-  total kWh = raw sum × 11.19 (±0.01%).
-- **T6 — Two gas meters, SMETS1 (early) + SMETS2 (recent):** Per-meter detection;
-  SMETS1 records untouched; SMETS2 records converted; stitched array is fully kWh;
-  no 11× inflation of early records; gas sanity check shows ~£0.60/day summer.
+- **T4 — Single SMETS1 kWh meter (no change):** No conversion; `gas_unit_source = 'kwh_native'`;
+  total kWh matches raw sum.
+- **T5 — Single SMETS2 m³ meter (no change):** User toggles m³; `convertM3ToKwh` applied
+  to single-unit array; `gas_unit_source = 'm3_converted'`; total kWh = raw sum × 11.19 (±0.01%).
+- **T6a — Two gas meters, newest has >12m data (Rhiannon's case):** Tier 1 path fires;
+  only newest meter's records returned; `metersStitched = false`; single-unit array;
+  m³ toggle operates correctly on a single-unit array.
+- **T6b — Two gas meters, newest has <12m data:** Tier 2 path fires; `inferGasUnit`
+  called per meter; SMETS1 records untouched; SMETS2 records converted; stitched array
+  is fully in kWh; toggle suppressed.
 - **T7 — Total-kWh assertion:** Post-fix total gas kWh over data period is within
-  ±5% of Rhiannon's Octopus-app annual figure (she supplies this value before
-  the verification step).
+  ±5% of Rhiannon's Octopus-app annual figure (she supplies this value before the
+  verification step).
 
 ---
 
@@ -380,8 +370,7 @@ verify per-meter unit detection. They should be removed in a later cleanup commi
 | File | Change |
 |------|---------|
 | `js/data-ingestion.js` | `buildTariffTimeline`: add `dataStart`, `dataEnd` params; clamp per-agreement query window |
-| `js/data-ingestion.js` | `fetchConsumptionStitched`: add `inferGasUnit`; convert per-meter before stitching; return `unitBySer` |
-| `js/data-ingestion.js` | `fetchAccount`: confirm full meter objects are available (or add `meters_detail` field) |
+| `js/data-ingestion.js` | `fetchConsumptionStitched`: add Tier 1 newest-meter check; add `inferGasUnit` + per-meter conversion for Tier 2 stitching path |
 | `js/app.js` | Compute `dataStartBound`/`dataEndBound` from raw records before tariff fetch; pass to both `buildTariffTimeline` calls |
 | `js/app.js` | Update `waitForGasConfirmation` to show per-meter detection results; update `gas_unit_source` metadata |
 | `js/app.js` | `showSuccessSummary`: add total gas kWh line with assertion guidance |
@@ -413,10 +402,11 @@ verify per-meter unit detection. They should be removed in a later cleanup commi
 
 ## Open question for Opus review
 
-**Symptom 2 Fix 2a:** Does the Octopus API meter object (returned in `gas_meter_points[N].meters[N]`) include a field identifying the meter generation (SMETS1/SMETS2) or unit type? If so, the `inferGasUnit` heuristic can be replaced with a direct lookup. If not, the heuristic stands. This can be resolved by running the tool after adding the debug getter and inspecting `window.__getIngestionResult()` — but clarifying it here would allow the implementation plan to be more precise.
-
-If meter generation IS available in the API: remove `inferGasUnit` and replace with a
-lookup table keyed on meter type. If NOT available: `inferGasUnit` as specified above.
+**Symptom 2 — Tier 1 threshold:** The plan uses 365 days as the "newest meter sufficient"
+threshold. The lookback window is also 365 days (`CONFIG.LOOKBACK_MS`). Is this the right
+threshold, or should it be slightly shorter (e.g. 350 days) to account for minor data gaps
+at the meter installation date? The stitching path is only needed when the newer meter
+genuinely lacks enough history; a few missing days at the boundary shouldn't trigger it.
 
 ---
 
