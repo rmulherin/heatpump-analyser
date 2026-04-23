@@ -1,7 +1,8 @@
 # Module 4 — Heat Loss Estimation (Siviour Regression)
 
 **Date:** 2026-04-23
-**Status:** Awaiting approval — review via claude.ai before implementation begins.
+**Status:** ⚠ Approved with edits — 2026-04-23. H1 + M1–M2 + L1–L3 applied inline per Design Review below.
+**Depends on:** `docs/plans/module-1-patch-tariff-and-meters.md` — must be implemented, user-tested, and the T7 ground-truth assertion (total gas kWh within ±5% of Rhiannon's Octopus-app annual figure) passing before M4 implementation begins. Running M4 against pre-patch M1 output produces garbage HTC values — not because M4 is wrong, but because every `daily_heating_kwh` is ~15× too small, pushing almost all days under the 2.0 kWh/day `below_heating_threshold` exclusion and forcing `insufficient_data`.
 
 ---
 
@@ -142,10 +143,10 @@ For each 48-slot date, produce one object:
 ```js
 {
   dateStr,                  // 'YYYY-MM-DD'
-  daily_heating_kwh,        // sum of heating_kwh over 48 slots
-  daily_mean_temp_c,        // mean of temp_c over 48 slots
-  daily_solar_kwh_per_m2,   // sum of solar_w_m2 over 48 slots / 2000
-  daily_degree_days,        // max(0, HDD_BASE_TEMP − daily_mean_temp_c)
+  daily_heating_kwh,        // sum of heating_kwh over 48 slots; NaN if any slot null
+  daily_mean_temp_c,        // mean of temp_c over 48 slots; NaN if any slot null
+  daily_solar_kwh_per_m2,   // sum of solar_w_m2 over 48 slots / 2000; NaN if any slot null
+  daily_degree_days,        // max(0, HDD_BASE_TEMP − daily_mean_temp_c); NaN if temp_c missing
   has_absence,              // any slot with is_absence === true
   missing_heating,          // any slot with heating_kwh === null
   missing_weather,          // any slot with temp_c === null or solar_w_m2 === null
@@ -154,7 +155,7 @@ For each 48-slot date, produce one object:
 
 `daily_degree_days` is computed inside `aggregateToDays` so that filtering can read it directly.
 
-**Note:** the `daily_heating_kwh` sum only makes sense when `missing_heating` is false. The value is still computed (as it avoids a second pass) but the filtering step will exclude days where `missing_heating` is true.
+**Null-handling is explicit (not via JS coercion):** the reducer short-circuits to `NaN` the moment any slot's input is null — do NOT rely on `null + number → number` coercion, which silently produces a partial sum that looks like real data. The `missing_heating` / `missing_weather` flags are the authoritative exclusion signal for `filterForRegression`; the NaN values are belt-and-braces so that if a day ever slips through filtering, downstream maths fails loudly instead of producing a garbage result.
 
 #### 1d. `filterForRegression(days)` — private
 
@@ -195,9 +196,11 @@ Used for the Check 4A fallback path. x1 = degree-days only. Returns `{ alpha, se
 
 After the pre-flight and calling `aggregateToDays` + `filterForRegression`:
 
-1. Gate: `if (filtered.length < 20)` → return `insufficientDataResult(excluded, boilerEfficiency)`. This function returns the null-HTC object with `validation_status = 'insufficient_data'` and the standard warning message.
+1. Gate: `if (filtered.length < 20)` → return `insufficientDataResult(excluded, boilerEfficiency)`. **Helper definition (L3):** `insufficientDataResult` returns the same null-outputs object shape as the no-gas preflight in step 1b, with two differences: `validation_status = 'insufficient_data'` (not `'no_gas'`), and `warnings = ["Not enough heating data to calculate your home's heat loss. We need at least 20 days of heating (below 15.5°C outside). Come back in winter or with more data."]` (the design doc Step 5 string). `days_used_in_fit = 0` and `days_excluded = excluded` (the counters passed in).
 
-2. Call `runOLSTwoPredictor(filtered)`. If it returns `null` (singular) treat as insufficient data (singular matrix is degenerate data, Step 5 of design doc).
+2. Call `runOLSTwoPredictor(filtered)`. If it returns `null` (singular matrix), **inspect which factor is vanishing** before choosing the route (M1 — routes are distinct per design doc):
+   - **If the solar column has effectively zero variance** (`Σx2² / max(1, Σy²) < 1e-10`) — e.g. night-only winter data or Open-Meteo solar outage — fall through to the Check 4A path: call `runOLSOnePredictor(filtered)` and continue from step 4 below with `solar_correction_applied = false`, `solar_aperture_m2 = null`, `solar_rating = null`, `cooling_consideration = null`, and the Check 4A warning appended. This matches the design doc Edge Cases row "Solar data all zeros".
+   - **Otherwise** — zero degree-day variance, perfect collinearity, or other truly degenerate data — return `insufficientDataResult(excluded, boilerEfficiency)` per design doc Step 5. Populate `days_used_in_fit = 0` (the fit did not run to completion).
 
 3. Check `fit.alpha < 0`: inverted relationship → null HTC, `validation_status = 'poor'`, specific warning about inverted relationship. Populate `days_used_in_fit = filtered.length`.
 
@@ -218,13 +221,14 @@ After the pre-flight and calling `aggregateToDays` + `filterForRegression`:
    - Add warning: `"Solar correction produced a physically implausible result (likely noisy data). Fell back to temperature-only regression."`
    - Use the one-predictor R² for `regression_r2`
 
-6. **Check 4B** — HTC plausibility (50–1500 W/K):
-   - If out of range: set `validation_status = 'poor'`, add warning naming the specific value and the plausibility concern
+6. **Check 4C** — R² thresholds (runs **before** 4B so that 4B's subsequent write can overwrite 4C's 'good'/'acceptable' with 'poor' when HTC is implausible — M2):
+   - R² ≥ 0.7 → `validation_status = 'good'`
+   - 0.5 ≤ R² < 0.7 → `validation_status = 'acceptable'`
+   - R² < 0.5 → `validation_status = 'poor'` + warning about poor fit
 
-7. **Check 4C** — R² thresholds:
-   - R² ≥ 0.7 → `'good'`
-   - 0.5 ≤ R² < 0.7 → `'acceptable'`
-   - R² < 0.5 → `'poor'` + warning about poor fit
+7. **Check 4B** — HTC plausibility (50–1500 W/K) — runs **after** 4C by design (M2):
+   - If HTC out of plausible range: set `validation_status = 'poor'` (overwriting whatever 4C set), add warning naming the specific value and the plausibility concern.
+   - This ordering implements the design doc's "4B wins" intent: an implausible HTC forces `'poor'` regardless of the fit's R². No separate conflict-resolution step needed — the natural last-write-wins sequencing delivers the correct outcome.
 
 8. **Check 4D** — supplementary electric heating:
    - Only when `htc` is non-null AND `supplementaryLoads.electric_heating_detected === true` AND confidence is `'high'` or `'moderate'`
@@ -232,18 +236,16 @@ After the pre-flight and calling `aggregateToDays` + `filterForRegression`:
    - `htc_adjusted = htc + correction`
    - Add warning with both numbers
 
-9. **Check 4B + 4C conflict resolution:** 4B can override the status to `'poor'` even if R² would give `'good'`. 4B check runs after 4C — if 4B fires, override the status to `'poor'` regardless of R².
+9. **Check — wide CI:** after computing the CI, if `(ci.upper - ci.lower) > 0.5 * htc`, add warning: `"The uncertainty range on your heat loss estimate is wide (±{N} W/K). More heating data would improve this."`
 
-10. **Check — wide CI:** after computing the CI, if `(ci.upper - ci.lower) > 0.5 * htc`, add warning: `"The uncertainty range on your heat loss estimate is wide (±{N} W/K). More heating data would improve this."`
-
-11. **Step 6** — rating, solar rating, cooling consideration, HLP:
+10. **Step 6** — rating, solar rating, cooling consideration, HLP:
     - `buildRating(htc)` → string or null
     - `buildSolarRating(r)` → string or null (only if `solar_correction_applied`)
     - `buildCoolingConsideration(htc, r)` → string or null
     - `hlp = floorAreaM2 !== null ? htc / floorAreaM2 : null`
     - Floor area plausibility warning: if `floorAreaM2 !== null && (floorAreaM2 < 30 || floorAreaM2 > 500)`, add warning
 
-12. Build and return the full result object matching the design doc spec. Populate `days_used_in_fit = filtered.length`.
+11. Build and return the full result object matching the design doc spec. Populate `days_used_in_fit = filtered.length`.
 
 #### 1h. `buildRating(htc)`, `buildSolarRating(r)`, `buildCoolingConsideration(htc, r)` — private
 
@@ -252,6 +254,10 @@ Implement the threshold tables from design doc Step 6 exactly. For `buildCooling
 ---
 
 ### Step 2 — Modify `index.html`
+
+**Pre-implementation checks (L2):**
+- Confirm `id="analysis-card"` exists in `index.html` as the placeholder referenced below. If it does not (e.g. it was renamed or removed during M3b integration), add the new `heat-loss-card` section at the equivalent pipeline position — after the baseload display — rather than replacing a non-existent element.
+- Grep `css/styles.css` for `btn-secondary`. If present, use it for the recalculate button; if absent, use `btn-primary`. Record the outcome in the Deviations section at the end of this plan.
 
 Replace the existing `analysis-card` placeholder (`<section class="card hidden" id="analysis-card">`) with a heat loss card:
 
@@ -406,6 +412,7 @@ btnRecalculateHeatLoss.addEventListener('click', async () => {
 | Wide CI not surfaced to user on sparse winter data | Step 1g.10 adds the CI-width warning; Test 19 verifies CI tightens with more data |
 | `electric_heating_kwh_per_dd` null when `electric_heating_detected` true | Guard: only read `kwh_per_dd` if confidence is 'high' or 'moderate' — same gate prevents null-access |
 | `btn-secondary` CSS class missing | Check `css/styles.css` before adding HTML; fall back to `btn-primary` if absent |
+| Running M4 before M1 patch lands → silent `insufficient_data` for most datasets | M1 patch is declared as a hard prerequisite in the header. Diagnostic: if nearly every real dataset returns `insufficient_data` with almost all days excluded as `below_heating_threshold`, check whether the M1 patch has actually been applied (pre-patch gas values are ~15× too small and trip the threshold). |
 
 ---
 
@@ -436,31 +443,70 @@ All 20 tests are manual developer tests run in the browser console (no test fram
 
 ---
 
-## Claude.ai Review — yyyy-mm-dd
+## Design Review
 
 **Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Date:** 2026-04-23
+**Review type:** Plan review (pre-implementation)
+**Authoritative design:** `~/Documents/git-repos/praxis-claude-hub/projects/tools/heatpump-analyser/design/heat-loss.md`
 
-**Overall verdict:** [Approved / Approved with clarifications / Revise and resubmit]
+### Context
 
-### What is solid
-[What the plan gets right. Be specific.]
+Pre-implementation review of the Module 4 heat-loss plan. Plan is well-structured, maths are correct (2×2 closed-form OLS with standard error formulas and singularity check), and test list maps faithfully to the design doc's 20 tests. Review identified one coordination HIGH (M1 patch must land first) and two MEDIUM control-flow corrections (singularity routing conflating two design-doc-distinct cases; Check 4B/4C ordering contradicting the stated "4B wins" intent). Three LOW items tightened null-handling, pre-implementation checks, and helper-function specification.
 
-### Clarifications required before implementation
-[Any ambiguity, missing specification, or underdefined behaviour that would force
-Claude Code to make an undocumented decision mid-build. Each item must include
-the resolution — not just the problem.]
+### Required changes for implementation
 
-### Minor observations (not blockers)
-[Optional. Suggestions for V2, style notes, things to keep in mind.]
+**1. H1 — Declare M1 patch as hard prerequisite.**
+
+M4 consumes `heating[]` and `baseload_metadata` from M3, which are currently ~15× too low in kWh-space pending the M1 patch (`module-1-patch-tariff-and-meters.md`, commit `935e73f`). Running M4 against pre-patch outputs produces silent `insufficient_data` for most datasets (daily heating values trip the 2.0 kWh/day `below_heating_threshold` exclusion), which looks like an M4 bug but isn't. Add a "Depends on" line in the header pointing at the M1 patch and specifying the T7 ground-truth assertion must be passing before M4 implementation begins. Add a corresponding row in the Risks table with the specific diagnostic signature (nearly all days excluded as `below_heating_threshold`) so an implementer hitting it during testing recognises the upstream cause.
+
+**2. M1 — Split singularity routing in step 1g.2.**
+
+`runOLSTwoPredictor` returning `null` can mean two physically distinct things per the design doc: (a) solar column has zero variance (Edge Cases row "Solar data all zeros" — route to Check 4A's one-predictor fallback with a warning), or (b) truly degenerate data with no degree-day variance or perfect collinearity (Step 5 — insufficient_data). Plan currently routes all singular cases to insufficient_data, which mis-handles (a). Fix: in step 1g.2, inspect the singular case — if `Σx2² / max(1, Σy²) < 1e-10` then route to the one-predictor fallback path (continuing from step 4); otherwise insufficient_data.
+
+**3. M2 — Reorder Check 4B and 4C to match "4B wins" intent.**
+
+Step 9 previously said "4B overrides 4C" via "last write wins", but the step order had 4B at step 6 and 4C at step 7 — so 4C's write happened last and won, contrary to the stated intent. Reorder: 4C at step 6, 4B at step 7. Delete the now-redundant step 9 conflict-resolution note. Subsequent steps renumber accordingly (wide-CI → 9, rating/HLP → 10, build result → 11).
+
+**4. L1 — Make `aggregateToDays` null-handling explicit.**
+
+Daily sums/means previously relied on JavaScript's `null + number → number` coercion, producing a silent partial sum on days with missing slots that `filterForRegression` then excludes via the `missing_heating` / `missing_weather` flags. Functional today, fragile to refactors. Fix: short-circuit the reducers to `NaN` on any null slot. The flag-based filter remains authoritative; NaN is belt-and-braces so downstream maths fails loudly if a day ever slips through.
+
+**5. L2 — Pre-implementation checks before Step 2 (HTML).**
+
+Plan asserts `<section class="card hidden" id="analysis-card">` exists in `index.html` as a placeholder to replace, and references a `btn-secondary` CSS class with a fall-back to `btn-primary`. Neither is verified in the plan. Add a pre-Step-2 check: confirm the placeholder exists (if not, insert the new card at the equivalent pipeline position rather than replacing a non-existent element); grep for `btn-secondary` in `styles.css` and record the outcome in Deviations.
+
+**6. L3 — Define `insufficientDataResult(excluded, boilerEfficiency)` inline.**
+
+Helper is referenced in step 1g.1 but not specified. Fix: one-line inline definition — same shape as the no-gas preflight (step 1b), with `validation_status = 'insufficient_data'`, the design doc Step 5 warning string ("Not enough heating data to calculate your home's heat loss…"), `days_used_in_fit = 0`, and the passed-in `excluded` counter object. Implementer then has no ambiguity about the return shape.
+
+### Resolution of review changes
+
+1. **H1** — Applied inline. Header now has a `Depends on:` line naming `module-1-patch-tariff-and-meters.md` with the T7 pass gate. Risks table has a new row with the diagnostic signature.
+2. **M1** — Applied inline to step 1g.2. Singularity inspection splits the route; `Σx2² / max(1, Σy²) < 1e-10` routes to Check 4A's one-predictor path, otherwise to `insufficientDataResult`.
+3. **M2** — Applied inline. Step 6 is now Check 4C, step 7 is Check 4B. Former step 9 (conflict-resolution) deleted. Subsequent steps (wide-CI, rating/HLP, build result) renumbered to 9/10/11.
+4. **L1** — Applied inline to step 1c. Object-field comments now state `NaN if any slot null`; explanatory paragraph added under the code block.
+5. **L2** — Applied inline as a bulleted pre-implementation-checks block immediately before the Step 2 HTML.
+6. **L3** — Applied inline to step 1g.1. Full return-shape description included (delta from step 1b = `validation_status`, warning string, and `days_used_in_fit = 0`).
+
+## Review Summary
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| CRITICAL | 0     | ✓ pass |
+| HIGH     | 1     | ✅ resolved (inline) |
+| MEDIUM   | 2     | ✅ resolved (inline) |
+| LOW      | 3     | ✅ resolved (inline) |
+
+Verdict: **APPROVE WITH EDITS** — all six findings resolved inline. Implementation may begin after the M1 patch dependency lands and T7 passes.
 
 ---
 
 ## Approval
 
-**Status:** ✅ Approved — yyyy-mm-dd
+**Status:** ⚠ Approved with edits — 2026-04-23. Implementation may begin after M1 patch dependency clears (see Depends on line in header).
 **Approved by:** Rhiannon (via Opus review)
-**Clarifications confirmed:** [Restate each clarification resolution so Claude Code
-has a single authoritative source.]
+**Clarifications confirmed:** M1 patch declared as hard prerequisite; singularity routing split between solar-column-zero (→ Check 4A) and truly degenerate (→ insufficient_data); Check 4C reordered before 4B so that 4B's plausibility override is the last write on `validation_status`; `aggregateToDays` null-handling made explicit via NaN short-circuit; pre-implementation placeholder and CSS-class checks added to Step 2; `insufficientDataResult` helper shape specified inline.
 
 ---
 
