@@ -410,170 +410,25 @@ genuinely lacks enough history; a few missing days at the boundary shouldn't tri
 
 ---
 
-## Opus Review — 2026-04-23
+## Claude.ai Review — yyyy-mm-dd
 
 **Reviewer:** Claude (Praxis Insight — Opus architect window)
-**Authoritative specs:** `docs/plans/module-1-data-ingestion.md`,
-`docs/plans/module-3b-baseload-integration.md`, and
-`~/Documents/git-repos/praxis-claude-hub/projects/tools/heatpump-analyser/design/data-ingestion.md`.
 
-**Overall verdict:** APPROVE WITH CLARIFICATIONS — core approach is sound; 2
-HIGH-severity items and 3 MEDIUM items need resolution before implementation.
-
-| Severity | Count | Status |
-|----------|-------|--------|
-| CRITICAL | 0 | ✓ pass |
-| HIGH | 2 | resolve before implementation |
-| MEDIUM | 3 | resolve before implementation |
-| LOW | 3 | apply during implementation |
+**Overall verdict:** [Approved / Approved with clarifications / Revise and resubmit]
 
 ### What is solid
 
-- **Hypothesis 3 eliminated first.** Code-inspection of all `/48` occurrences
-  in `baseload.js` before proposing any M3a changes is exactly the right
-  discipline. Saves wasted work and matches the memory "don't touch M3a unless
-  grep confirms".
-- **Symptom 1 root-cause analysis is correct.** Account-level agreement dates
-  vs product-level validity is a real distinction in the Octopus API. The
-  clamping fix (per-agreement `[max(dataStart, valid_from), min(dataEnd, valid_to)]`)
-  is the right shape. Placing `dataStartBound` derivation after Step 3 but
-  before Step 4 is a clean ordering change.
-- **Two-tier meter approach is pragmatic.** Using the newest-meter-sufficient
-  check to avoid engaging per-meter detection when the newest meter has
-  enough data is the right simplification. It keeps the existing single-unit
-  toggle semantics intact for the common case (including Rhiannon's), and
-  only adds heuristic complexity where genuinely needed.
-- **£/day cross-check (Fix 3a) is useful diagnostic infrastructure.** Good
-  instinct — having a tariff-converted value alongside kWh makes future
-  user-testing anomalies immediately distinguishable from display bugs.
-- **T7 assertion against real Octopus annual figure.** Ground-truth testing
-  against the user's own billed data is the right bar for a consumer tool
-  where "plausible but wrong" is the primary failure mode.
+[What the plan gets right. Be specific.]
 
 ### Clarifications required before implementation
 
-**H1 — "Newest meter" identification is not robust (Fix 2a).**
-
-The plan uses `meters[meters.length - 1]` to identify the newest meter. The
-Octopus account endpoint does not guarantee array ordering by install or
-activity date. If the account returns meters in a different order (e.g. by
-serial number, or in the order they were registered which may differ from
-installation order), Tier 1 fires on the wrong meter — potentially the
-stale one — and the fix actively regresses correctness for accounts like
-Rhiannon's.
-
-The existing M1 plan already identifies the "most recent" meter when
-setting `elecSerial`/`gasSerial`. That logic — whatever it does — is the
-correct reference point and should be reused. If it depends on
-`elecMeters`/`gasMeters` array ordering itself, that needs auditing too.
-
-**Resolution required:** Explicitly identify the newest meter by a stable
-criterion (most likely `install_date` or `effective_from` descending, or
-whatever field the existing `elecSerial`/`gasSerial` selection uses). Do
-not rely on array index. State the criterion in the plan body of Fix 2a,
-and confirm it is consistent with the existing M1 "most recent" selection.
-
-**H2 — `inferGasUnit` threshold misclassifies low-consumption households
-(Fix 2b).**
-
-The 2.0 summer-kWh/day threshold is too high for edge cases that exist in
-the target user base:
-- Gas-cooking-only households (no gas hot water, no gas heating for hot
-  water): real summer daily gas ~0.2–0.8 kWh/day. Would be misdetected as
-  m³ and spuriously multiplied ×11.19.
-- Very small households or flats with combi boilers: summer daily gas can
-  be 1.0–2.0 kWh/day. Edges directly against the threshold.
-- Holiday homes or second homes with low summer use.
-
-These users are not Rhiannon's 6 kWh/day case, but they are within the
-public tool's target audience. The boundary risk is not "low" as stated.
-
-**Resolution required:** Either (a) tighten the heuristic — typical m³ daily
-summer values are 0.2–1.8 and typical kWh daily summer values are 3–12,
-so a threshold in the gap (e.g. 2.5 with an additional "at least one day
-in the window ≥ 0.5" sanity check) would be safer; OR (b) combine the
-numeric heuristic with an explicit user-visible confirmation step before
-stitching when the inferred unit for a stitched meter differs from the
-existing meter's unit. Document the chosen approach and its failure modes
-in the plan body. The fallback "insufficient summer data → assume kWh" is
-correct and should be preserved.
-
-**M1 — T3 test case depends on stubbed product-date data.**
-
-T3 asserts `VAR-21-07-02` is "active Jul 2021–Apr 2023". Octopus does not
-publish product end dates in a way that the tool can rely on programmatically,
-and those specific dates are not verified in the plan. T3 as written implies
-the test calls the real Octopus API — which would be flaky, tariff-specific,
-and likely rate-limited in automation.
-
-**Resolution required:** Restate T3 as a unit test that stubs
-`buildTariffTimeline`'s network layer. The assertion is on the constructed
-URL's `period_from` / `period_to` parameters for each agreement, NOT on the
-live API response. Two stubbed agreements — one inside the data window, one
-partially outside — with assertions that the clipped URL parameters match
-expectations. Live end-to-end validation against Rhiannon's own account
-(which does produce the 400 today) can remain as an informal verification
-step but is not the primary test.
-
-**M2 — Tier 1 threshold: 365 vs something shorter.**
-
-Open question at the end of the plan. Verdict: use **`0.9 × CONFIG.LOOKBACK_MS`
-(approximately 328 days)** rather than a hard-coded 365 or 350.
-
-Rationale:
-- The threshold should track `LOOKBACK_MS`, not be a parallel constant.
-  If `LOOKBACK_MS` ever changes, 365 becomes incoherent.
-- A 10% margin (approximately one month) is generous enough to absorb
-  install-date boundary gaps without letting a genuinely too-short newest
-  meter through the Tier 1 gate.
-- Over-firing Tier 2 when Tier 1 would have sufficed is a correctness
-  hazard (more code paths to validate), so we want Tier 1 to trigger
-  liberally.
-
-**Resolution required:** Update Fix 2a to use the relative threshold,
-document the 90% choice inline, and add a test (T6c) for a newest meter
-with 340 days of data — should trigger Tier 1, not Tier 2.
-
-**M3 — `gas_unit_source = 'm3_converted_per_meter'` is a new enum value.**
-
-The plan introduces a new value for the `gas_unit_source` metadata field.
-Any downstream consumer that reads this field (UI warnings, debug output,
-future modules) now needs to handle three values where it previously
-handled two.
-
-**Resolution required:** Before implementation, confirm via grep that no
-downstream code branches on specific `gas_unit_source` values (e.g.
-`if (metadata.gas_unit_source === 'm3_converted') { ... }`). If any
-does, add an explicit case or switch for the new value — do not rely on
-a fallthrough default. List affected call-sites in the plan body.
+[Any ambiguity, missing specification, or underdefined behaviour that would force
+Claude Code to make an undocumented decision mid-build. Each item must include
+the resolution — not just the problem.]
 
 ### Minor observations (not blockers)
 
-**L1 — Debug getters removal timeline.** Fix Step 4 adds `__getIngestionResult`
-and `__getBaseloadResult` on `window` as debug-only, with a TODO comment for
-later removal. "Not in scope: Production removal of debug getters — deferred
-to a later cleanup commit." Fine to defer, but name the trigger in the plan:
-either "remove in the next M1 patch after M4 user-test passes" or "keep
-through launch, remove in post-launch cleanup". Ambiguous TODOs rot.
-
-**L2 — T7 ground-truth-figure procedure.** The plan notes Rhiannon will
-supply her Octopus-app annual gas kWh for the T7 assertion but does not
-specify when — pre-implementation (so Sonnet tests against it before
-committing) or post-implementation (so Rhiannon re-runs user-test). Flag
-in the plan: Sonnet should request the number before starting
-implementation so T7 is a real gate, not a post-hoc verification.
-
-**L3 — Call-site compatibility for Tier 1 return shape.** `fetchConsumptionStitched`
-now returns `metersStitched: false` in the Tier 1 path. Confirm no existing
-caller treats this field as always-true or always-set. A quick grep
-documented in the plan would close this.
-
----
-
-**Verdict:** APPROVE WITH CLARIFICATIONS — resolve H1, H2, M1, M2, M3 inline
-in plan body before implementation begins. L1–L3 can be applied during
-implementation and noted in the Deviations section. Once the HIGH items
-are resolved, the plan is implementable without further review.
+[Optional. Suggestions for V2, style notes, things to keep in mind.]
 
 ---
 
