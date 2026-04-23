@@ -648,4 +648,22 @@ threshold resolved in favour of `0.9 × CONFIG.LOOKBACK_MS`.
 
 ## Implementation Deviations
 
-[None — not yet implemented.]
+**Implemented 2026-04-23 by Sonnet.**
+
+**L3 grep result — `fetchConsumptionStitched` call-sites:**
+Two call-sites in `app.js` (lines 253 and 256). Both assign the return value and access `result.metersStitched` via `if (result.metersStitched)` — neither treats it as always-set or always-true. Tier 1 returning `metersStitched: false` is safe.
+
+**M3 grep result — `gas_unit_source` branches:**
+Three occurrences in `app.js`:
+- Line 403 (was): assignment `gas_unit_source: gasM3Toggle.checked ? 'm3_converted' : 'kwh_native'` — extended to `detectedGasUnitSource || (gasM3Toggle.checked ? 'm3_converted' : 'kwh_native')` to use per-meter detection result when available.
+- Line 488 (was): branch `=== 'm3_converted'` in `showSuccessSummary` display — extended to a ternary chain that handles `'m3_converted_per_meter'` (shows "Converted from m³ (per-meter detection)"), `'m3_converted'` (shows "Converted from m³"), and default "Native kWh".
+- Line 852: assignment `gas_unit_source: 'csv'` in CSV path — no branching, no change needed.
+
+**H1 audit result — existing `elecSerial`/`gasSerial` selection:**
+Confirmed: `data-ingestion.js` lines 99 and 110 used `meters[meters.length - 1].serial_number` (array-index ordering). Fixed in this patch to use `selectNewestMeter(meters).serial_number` which sorts by `install_date || effective_from` descending. `selectNewestMeter` is also used by `fetchConsumptionStitched` Tier 1.
+
+**D1 — `inferGasUnit` returns object rather than string:**
+The plan's code snippet shows `inferGasUnit` returning a string (`'kwh'` or `'m3'`). Implementation returns `{ unit, summerMedian, summerMaxDay }` to support the per-meter console.info logging requirement (logging the classified unit, summer median, and max-day per the plan spec). The two-point classification rule is identical.
+
+**D2 — Tier 2 re-fetches newest meter (minor extra API call):**
+Tier 1 fetches the newest meter's data to check coverage. If coverage is below threshold, Tier 2 falls through and iterates all meters — including the newest meter, causing a second API call for that meter. The duplicate records are handled by the deduplication Map. This is a minor inefficiency; no correctness impact. An optimisation (reusing `newestData.results` in Tier 2) was not pursued to keep the implementation close to the plan spec.

@@ -241,3 +241,6 @@ Imported per plan Step 1 as the downstream getter. Not used within 3b itself (on
 - 3a D2 (warnings as parameter): `baseload_metadata.warnings` still populated correctly.
 - 3a L17 (updated absence warning string): 3b displays warnings as-is; longer string presents fine.
 - Step-H M1 (gas_kwh whole-day check): internal to `detectSupplementaryLoads` H0.
+
+**D3 — £/day equivalent added to daily baseload display (post-launch patch)**
+M3b plan Step 3 item 5 specifies kWh/day display. Implementation complied literally. During user testing (2026-04-23), the kWh value (0.07 kWh/day with m³ data) was indistinguishable from a £ figure without a reference. Patch adds an optional £/day equivalent derived from `tariff_rates.gas[last].rate_p_kwh`. Shown only when a gas rate is available; omitted on CSV path without gas tariff.

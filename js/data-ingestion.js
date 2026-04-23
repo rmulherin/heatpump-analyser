@@ -53,6 +53,15 @@ async function fetchAllPages(url, headers = {}, onProgress = null) {
 }
 
 
+function selectNewestMeter(meters) {
+  return [...meters].sort((a, b) => {
+    const aDate = new Date(a.install_date || a.effective_from || 0).getTime();
+    const bDate = new Date(b.install_date || b.effective_from || 0).getTime();
+    return bDate - aDate;
+  })[0];
+}
+
+
 // ===== Step 3: Account Discovery =====
 
 export async function fetchAccount(apiKey, accountNumber) {
@@ -96,7 +105,7 @@ export async function fetchAccount(apiKey, accountNumber) {
       if (elecMeters.length > 1) {
         console.log('Multiple electricity meters found:', elecMeters.map(m => m.serial_number));
       }
-      elecSerial = elecMeters.length > 0 ? elecMeters[elecMeters.length - 1].serial_number : null;
+      elecSerial = elecMeters.length > 0 ? selectNewestMeter(elecMeters).serial_number : null;
       elecAgreements = elecPoint.agreements || [];
     }
 
@@ -107,7 +116,7 @@ export async function fetchAccount(apiKey, accountNumber) {
       if (gasMeters.length > 1) {
         console.log('Multiple gas meters found:', gasMeters.map(m => m.serial_number));
       }
-      gasSerial = gasMeters.length > 0 ? gasMeters[gasMeters.length - 1].serial_number : null;
+      gasSerial = gasMeters.length > 0 ? selectNewestMeter(gasMeters).serial_number : null;
       gasAgreements = gasPoint.agreements || [];
     }
 
@@ -195,20 +204,21 @@ export function buildGasUnitCheck(gasRecords, gasRatePKwh) {
     if (month === 1 || month === 12) winterMonths.push({ key, values });
   }
 
-  function calcDailyCost(monthData) {
+  function calcDailyStats(monthData) {
     if (!monthData || monthData.values.length === 0) return null;
     const totalKwh = monthData.values.reduce((sum, v) => sum + v, 0);
-    const days = monthData.values.length / 48; // 48 HH periods per day
+    const days = monthData.values.length / 48;
     if (days < 1) return null;
     const dailyKwh = totalKwh / days;
-    return (dailyKwh * gasRatePKwh) / 100; // pence to pounds
+    const dailyCost = gasRatePKwh != null ? (dailyKwh * gasRatePKwh) / 100 : null;
+    return { dailyKwh, dailyCost };
   }
 
   const summer = summerMonths.length > 0 ? summerMonths[summerMonths.length - 1] : null;
   const winter = winterMonths.length > 0 ? winterMonths[winterMonths.length - 1] : null;
 
-  const summerDailyCost = calcDailyCost(summer);
-  const winterDailyCost = calcDailyCost(winter);
+  const summerStats = calcDailyStats(summer);
+  const winterStats = calcDailyStats(winter);
 
   function monthName(key) {
     if (!key) return '—';
@@ -219,8 +229,10 @@ export function buildGasUnitCheck(gasRecords, gasRatePKwh) {
   }
 
   return {
-    summerDailyCost,
-    winterDailyCost,
+    summerDailyKwh: summerStats?.dailyKwh ?? null,
+    summerDailyCost: summerStats?.dailyCost ?? null,
+    winterDailyKwh: winterStats?.dailyKwh ?? null,
+    winterDailyCost: winterStats?.dailyCost ?? null,
     summerMonth: monthName(summer?.key),
     winterMonth: monthName(winter?.key),
   };
@@ -259,9 +271,10 @@ function classifyTariffType(productCode) {
   return 'other';
 }
 
-export async function buildTariffTimeline(agreements, fuelType, paymentMethod, onProgress) {
+export async function buildTariffTimeline(agreements, fuelType, paymentMethod, dataStart, dataEnd, onProgress) {
   // fuelType: 'electricity' or 'gas'
   // paymentMethod: 'DIRECT_DEBIT' or 'NON_DIRECT_DEBIT'
+  // dataStart/dataEnd: clamp query window to actual data span to avoid 400 on dated products
   const tariffPrefix = fuelType === 'electricity' ? 'electricity-tariffs' : 'gas-tariffs';
   const allRates = [];
 
@@ -274,8 +287,13 @@ export async function buildTariffTimeline(agreements, fuelType, paymentMethod, o
     const validFrom = agreement.valid_from;
     const validTo = agreement.valid_to || new Date().toISOString();
 
+    // Clamp query window to data span so dated SVT products don't return 400
+    const qFrom = new Date(Math.max(new Date(validFrom).getTime(), new Date(dataStart).getTime())).toISOString();
+    const qTo   = new Date(Math.min(new Date(validTo).getTime(), new Date(dataEnd).getTime())).toISOString();
+    if (new Date(qFrom) >= new Date(qTo)) continue;
+
     // Fetch unit rates
-    const ratesUrl = `${CONFIG.OCTOPUS_BASE_URL}/products/${productCode}/${tariffPrefix}/${tariffCode}/standard-unit-rates/?period_from=${validFrom}&period_to=${validTo}&page_size=${CONFIG.TARIFF_PAGE_SIZE}`;
+    const ratesUrl = `${CONFIG.OCTOPUS_BASE_URL}/products/${productCode}/${tariffPrefix}/${tariffCode}/standard-unit-rates/?period_from=${qFrom}&period_to=${qTo}&page_size=${CONFIG.TARIFF_PAGE_SIZE}`;
     let rateResults;
     try {
       const rateData = await fetchAllPages(ratesUrl, {}, onProgress);
@@ -283,7 +301,7 @@ export async function buildTariffTimeline(agreements, fuelType, paymentMethod, o
     } catch (e) {
       // If direct debit returns empty/error, retry with non-direct-debit
       if (paymentMethod === 'DIRECT_DEBIT') {
-        return buildTariffTimeline(agreements, fuelType, 'NON_DIRECT_DEBIT', onProgress);
+        return buildTariffTimeline(agreements, fuelType, 'NON_DIRECT_DEBIT', dataStart, dataEnd, onProgress);
       }
       console.error('Failed to fetch tariff rates for', tariffCode, e);
       throw new Error('Could not retrieve tariff rates for this agreement. This may be a tariff type the tool does not yet support.');
@@ -293,7 +311,7 @@ export async function buildTariffTimeline(agreements, fuelType, paymentMethod, o
     let filteredRates = rateResults.filter(r => r.payment_method === paymentMethod || !r.payment_method);
     if (filteredRates.length === 0 && paymentMethod === 'DIRECT_DEBIT') {
       // Retry with NON_DIRECT_DEBIT
-      return buildTariffTimeline(agreements, fuelType, 'NON_DIRECT_DEBIT', onProgress);
+      return buildTariffTimeline(agreements, fuelType, 'NON_DIRECT_DEBIT', dataStart, dataEnd, onProgress);
     }
     if (filteredRates.length === 0) {
       console.warn('No rates after payment method filter for', tariffCode);
@@ -301,7 +319,7 @@ export async function buildTariffTimeline(agreements, fuelType, paymentMethod, o
     }
 
     // Fetch standing charges
-    const standingUrl = `${CONFIG.OCTOPUS_BASE_URL}/products/${productCode}/${tariffPrefix}/${tariffCode}/standing-charges/?period_from=${validFrom}&period_to=${validTo}&page_size=${CONFIG.TARIFF_PAGE_SIZE}`;
+    const standingUrl = `${CONFIG.OCTOPUS_BASE_URL}/products/${productCode}/${tariffPrefix}/${tariffCode}/standing-charges/?period_from=${qFrom}&period_to=${qTo}&page_size=${CONFIG.TARIFF_PAGE_SIZE}`;
     let standingResults = [];
     try {
       const standingData = await fetchAllPages(standingUrl);
@@ -545,9 +563,27 @@ export async function validatePostcode(postcode) {
 
 // ===== Step 13: Meter Replacement Stitching =====
 
+function inferGasUnit(records) {
+  const summerRecs = records.filter(r => {
+    const m = new Date(r.interval_start).getUTCMonth() + 1;
+    return m === 7 || m === 8;
+  });
+  if (summerRecs.length < 48) return { unit: 'kwh', summerMedian: null, summerMaxDay: null };
+  const byDay = new Map();
+  for (const r of summerRecs) {
+    const d = r.interval_start.slice(0, 10);
+    byDay.set(d, (byDay.get(d) ?? 0) + r.consumption);
+  }
+  const vals = [...byDay.values()];
+  const sorted = [...vals].sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)];
+  const maxDay = Math.max(...vals);
+  // Two-point rule: both median < 2.5 AND max-day < 5 required to classify as m³.
+  // Prevents misclassifying gas-cooking-only or small-flat kWh households.
+  return { unit: (median < 2.5 && maxDay < 5) ? 'm3' : 'kwh', summerMedian: median, summerMaxDay: maxDay };
+}
+
 export async function fetchConsumptionStitched(apiKey, mpan, mprn, meters, fuelType) {
-  // meters: array of { serial_number, ... } in chronological order
-  // Fetches consumption from all meters and concatenates
   const periodTo = new Date();
   const periodFrom = new Date(Date.now() - CONFIG.LOOKBACK_MS);
   periodFrom.setUTCHours(0, 0, 0, 0);
@@ -556,19 +592,56 @@ export async function fetchConsumptionStitched(apiKey, mpan, mprn, meters, fuelT
   const toStr = periodTo.toISOString();
   const headers = { 'Authorization': authHeader(apiKey) };
 
-  const allRecords = [];
-  const serialsUsed = [];
-
-  for (const meter of meters) {
+  const buildMeterUrl = (serial) => {
     const meterPoint = fuelType === 'electricity'
       ? `electricity-meter-points/${mpan}`
       : `gas-meter-points/${mprn}`;
-    const url = `${CONFIG.OCTOPUS_BASE_URL}/${meterPoint}/meters/${meter.serial_number}/consumption/?period_from=${fromStr}&period_to=${toStr}&page_size=${CONFIG.CONSUMPTION_PAGE_SIZE}&order_by=period`;
+    return `${CONFIG.OCTOPUS_BASE_URL}/${meterPoint}/meters/${serial}/consumption/?period_from=${fromStr}&period_to=${toStr}&page_size=${CONFIG.CONSUMPTION_PAGE_SIZE}&order_by=period`;
+  };
 
+  // Tier 1: Check if newest meter alone covers ≥90% of the lookback window
+  const newestMeter = selectNewestMeter(meters);
+  let newestData = { results: [] };
+  try {
+    newestData = await fetchAllPages(buildMeterUrl(newestMeter.serial_number), headers);
+  } catch (e) {
+    console.warn(`No data from newest meter ${newestMeter.serial_number} (${fuelType})`);
+  }
+
+  if (newestData.results.length > 0) {
+    const ts = newestData.results.map(r => new Date(r.interval_start).getTime());
+    const spanMs = Math.max(...ts) - Math.min(...ts);
+    if (spanMs >= 0.9 * CONFIG.LOOKBACK_MS) {
+      const sorted = [...newestData.results].sort(
+        (a, b) => new Date(a.interval_start) - new Date(b.interval_start)
+      );
+      return {
+        records: sorted,
+        serialsUsed: [newestMeter.serial_number],
+        metersStitched: false,
+        gasUnitSource: null,
+      };
+    }
+  }
+
+  // Tier 2: Stitch all meters with per-meter unit detection for gas
+  const allRecords = [];
+  const serialsUsed = [];
+  let anyM3Detected = false;
+
+  for (const meter of meters) {
     try {
-      const data = await fetchAllPages(url, headers);
+      const data = await fetchAllPages(buildMeterUrl(meter.serial_number), headers);
       if (data.results.length > 0) {
-        allRecords.push(...data.results);
+        if (fuelType === 'gas') {
+          const { unit, summerMedian, summerMaxDay } = inferGasUnit(data.results);
+          console.info(`Meter ${meter.serial_number} (gas): unit=${unit}, summer median=${summerMedian?.toFixed(2)}, summer max-day=${summerMaxDay?.toFixed(2)}`);
+          const converted = unit === 'm3' ? convertM3ToKwh(data.results) : data.results;
+          if (unit === 'm3') anyM3Detected = true;
+          allRecords.push(...converted);
+        } else {
+          allRecords.push(...data.results);
+        }
         serialsUsed.push(meter.serial_number);
       }
     } catch (e) {
@@ -582,12 +655,16 @@ export async function fetchConsumptionStitched(apiKey, mpan, mprn, meters, fuelT
     byTimestamp.set(rec.interval_start, rec);
   }
 
-  // Sort chronologically
   const stitched = [...byTimestamp.values()].sort(
     (a, b) => new Date(a.interval_start) - new Date(b.interval_start)
   );
 
-  return { records: stitched, serialsUsed, metersStitched: serialsUsed.length > 1 };
+  return {
+    records: stitched,
+    serialsUsed,
+    metersStitched: serialsUsed.length > 1,
+    gasUnitSource: fuelType === 'gas' && anyM3Detected ? 'm3_converted_per_meter' : null,
+  };
 }
 
 

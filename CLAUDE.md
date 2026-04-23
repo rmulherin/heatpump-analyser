@@ -38,7 +38,7 @@ to Rhiannon rather than proceeding. The Opus window is the right place for that 
 **Owner:** Rhiannon (Praxis Insight)
 **Classification:** GREEN — full Claude assistance permitted.
 **Language:** HTML + vanilla JavaScript + Chart.js
-**Status:** Modules 1–3 implemented. CORS probe confirmed PASS (2026-04-23). Elexon MID endpoint fixed (correct params + dataProvider). Module 3b user test pending.
+**Status:** Modules 1–3 implemented. CORS probe confirmed PASS (2026-04-23). M1 patch implemented (2026-04-23): tariff windowing clamped, meter-stitching unit detection (Tier 1/2), gas sanity check shows kWh+£, total gas kWh in summary, baseload £/day display. Module 3b user test pending.
 
 Praxis hub context (in `~/Documents/git-repos/praxis-claude-hub/`):
 - `context/about-rhiannon.md`

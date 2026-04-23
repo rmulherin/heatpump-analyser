@@ -147,6 +147,7 @@ let selectedPropertyIndex = 0;
 let fetchedElecRecords = null;
 let fetchedGasRecords = null;
 let currentGasRecords = null; // may be converted from m³
+let detectedGasUnitSource = null; // set by Tier 2 per-meter detection; suppresses toggle
 
 // ===== Main Fetch Flow =====
 
@@ -237,6 +238,10 @@ btnConfirmProperty.addEventListener('click', async () => {
 async function continueWithProperty(apiKey) {
   const prop = fetchedProperties[selectedPropertyIndex];
 
+  detectedGasUnitSource = null;
+  gasM3Toggle.checked = false;
+  gasM3Toggle.disabled = false;
+
   // Step 2: Fetch consumption (with meter stitching if multiple meters)
   showProgress('Fetching consumption data…', 30);
 
@@ -265,6 +270,7 @@ async function continueWithProperty(apiKey) {
       gasRecords = gasResult.records;
       if (gasResult.metersStitched) metersStitched = true;
       serialsUsed.push(...gasResult.serialsUsed);
+      if (gasResult.gasUnitSource) detectedGasUnitSource = gasResult.gasUnitSource;
     }
 
     // Fall back to single-meter fetch for fuels that didn't need stitching
@@ -306,13 +312,22 @@ async function continueWithProperty(apiKey) {
     if (check) {
       gasCheckSummerMonth.textContent = check.summerMonth;
       gasCheckWinterMonth.textContent = check.winterMonth;
-      gasCheckSummer.textContent = check.summerDailyCost !== null
-        ? formatPounds(check.summerDailyCost) + '/day'
-        : 'no summer data';
-      gasCheckWinter.textContent = check.winterDailyCost !== null
-        ? formatPounds(check.winterDailyCost) + '/day'
-        : 'no winter data';
-      gasM3Toggle.checked = false;
+      if (check.summerDailyKwh !== null) {
+        const costPart = check.summerDailyCost !== null ? ` ≈ ${formatPounds(check.summerDailyCost)}/day` : '/day';
+        gasCheckSummer.textContent = `${check.summerDailyKwh.toFixed(1)} kWh${costPart}`;
+      } else {
+        gasCheckSummer.textContent = 'no summer data';
+      }
+      if (check.winterDailyKwh !== null) {
+        const costPart = check.winterDailyCost !== null ? ` ≈ ${formatPounds(check.winterDailyCost)}/day` : '/day';
+        gasCheckWinter.textContent = `${check.winterDailyKwh.toFixed(1)} kWh${costPart}`;
+      } else {
+        gasCheckWinter.textContent = 'no winter data';
+      }
+      if (detectedGasUnitSource === 'm3_converted_per_meter') {
+        gasM3Toggle.checked = false;
+        gasM3Toggle.disabled = true;
+      }
       gasCheckArea.classList.remove('hidden');
 
       // Wait for user confirmation
@@ -320,8 +335,15 @@ async function continueWithProperty(apiKey) {
     }
   }
 
-  // Step 4: Fetch tariff rates
+  // Step 4: Fetch tariff rates (clamped to actual data span to avoid 400 on dated SVT products)
   showProgress('Fetching tariff rates…', 55);
+
+  const allTimestampsForBounds = [
+    ...fetchedElecRecords.map(r => r.interval_start),
+    ...currentGasRecords.map(r => r.interval_start),
+  ].sort();
+  const dataStartBound = allTimestampsForBounds[0];
+  const dataEndBound   = allTimestampsForBounds[allTimestampsForBounds.length - 1];
 
   let elecTariffRates = [];
   let gasTariffRates = [];
@@ -329,7 +351,7 @@ async function continueWithProperty(apiKey) {
   if (prop.elecAgreements.length > 0) {
     showProgress('Fetching electricity tariff rates…', 60);
     elecTariffRates = await buildTariffTimeline(
-      prop.elecAgreements, 'electricity', 'DIRECT_DEBIT',
+      prop.elecAgreements, 'electricity', 'DIRECT_DEBIT', dataStartBound, dataEndBound,
       (page) => showProgress(`Fetching electricity tariff rates (page ${page})…`, 60)
     );
   }
@@ -337,7 +359,7 @@ async function continueWithProperty(apiKey) {
   if (prop.gasAgreements.length > 0) {
     showProgress('Fetching gas tariff rates…', 75);
     gasTariffRates = await buildTariffTimeline(
-      prop.gasAgreements, 'gas', 'DIRECT_DEBIT',
+      prop.gasAgreements, 'gas', 'DIRECT_DEBIT', dataStartBound, dataEndBound,
       (page) => showProgress(`Fetching gas tariff rates (page ${page})…`, 75)
     );
   }
@@ -400,7 +422,7 @@ async function continueWithProperty(apiKey) {
     postcode_source: 'octopus',
     mpan: prop.mpan,
     mprn: prop.mprn,
-    gas_unit_source: gasM3Toggle.checked ? 'm3_converted' : 'kwh_native',
+    gas_unit_source: detectedGasUnitSource || (gasM3Toggle.checked ? 'm3_converted' : 'kwh_native'),
     input_path: 'octopus',
     meters_stitched: metersStitched,
     serials_used: serialsUsed.length > 0 ? serialsUsed : undefined,
@@ -437,7 +459,10 @@ async function continueWithProperty(apiKey) {
 function waitForGasConfirmation() {
   return new Promise((resolve) => {
     const handler = () => {
-      if (gasM3Toggle.checked) {
+      if (detectedGasUnitSource === 'm3_converted_per_meter') {
+        // Records already converted per-meter — toggle has no effect
+        currentGasRecords = fetchedGasRecords;
+      } else if (gasM3Toggle.checked) {
         currentGasRecords = convertM3ToKwh(fetchedGasRecords);
       } else {
         currentGasRecords = fetchedGasRecords;
@@ -456,6 +481,7 @@ function showSuccessSummary(normalised, tariffRates, metadata) {
   const meta = metadata;
   const elecCount = normalised.consumption.filter(r => r.elec_kwh !== null).length;
   const gasCount = normalised.consumption.filter(r => r.gas_kwh !== null).length;
+  const totalGasKwh = normalised.consumption.reduce((sum, r) => sum + (r.gas_kwh ?? 0), 0);
 
   // Detect tariff types
   const elecTypes = [...new Set(tariffRates.electricity.map(r => r.tariff_type))];
@@ -484,8 +510,17 @@ function showSuccessSummary(normalised, tariffRates, metadata) {
       <dd>${gasTypes.length > 0 ? gasTypes.join(', ') : 'none detected'} (${tariffRates.gas.length} rate windows)</dd>
       <dt>Postcode</dt>
       <dd>${escapeHtml(meta.postcode || 'not available')}</dd>
+      <dt>Total gas consumption</dt>
+      <dd>${Math.round(totalGasKwh).toLocaleString()} kWh over ${meta.total_days} days
+        <span style="display:block;font-size:0.85em;color:#666;margin-top:0.2em;">Compare to your annual figure in the Octopus app. Should be within ~5%. If the figure looks wrong, use the unit override above.</span></dd>
       <dt>Gas units</dt>
-      <dd>${meta.gas_unit_source === 'm3_converted' ? 'Converted from m³' : 'Native kWh'}</dd>
+      <dd>${
+        meta.gas_unit_source === 'm3_converted_per_meter'
+          ? 'Converted from m³ (per-meter detection)'
+          : meta.gas_unit_source === 'm3_converted'
+          ? 'Converted from m³'
+          : 'Native kWh'
+      }</dd>
     </dl>
   `;
 
@@ -622,8 +657,17 @@ async function runBaseloadSeparation(showProgressFn, showStatusFn) {
   }
   const absenceStr = meta.absence_days_total > 0 ? ` Absences detected: ${meta.absence_days_total} days.` : '';
 
+  let gasPKwh = null;
+  if (ingestion?.tariff_rates?.gas?.length > 0) {
+    const rates = ingestion.tariff_rates.gas;
+    gasPKwh = rates[rates.length - 1].rate_p_kwh;
+  }
+  const costStr = (gasPKwh !== null && !isNaN(gasPKwh))
+    ? ` (≈ £${((meta.baseload_mean_kwh_per_day * gasPKwh) / 100).toFixed(2)}/day)`
+    : '';
+
   showStatusFn(
-    `Baseload separation complete. Method: ${methodLabel}. Daily non-heating gas: mean ${meanStr} kWh/day, median ${medianStr} kWh/day.${validationStr}${absenceStr}`,
+    `Baseload separation complete. Method: ${methodLabel}. Daily non-heating gas: mean ${meanStr} kWh/day${costStr}, median ${medianStr} kWh/day.${validationStr}${absenceStr}`,
     'info'
   );
 
@@ -894,3 +938,7 @@ function readFileAsText(file) {
     reader.readAsText(file);
   });
 }
+
+// debug-only — remove in post-launch cleanup (after 28-Apr-2026 launch)
+window.__getIngestionResult = () => getIngestionResult();
+window.__getBaseloadResult = () => getBaseloadResult();
