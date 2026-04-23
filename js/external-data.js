@@ -207,13 +207,13 @@ export function buildWeatherLookup(weatherMap) {
 // ===== Step 6: Elexon MID fetch =====
 
 export async function fetchWholesalePrices(dataStart, dataEnd) {
-  const startDate = dateOnly(dataStart);
-  const endDate = dateOnly(dataEnd);
   const warnings = [];
 
   // Fetch all pages — Elexon API may paginate large ranges
+  const from = canonicaliseTs(dataStart);
+  const to = canonicaliseTs(dataEnd);
   let allRecords = [];
-  let pageUrl = `${EXTERNAL_CONFIG.ELEXON_MID_URL}?settlementDateFrom=${startDate}&settlementDateTo=${endDate}&format=json`;
+  let pageUrl = `${EXTERNAL_CONFIG.ELEXON_MID_URL}?from=${from}&to=${to}&format=json`;
 
   try {
     while (pageUrl) {
@@ -238,8 +238,8 @@ export async function fetchWholesalePrices(dataStart, dataEnd) {
     return { priceLookup: new Map(), source: 'elexon-mid-n2ex', warnings };
   }
 
-  // Filter to N2EX only
-  const n2exRecords = allRecords.filter(r => r.dataProvider === 'N2EX');
+  // Filter to N2EXMIDP only
+  const n2exRecords = allRecords.filter(r => r.dataProvider === 'N2EXMIDP');
 
   // Convert SP→UTC and £/MWh→p/kWh
   const converted = n2exRecords.map(r => ({
@@ -267,7 +267,7 @@ export function convertSpToUtc(midRecords) {
   const spCountsByDate = new Map();
 
   for (const { settlementDate, settlementPeriod, price, dataProvider } of midRecords) {
-    if (dataProvider !== 'N2EX') continue;
+    if (dataProvider !== 'N2EXMIDP') continue;
 
     // Base: 00:00 LOCAL on settlementDate (Europe/London)
     const baseDate = DateTime.fromISO(settlementDate, { zone: 'Europe/London' });
