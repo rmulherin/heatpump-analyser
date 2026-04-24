@@ -208,28 +208,40 @@ export function buildWeatherLookup(weatherMap) {
 
 export async function fetchWholesalePrices(dataStart, dataEnd) {
   const warnings = [];
+  // API limit: max 8 days per request. Chunk the full range.
+  const MAX_CHUNK_DAYS = 8;
 
-  // Fetch all pages — Elexon API may paginate large ranges
-  const from = dateOnly(dataStart);
-  const to = dateOnly(dataEnd);
+  const startDate = new Date(dateOnly(dataStart) + 'T00:00:00Z');
+  const endDate = new Date(dateOnly(dataEnd) + 'T00:00:00Z');
   let allRecords = [];
-  let pageUrl = `${EXTERNAL_CONFIG.ELEXON_MID_URL}?from=${from}&to=${to}&format=json`;
 
   try {
-    while (pageUrl) {
-      const resp = await fetchWithRetry(pageUrl, 'Wholesale price service');
-      const data = await resp.json();
-      const records = data.data || [];
-      allRecords.push(...records);
+    let cursor = new Date(startDate);
+    while (cursor <= endDate) {
+      const chunkEnd = new Date(cursor);
+      chunkEnd.setUTCDate(chunkEnd.getUTCDate() + MAX_CHUNK_DAYS - 1);
+      if (chunkEnd > endDate) chunkEnd.setTime(endDate.getTime());
 
-      // Check for pagination — Elexon uses a link-based mechanism
-      pageUrl = null;
-      if (data.links) {
-        const nextLink = data.links.find(l => l.rel === 'next');
-        if (nextLink && nextLink.href) {
-          pageUrl = nextLink.href;
+      const from = dateOnly(cursor.toISOString());
+      const to = dateOnly(chunkEnd.toISOString());
+      let pageUrl = `${EXTERNAL_CONFIG.ELEXON_MID_URL}?from=${from}&to=${to}&format=json`;
+
+      while (pageUrl) {
+        const resp = await fetchWithRetry(pageUrl, 'Wholesale price service');
+        const data = await resp.json();
+        const records = data.data || [];
+        allRecords.push(...records);
+
+        pageUrl = null;
+        if (data.links) {
+          const nextLink = data.links.find(l => l.rel === 'next');
+          if (nextLink && nextLink.href) {
+            pageUrl = nextLink.href;
+          }
         }
       }
+
+      cursor.setUTCDate(cursor.getUTCDate() + MAX_CHUNK_DAYS);
     }
   } catch (e) {
     // Price failure is non-blocking — warn and continue with null prices

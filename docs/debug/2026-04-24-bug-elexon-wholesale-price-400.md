@@ -148,4 +148,41 @@ const to = dateOnly(dataEnd);
 - [ ] No 400 error in console
 - [ ] Spot-check: a known date's price is plausible (0–30 p/kWh typical)
 
-## Status: AWAITING USER VERIFICATION
+## Phase 3 continued: Fix deployed but 400 persists
+
+Confirmed deployed URL: `?from=2025-04-24&to=2026-04-22&format=json` → still 400.
+
+H1 (format) is confirmed fixed. H3 (range too large) is now confirmed.
+
+Range boundary test results:
+
+| Range | Days | Status |
+|-------|------|--------|
+| 2026-01-01 → 2026-01-07 | 7 | 200 (~672 records) |
+| 2026-01-01 → 2026-01-08 | 8 | 200 (~674 records) |
+| 2026-01-01 → 2026-01-09 | 9 | 400 |
+| 30, 90, 180, 364 days   | — | 400 |
+
+**API maximum: 8 days per request.**
+
+A 364-day fetch requires 46 sequential chunks. Fix: implement chunked fetching loop
+in `fetchWholesalePrices`, iterating in 8-day windows from `dataStart` to `dataEnd`.
+
+Root cause update: two compounding bugs:
+1. H1 (wrong format) — fixed in previous commit
+2. H3 (range too large) — requires chunked fetch implementation
+
+## Updated Root Cause
+
+The Elexon MID API has two constraints the code did not honour:
+1. Date values must be `YYYY-MM-DD` (not full ISO timestamps) — fixed.
+2. Date range must not exceed 8 days per request — requires chunked fetching.
+
+## Fix (revised)
+
+Replace the single-URL fetch loop in `fetchWholesalePrices` with a chunked outer loop
+that iterates in 8-day windows. Inner pagination loop remains unchanged per chunk.
+
+364 days ÷ 8 = 46 chunks. ~46 API calls sequentially.
+
+## Status: APPLYING REVISED FIX
