@@ -208,8 +208,10 @@ export function buildWeatherLookup(weatherMap) {
 
 export async function fetchWholesalePrices(dataStart, dataEnd) {
   const warnings = [];
-  // API limit: max 8 days per request. Chunk the full range.
-  const MAX_CHUNK_DAYS = 8;
+  // API limit: max 8 days per request (filtered by startTime UTC, not settlementDate).
+  // Stride 7 days and extend `to` by 1 day so BST settlement dates at chunk boundaries
+  // don't lose SPs 4-48 (which have startTimes after UTC midnight of the settlement date).
+  const MAX_CHUNK_DAYS = 7;
 
   const startDate = new Date(dateOnly(dataStart) + 'T00:00:00Z');
   const endDate = new Date(dateOnly(dataEnd) + 'T00:00:00Z');
@@ -222,8 +224,13 @@ export async function fetchWholesalePrices(dataStart, dataEnd) {
       chunkEnd.setUTCDate(chunkEnd.getUTCDate() + MAX_CHUNK_DAYS - 1);
       if (chunkEnd > endDate) chunkEnd.setTime(endDate.getTime());
 
+      // Extend to by 1 day: captures SPs whose startTime falls after UTC midnight
+      // of the last settlement date (all BST SPs 4-48, all GMT SPs 2-48).
+      const toDate = new Date(chunkEnd);
+      toDate.setUTCDate(toDate.getUTCDate() + 1);
+
       const from = dateOnly(cursor.toISOString());
-      const to = dateOnly(chunkEnd.toISOString());
+      const to = dateOnly(toDate.toISOString());
       let pageUrl = `${EXTERNAL_CONFIG.ELEXON_MID_URL}?from=${from}&to=${to}&format=json`;
 
       while (pageUrl) {

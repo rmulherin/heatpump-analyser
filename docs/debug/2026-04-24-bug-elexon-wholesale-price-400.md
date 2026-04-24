@@ -185,4 +185,43 @@ that iterates in 8-day windows. Inner pagination loop remains unchanged per chun
 
 364 days ÷ 8 = 46 chunks. ~46 API calls sequentially.
 
-## Status: APPLYING REVISED FIX
+## Phase 3 continued: Chunked fetch working but SP counts wrong
+
+Wholesale prices: 15,145 out of 17,471 expected. ~50 "Unexpected SP count" warnings:
+- BST boundary dates (last day of each chunk, summer): SP count = 3
+- GMT boundary dates (last day of each chunk, winter): SP count = 1
+
+Root cause of the gap: the API filters by `startTime` (UTC), not `settlementDate`.
+`to=YYYY-MM-DD` means startTime ≤ YYYY-MM-DDT00:00:00Z.
+
+For a BST settlement date D as the last day of a chunk:
+- SP 1: startTime = D-1T23:00Z ≤ DT00:00Z → included ✓
+- SP 2: startTime = D-1T23:30Z ≤ DT00:00Z → included ✓
+- SP 3: startTime = DT00:00Z ≤ DT00:00Z → included ✓
+- SPs 4–48: startTime DT00:30Z to DT22:30Z > DT00:00Z → NOT included ✗
+
+For a GMT settlement date D as the last day of a chunk:
+- SP 1: startTime = DT00:00Z ≤ DT00:00Z → included ✓
+- SPs 2–48: startTime DT00:30Z to DT23:30Z > DT00:00Z → NOT included ✗
+
+Next chunk starts at `from=D+1` (startTime ≥ D+1T00:00Z), so the lost SPs fall in
+the gap between chunks and are never captured.
+
+Fix: extend `to` by 1 day per chunk. BST SP48 ends at DT22:30Z < D+1T00:00Z → now
+captured. GMT SP48 ends at DT23:30Z < D+1T00:00Z → now captured. Stride reduced from
+8 to 7 days so API range = to - from = 7 days ≤ 8-day limit ✓.
+
+Side effect: SP3 of BST dates at chunk starts appears in both current and next chunk
+(startTime D+1T00:00Z satisfies both to ≤ D+1T00:00Z and from ≥ D+1T00:00Z). The
+priceLookup Map deduplicates — prices are correct. spCountsByDate will show 49 for
+these dates (harmless warning).
+
+## Revised Root Cause (final)
+
+Three compounding bugs, fixed in sequence:
+1. H1: Wrong timestamp format (`canonicaliseTs` → `dateOnly`) — fixed.
+2. H3a: Single request exceeds 8-day API limit — fixed with chunked fetching (stride 8).
+3. H3b: API filters by startTime UTC, not settlementDate. Chunk boundary dates lose
+   SPs 4–48 (BST) or 2–48 (GMT). Fix: stride 7, extend `to` by 1 day per chunk.
+
+## Status: APPLYING FINAL FIX
