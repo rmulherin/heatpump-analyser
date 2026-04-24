@@ -224,4 +224,38 @@ Three compounding bugs, fixed in sequence:
 3. H3b: API filters by startTime UTC, not settlementDate. Chunk boundary dates lose
    SPs 4–48 (BST) or 2–48 (GMT). Fix: stride 7, extend `to` by 1 day per chunk.
 
-## Status: APPLYING FINAL FIX
+## Phase 1 (round 3): Observations from latest run output
+
+Output is **identical** to the run before the stride=7+to+1 fix. Counts and dates unchanged:
+- SP count=3 boundary dates still every 8 days (May 1, May 9, May 17, May 25...)
+- SP count=1 boundary dates still every 8 days in GMT period (Nov 1, Nov 9...)
+- Wholesale prices: 15,145 — unchanged
+- May 1 → May 9 = 8 days. May 9 → May 17 = 8 days. Confirms stride=8 pattern, not stride=7.
+
+Additional data points not previously noted:
+- Some dates have near-48 unexpected counts: Jun 12 (44), Jun 13 (47), Jun 24 (47),
+  Jun 28 (36), Jul 1 (23), Jul 11 (47), Oct 23 (45), Nov 18 (47), Nov 30 (47),
+  Dec 9 (47), Mar 4 (47). These do not follow the 8-day pattern — possible genuine
+  Elexon data gaps, not a chunking artefact.
+
+## Phase 2 (round 3): Hypotheses
+
+| # | Hypothesis | Evidence if true | Likelihood |
+|---|-----------|-----------------|------------|
+| H-cache | stride=7 code not loaded — browser/CDN still serving old stride=8 code | Chunk URLs in Network tab show 8-day windows | High |
+| H-deploy | GitHub Pages deployment failed or is delayed | Commit not visible on live site | Low |
+| H-analysis | stride=7+to+1 fix deployed but my analysis of API behaviour was wrong | Chunk URLs show 7-day windows but same SP counts | Low |
+
+H-cache is the leading hypothesis. The identical output is the key evidence —
+if stride=7 deployed, the boundary dates would shift to every 7 days.
+
+## Phase 3 (round 3): Narrowing
+
+Minimal test required before any further code changes:
+Confirm which version of the code is running by checking the Elexon request URLs in
+the browser Network tab. If the URLs show 8-day windows (e.g. Apr 24 → May 1), old
+code is running. If they show 7-day windows (e.g. Apr 24 → Apr 30), new code is running.
+
+**Investigation blocked pending user confirmation.**
+
+## Status: AWAITING CONFIRMATION — did the stride=7 code load?
