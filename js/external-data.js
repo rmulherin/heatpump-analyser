@@ -210,8 +210,8 @@ export async function fetchWholesalePrices(dataStart, dataEnd) {
   const warnings = [];
 
   // Fetch all pages — Elexon API may paginate large ranges
-  const from = canonicaliseTs(dataStart);
-  const to = canonicaliseTs(dataEnd);
+  const from = dateOnly(dataStart);
+  const to = dateOnly(dataEnd);
   let allRecords = [];
   let pageUrl = `${EXTERNAL_CONFIG.ELEXON_MID_URL}?from=${from}&to=${to}&format=json`;
 
