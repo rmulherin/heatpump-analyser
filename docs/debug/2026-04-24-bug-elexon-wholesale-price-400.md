@@ -326,12 +326,13 @@ the API response entirely, not duplicated.
 **Change:** deduplicate n2exRecords by (settlementDate, settlementPeriod) before map/convert
 **Fix source:** own reasoning — application logic error (dedup step missing)
 
-## Verification
+## Verification (incognito retest 2026-04-24)
 
-- [ ] No "Duplicate UTC key" warnings in console
-- [ ] No "Unexpected SP count 49" warnings for weekly-boundary dates
-- [ ] Genuine gap warnings (Jun 28, Jul 1, etc.) still present
-- [ ] Wholesale prices count unchanged (~17,300 periods)
-- [ ] Baseload separation completes successfully
+- [x] No "Duplicate UTC key" warnings in console (all 51 gone)
+- [x] No "Unexpected SP count 49" warnings for weekly-boundary dates
+- [x] Genuine gap warnings still present (13 entries: Jun 12, Jun 13, Jun 24,
+      Jun 28, Jul 1, Jul 11, Oct 23, Nov 18, Nov 30, Dec 9, Jan 12, Mar 4, Apr 23)
+- [x] Wholesale prices count unchanged (17,300 periods)
+- [x] Baseload separation completes successfully (R² = 0.49, method: summer profile)
 
-## Status: FIX APPLIED — AWAITING USER RETEST IN INCOGNITO
+## Status: RESOLVED
