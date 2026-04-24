@@ -67,6 +67,57 @@ Key facts:
 - Live site: rmulherin.github.io/heatpump-analyser (GitHub Pages)
 - Commit: 4fb82f0
 
-## Initial hypotheses
+## Root Cause
 
-[To be filled — see Phase 2]
+`normaliseConsumption` builds a string-keyed Map from raw API `interval_start` values,
+then looks up using `new Date(ts).toISOString()` which always produces UTC with milliseconds
+(`"2025-04-23T00:00:00.000Z"`). The Octopus API returns `interval_start` without milliseconds
+(`"2025-04-23T00:00:00Z"`) or with BST offset (`"2025-04-23T00:00:00+01:00"`). No key ever
+matches. Every `elecMap.has(isoStr)` and `gasMap.has(isoStr)` returns `false`.
+Result: all `gas_kwh` and `elec_kwh` values are `null` → 100% gap percentage.
+
+The gas unit sanity check escaped this because `buildGasUnitCheck` uses `new Date(rec.interval_start)`
+to parse dates, which handles any ISO format. The map comparison is a raw string comparison with no
+such tolerance.
+
+Confirmed by: sanity check ran (proving API returned data), but consumption was all null
+(proving the map lookup failed). The normalised timestamp `"2025-04-23T00:00:00.000Z"` was
+confirmed via console.
+
+## Evidence
+
+- `gas records in consumption: 0` and `elec records in consumption: 0` despite sanity check running
+- `total periods: 17471` — the timestamp grid was built correctly
+- `r?.consumption?.[0]?.timestamp` → `"2025-04-23T00:00:00.000Z"` (UTC + milliseconds)
+- `normaliseConsumption` map keys: raw `rec.interval_start` from Octopus API (different format)
+- Code: `data-ingestion.js:679–684` (elecMap/gasMap build) vs `data-ingestion.js:695` (isoStr lookup)
+
+## Fix
+
+In `normaliseConsumption`, normalise map keys to UTC ISO on construction:
+
+```javascript
+// Before (broken):
+elecMap.set(rec.interval_start, rec.consumption);
+
+// After (fixed):
+elecMap.set(new Date(rec.interval_start).toISOString(), rec.consumption);
+```
+
+Same fix for `gasMap`. The loop lookup already uses `.toISOString()` — this aligns the keys.
+
+## Fix Applied
+
+**File:** `js/data-ingestion.js:679–684`
+**Change:** `elecMap.set(rec.interval_start, ...)` → `elecMap.set(new Date(rec.interval_start).toISOString(), ...)`; same for `gasMap`.
+**Fix source:** own reasoning — category A application logic error (string format mismatch).
+
+## Verification
+
+- [ ] Symptom no longer observed (consumption records > 0, gap percentage < 100%)
+- [ ] Gas unit summary shows non-zero kWh
+- [ ] Baseload separation runs on real data (not "no gas supply detected")
+- [ ] Total gas kWh close to ~8,600 kWh annual (T7 ground truth)
+- [ ] No regression in CSV path (uses separate normalisation call, same fix applies)
+
+## Status: AWAITING USER VERIFICATION

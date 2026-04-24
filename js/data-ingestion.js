@@ -677,11 +677,11 @@ export function normaliseConsumption(elecRecords, gasRecords, dataStart, dataEnd
   // Build Maps for O(1) lookup
   const elecMap = new Map();
   for (const rec of elecRecords) {
-    elecMap.set(rec.interval_start, rec.consumption);
+    elecMap.set(new Date(rec.interval_start).toISOString(), rec.consumption);
   }
   const gasMap = new Map();
   for (const rec of gasRecords) {
-    gasMap.set(rec.interval_start, rec.consumption);
+    gasMap.set(new Date(rec.interval_start).toISOString(), rec.consumption);
   }
 
   const consumption = [];
