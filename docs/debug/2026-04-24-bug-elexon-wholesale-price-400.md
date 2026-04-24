@@ -259,3 +259,79 @@ code is running. If they show 7-day windows (e.g. Apr 24 → Apr 30), new code i
 **Investigation blocked pending user confirmation.**
 
 ## Status: AWAITING CONFIRMATION — did the stride=7 code load?
+
+## Phase 1 (round 4): Incognito test result — 2026-04-24
+
+Rhiannon opened the live site in an incognito window (no cached JS). Result:
+
+```
+External data loaded. Weather: 17471 periods. Wholesale prices: 17300 periods (elexon-mid-n2ex). Gaps: 0.
+```
+
+stride=7 fix IS deployed and working. Price count improved from 15,145 → 17,300.
+Remaining 171 gap (17,471 − 17,300) is genuine Elexon data gaps (some SPs absent from
+the MID dataset entirely — already visible as the non-boundary unexpected-count warnings).
+
+Remaining console warnings (all noisy, not blocking):
+
+**Duplicate UTC key warnings** (one per chunk boundary, every 7 days):
+```
+Duplicate UTC key 2025-05-01T00:00:00Z from 2025-05-01 SP 3
+... (51 more, weekly pattern)
+```
+BST boundary dates: duplicate at SP 3 (first SP whose UTC startTime = boundary midnight).
+GMT boundary dates: duplicate at SP 1 (SP 1 in GMT = 00:00 UTC).
+
+**Unexpected SP count 49** for same boundary dates (1 extra due to the duplicate).
+
+**Genuine Elexon gap warnings** (non-boundary, real missing data):
+Jun 12 (45), Jun 13 (47), Jun 24 (47), Jun 28 (36), Jul 1 (23), Jul 11 (47),
+Nov 18 (47), Nov 30 (47), Dec 9 (47), Jan 12 (44), Mar 4 (47), Apr 23 (3 — partial
+extension day, expected).
+
+Baseload separation completed successfully (R² = 0.49). Data is usable.
+
+## Root Cause (boundary duplicate noise)
+
+Already documented under "Side effect" in the Phase 3 round 2 section: extending `to`
+by 1 day causes the SP at exactly UTC midnight on the boundary date to satisfy both
+`to ≤ boundary` (chunk N) and `from ≥ boundary` (chunk N+1). The Map deduplicates
+automatically (last-write-wins), so prices are correct. The noise comes from:
+1. `convertSpToUtc` warning on duplicate UTC key insertion
+2. `spCountsByDate` counting the raw record twice → shows 49 instead of 48
+
+## Fix (boundary duplicate noise)
+
+Category A — application logic. Deduplicate `allRecords` by (settlementDate,
+settlementPeriod) BEFORE calling `convertSpToUtc`. The Map dedup already makes prices
+correct; this fix prevents the spurious warnings from ever firing.
+
+```javascript
+// In fetchWholesalePrices, after n2exRecords filter:
+const seen = new Set();
+const uniqueRecords = n2exRecords.filter(r => {
+    const key = `${r.settlementDate}|${r.settlementPeriod}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+});
+```
+
+Genuine gap warnings (non-boundary dates) are unaffected — those SPs are absent from
+the API response entirely, not duplicated.
+
+## Fix Applied
+
+**File:** `js/external-data.js` — `fetchWholesalePrices`
+**Change:** deduplicate n2exRecords by (settlementDate, settlementPeriod) before map/convert
+**Fix source:** own reasoning — application logic error (dedup step missing)
+
+## Verification
+
+- [ ] No "Duplicate UTC key" warnings in console
+- [ ] No "Unexpected SP count 49" warnings for weekly-boundary dates
+- [ ] Genuine gap warnings (Jun 28, Jul 1, etc.) still present
+- [ ] Wholesale prices count unchanged (~17,300 periods)
+- [ ] Baseload separation completes successfully
+
+## Status: FIX APPLIED — AWAITING USER RETEST IN INCOGNITO

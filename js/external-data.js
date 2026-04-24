@@ -260,8 +260,17 @@ export async function fetchWholesalePrices(dataStart, dataEnd) {
   // Filter to N2EXMIDP only
   const n2exRecords = allRecords.filter(r => r.dataProvider === 'N2EXMIDP');
 
+  // Deduplicate: chunk `to` overlap causes one boundary SP per chunk to appear twice
+  const seen = new Set();
+  const uniqueRecords = n2exRecords.filter(r => {
+    const key = `${r.settlementDate}|${r.settlementPeriod}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
   // Convert SP→UTC and £/MWh→p/kWh
-  const converted = n2exRecords.map(r => ({
+  const converted = uniqueRecords.map(r => ({
     settlementDate: r.settlementDate,
     settlementPeriod: r.settlementPeriod,
     price: r.price / 10, // £/MWh → p/kWh
