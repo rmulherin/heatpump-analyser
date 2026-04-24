@@ -29,6 +29,75 @@ Date range: ~364 days. Format: UTC ISO with Z suffix.
 - Blocks M3b sign-off: all M2 functions must be working for M3b to pass.
 - CORS probe was confirmed PASS on 2026-04-23 — this is not a CORS issue.
 
+## Phase 1: Observations
+
+Code path from the failing console trace:
+`fetchWholesalePrices` → `fetchWithRetry` → 400 → caught as non-5xx → throws `{ status: 400 }`
+→ caught in `fetchWholesalePrices` catch block → warning appended, returns empty priceLookup.
+
+Reading `fetchWholesalePrices` (`external-data.js:209–256`):
+
+```javascript
+const from = canonicaliseTs(dataStart);      // produces "2025-04-24T00:00:00Z"
+const to = canonicaliseTs(dataEnd);          // produces "2026-04-22T23:30:00Z"
+let pageUrl = `...MID?from=${from}&to=${to}&format=json`;
+```
+
+`canonicaliseTs` (line 30–32) uses Luxon to produce ISO without milliseconds but WITH time
+component and `Z` suffix. The full URL sent is exactly what the console shows:
+`?from=2025-04-24T00:00:00Z&to=2026-04-22T23:30:00Z`
+
+Weather fetch succeeds in the same run, so:
+- Network is up
+- CORS is not blocking (confirmed PASS separately)
+- The failure is specific to this request
+
+The 400 is a client error — the server understood the request but rejected it. This rules
+out server-side outages and points to a malformed request.
+
+Observed facts written to file before proceeding.
+
+## Phase 2: Hypotheses
+
+| # | Hypothesis | Evidence if true | Likelihood |
+|---|-----------|-----------------|------------|
+| H1 | Wrong parameter format — API expects `YYYY-MM-DD`, not full ISO timestamp | Fix: use `dateOnly()` instead of `canonicaliseTs()`; test with date-only URL returns 200 | High |
+| H2 | Wrong parameter names — design doc says `settlementDateFrom`/`settlementDateTo`; code uses `from`/`to` | Fix: rename params; test with `settlementDateFrom=...` returns 200 | Medium |
+| H3 | Date range too large — API has a per-request limit and rejects ranges >N days | Fix: paginate in smaller chunks; shorter range test returns 200, full range returns 400 | Low |
+| H4 | API endpoint has changed — Elexon has moved or deprecated the MID endpoint | Swagger/docs show different URL | Low |
+
+H1 and H2 are not mutually exclusive. The failing URL could be wrong on both name and format.
+Testing H1 first (date-only with existing `from`/`to` names) because it is the minimal change
+and the design doc parameter names may themselves be wrong.
+
+Hypotheses written to file before proceeding to Phase 3.
+
+## Phase 3: Narrowing
+
+### 3a. Minimal failing case
+
+The full 364-day range may obscure whether it is a format issue or a range limit. Minimal
+trigger: any request with full ISO timestamp format → 400. Any request with date-only → ?
+
+### 3b. Binary elimination
+
+**Test 1:** Single-day request with date-only format:
+`?from=2026-01-15&to=2026-01-15&format=json`
+→ **200 OK**. Records returned with `settlementDate`, `settlementPeriod`, `price`, `dataProvider`.
+
+This eliminates H2 (parameter names `from`/`to` are correct), H3 (range limit — single day
+works), and H4 (endpoint is live). It confirms H1 (format mismatch).
+
+**Finding:** The API accepts `from`/`to` with `YYYY-MM-DD` format. The code sends full ISO
+timestamps. That is the sole cause of the 400.
+
+Additional finding from the test response:
+- `dataProvider` values present: `"APXMIDP"` and `"N2EXMIDP"`
+- The code filters for `'N2EXMIDP'` — correct
+- The design doc says filter for `'N2EX'` — design doc is wrong
+
+Finding written to file before proceeding to Phase 4.
+
 ## Root Cause
 
 The Elexon MID API requires date-only values (`YYYY-MM-DD`) for the `from` and `to` parameters.
