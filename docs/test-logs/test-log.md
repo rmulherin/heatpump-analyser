@@ -122,17 +122,20 @@ Run 2026-04-26, console script batch.
 
 ---
 
-### M3b — Integration: browser assertions (real data)
+### M3b — Integration: browser visual check (2026-04-26)
 
 | Test | Description | Result | Notes |
 |------|-------------|--------|-------|
-| — | Baseload method displayed in UI | ⏳ | Pending browser visual check |
-| — | Warnings surfaced in UI | ⏳ | Pending |
-| — | Absence count shown | ⏳ | Pending |
-| — | Electric heating detection phrased correctly | ⏳ | Will update via feature-m3-labelling plan |
-| — | Limitations displayed | ⏳ | Pending |
-| — | No blocking on M3 failure | ⏳ | Pending |
-| T8–T9 | M3b kWh and £/day values shown correctly | ⏳ | Pending |
+| — | Baseload method displayed | ✅ | "Summer weekday/weekend profile (best)" |
+| — | Baseload kWh/day shown | ✅ | "mean 5.4 kWh/day (≈ £0.32/day), median 6.0 kWh/day" |
+| — | Validation status shown | ✅ | "acceptable (R² = 0.53)" |
+| — | Absence count shown | ✅ | "Absences detected: 31 days" + full warning text |
+| — | Electric heating phrased correctly | ⚠ | "Supplementary electric heating detected (moderate confidence). Estimated 464 kWh..." — label accurate but 4D warning text needs softening (feature plan Change 4) |
+| — | AC detection shown | ❌ | "Air conditioning detected (high confidence)" with suggestion to replace cooling system — label wrong for 62 kWh signal; fix in feature-m3-labelling plan Change 1 |
+| — | Limitations displayed | ✅ | 3 items shown |
+| — | Absence warning surfaced | ✅ | 31-day boiler-off warning with HTC lower-bound note |
+| — | No blocking on M3 failure | ✅ | Full pipeline ran to M4 |
+| T8–T9 | kWh and £/day shown | ✅ | Gas 9,146 kWh + £0.32/day baseload shown in status |
 
 ---
 
@@ -143,7 +146,7 @@ Run 2026-04-26, console script batch.
 | T1–T3 | Tariff timeline: no 400 errors, rates loaded | ✅ | 5 gas + 5 elec periods loaded; quarterly Ofgem cap periods April 2025–April 2026; all rates plausible |
 | T4–T6 | Gas meter unit detection | ✅ | gas_unit_source=m3_converted; serials=['22J0108234','E6S15259462261']; meters_stitched=false |
 | T7 | Total gas kWh plausible | ✅ | 9,146 kWh; 0 gaps across 364 days |
-| T8–T9 | M3b kWh and £/day shown post-fix | ⏳ | Pending visual check |
+| T8–T9 | M3b kWh and £/day shown post-fix | ✅ | "9,146 kWh over 364 days" in Data Summary; "£0.32/day" in baseload status |
 | T10 | Getter before load returns null | ⏳ | Cannot retest once data loaded — deferred |
 | T11 | Ingestion getter returns full result | ✅ | consumption array and metadata present |
 | T12 | Baseload getter returns full result | ✅ | heating, baseload_metadata, supplementary_loads all present |
@@ -154,12 +157,14 @@ Run 2026-04-26, console script batch.
 
 | Area | Criteria | Result | Notes |
 |------|----------|--------|-------|
-| M1 | Octopus happy path, no 400 errors | ⏳ | Pending network tab check |
-| M1 | Gas unit detection correct | ⏳ | Pending |
-| M1 | Data-quality gate | ⏳ | Pending |
-| M2 | Postcode lookup, weather fetch | ⏳ | Pending |
-| M2 | SP→UTC conversions for clock changes | ⏳ | Pending |
-| M2 | Alignment, price fetch | ⏳ | Pending |
+| M1 | Octopus happy path, no 400 errors | ✅ | Analysis completed; 5 tariff periods each loaded without 400 |
+| M1 | Gas unit detection correct | ✅ | m3_converted applied; "Gas units: Converted from m³" shown in UI |
+| M1 | Data-quality gate | ✅ | 0 gaps across 364 days |
+| M2 | Postcode lookup | ✅ | "SE1 2BX" shown in Data Summary |
+| M2 | Weather fetch | ✅ | 17,471 periods loaded (≈ 364×48); "Gaps: 0" |
+| M2 | Price fetch | ✅ | 17,300 periods (elexon-mid-n2ex); some days with partial SP counts (expected Elexon gaps) |
+| M2 | Alignment | ✅ | Weather 17,471 = electricity records 17,471 |
+| M2 | SP→UTC clock-change timestamps | ⏳ | Needs Script C — awaiting GitHub Pages deploy of __getExternalResult |
 
 ---
 
@@ -175,7 +180,9 @@ Run 2026-04-26, console script batch.
 
 | Issue | Status |
 |-------|--------|
-| "Air conditioning" label disproportionate to 62 kWh signal; better detection needs >27°C threshold | Deferred to future module; label fix in `feature-m3-labelling-and-energy-summary.md` |
-| "Electric heating" likely reflects occupancy-correlated electricity use (always-on lighting, EV, winter behaviour) — not a space heater | Noted; label softened in M4 4D warning via same feature plan |
+| "Air conditioning detected (high confidence)" shown in UI for 62 kWh signal — label wrong; UI also suggests replacing "existing cooling system" when user has no AC | Fix in `feature-m3-labelling-and-energy-summary.md` Change 1 |
+| M4 4D warning "Your home appears to use some electric heating" — needs softening to acknowledge occupancy/EV as possible cause | Fix in `feature-m3-labelling-and-energy-summary.md` Change 4 |
+| "Summer cooling consideration: minimal" shown in M4 card — label will need update once AC language dropped | Covered by feature plan |
+| Elexon SP count warnings shown in UI (e.g. "Unexpected SP count 47 for 2025-06-13") — 13 dates with partial data; 2026-04-25 has only 3 SPs (yesterday, not yet complete) | Expected Elexon behaviour — genuine data gaps, not a code bug |
 | M3a gas separation plan T13/T15 criteria pre-date Step F patch — show old "not flagged" expectation | Superseded by `module-3-step-f-patch.md` T13/T15 inverted criteria |
 | T7 "ground truth" 8,600 kWh was an inaccurate conversational estimate — retracted | Removed from session memory 2026-04-26 |
