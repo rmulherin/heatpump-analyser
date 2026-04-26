@@ -121,11 +121,20 @@ percentile outlier filter.
 Returns a `Map<dateString, { dailyMeanTempC, dailyHeatingKwh, isAbsence, isHeatingDay, hhIndices }>`.
 
 For each calendar day (UTC), group `heating[]` indices by `heating[i].timestamp.slice(0, 10)`.
-Only include days where all 48 HH are present. A day is whole only if `hhIndices.length === 48`.
 
-Per day:
-- `dailyMeanTempC` = mean of `external[i].temp_c` over the 48 HH (skip nulls; null if all null)
-- `dailyHeatingKwh` = sum of `heating[i].heating_kwh` over 48 HH (skip nulls)
+A day qualifies as **whole** only if ALL of the following hold (matching the design doc's
+contract in §Step 1):
+- `hhIndices.length === 48`
+- `heating[i].heating_kwh !== null` for all 48 HH
+- `external[i].temp_c !== null` for all 48 HH
+
+Days that fail any condition are excluded from the returned map entirely. Downstream
+consumers (occupancy weights, setpoint inference, mass inference) iterate only over the
+returned whole-day entries.
+
+Per whole day:
+- `dailyMeanTempC` = mean of `external[i].temp_c` over the 48 HH (all non-null by construction)
+- `dailyHeatingKwh` = sum of `heating[i].heating_kwh` over the 48 HH
 - `isAbsence` = `heating[i].is_absence === true` for ANY HH in the day
 - `isHeatingDay` = `dailyHeatingKwh > 0.5`
 - `hhIndices` = the 48 HH index positions in the original `heating[]` array
@@ -169,63 +178,91 @@ Returns `{ setpoint_c, setpoint_days_used, warnings }`.
 
 Requires `setpointC` non-null. Returns `{ thermal_mass_kj_per_k, events_used, warnings }`.
 
-**Event detection:** scan `heating[]` linearly for off periods (≥`OFF_PERIOD_MIN_HH`
-consecutive HH with `heating_kwh < OFF_PERIOD_THRESHOLD_KWH`). For each off period:
-- Find the start of heating resumption immediately after (first HH with `heating_kwh ≥ OFF_PERIOD_THRESHOLD_KWH`)
-- Look up the day's `dailyMeanTempC` for the off-period day(s) — skip if null or `≥ WINTER_TEMP_MAX_C`
-- Skip if any HH in the off period or warm-up phase has `is_absence === true`
-- This is a valid warm-up event candidate
+**Event detection (single pre-iteration pass).** Scan `heating[]` linearly for off
+periods (≥`OFF_PERIOD_MIN_HH` consecutive HH with `heating_kwh < OFF_PERIOD_THRESHOLD_KWH`).
+For each candidate:
 
-**Track separately:** whether any off-period sequences were found at all (for the "constant
-overnight heating" warning).
+1. Find the restart HH immediately after the off period (first HH with
+   `heating_kwh ≥ OFF_PERIOD_THRESHOLD_KWH`).
+2. Compute `T_outdoor_off = mean(external[i].temp_c for non-null HH in the off period)`.
+   This value is also reused inside the iteration loop for `T_at_restart` — compute once
+   here and cache it on the event record.
+3. **Winter filter (per design doc §Step 4 condition 3):** require
+   `T_outdoor_off !== null AND T_outdoor_off < WINTER_TEMP_MAX_C` (10 °C). The off
+   period's own mean replaces the previous calendar-day-mean test, so off periods
+   spanning midnight are handled cleanly. Skip the candidate if the gate fails.
+4. Skip if any HH in the off period OR in the prospective warm-up phase has
+   `is_absence === true`.
 
-**Iterative C estimation (3 iterations):**
+Each surviving candidate becomes a `validEvent` carrying: off-period HH range,
+`T_outdoor_off` (cached), `t_off_hours`, restart index. **All winter / absence /
+null-temp filtering happens in this pass — the iteration loop receives only valid
+events and never re-filters them.**
+
+**Track separately:** whether any off-period sequences were found at all (used for the
+"constant overnight heating" warning if zero events ultimately make it through).
+
+**Iterative C estimation (≤3 iterations, with previous-iteration fallback):**
 
 ```
 τ_seed = TC_CONFIG.TAU_SEED_HOURS
+last_good_estimates = null   // C_estimates from the most recent non-empty iteration
 
 for iter in 1..3:
   C_estimates = []
-  for each valid event:
-    t_off_hours      = (off period HH count) × 0.5
-    T_outdoor_off    = mean(external[i].temp_c for non-null HH in off period)
-    T_at_restart     = T_outdoor_off + (setpointC − T_outdoor_off) × exp(−t_off_hours / τ_seed)
+  for each event in validEvents:
+    T_outdoor_off = event.T_outdoor_off            // cached pre-iteration
+    t_off_hours   = event.t_off_hours
+    T_at_restart  = T_outdoor_off + (setpointC − T_outdoor_off) × exp(−t_off_hours / τ_seed)
 
-    Scan warm-up phase from restart HH forward:
+    Scan warm-up phase from event.restart index forward (cap at 48 HH for safety):
       For each HH j from restart:
         ss_kwh = htc × (setpointC − external[j].temp_c) × 0.5 / (eta × 1000)
         if heating[j].heating_kwh ≤ 1.2 × ss_kwh: this is the settled HH — stop (do NOT include)
         else: include in warm-up sum
 
-      E_warmup_kwh = sum(heating_kwh over warm-up HH, not including settled)
+      E_warmup_kwh    = sum(heating_kwh over warm-up HH, settled HH excluded)
       warmup_hh_count = count of those HH
 
-    E_warmup_kj  = E_warmup_kwh × 3600
+    E_warmup_kj      = E_warmup_kwh × 3600
     T_mean_warmup    = (T_at_restart + setpointC) / 2
     T_outdoor_warmup = mean(external[i].temp_c over warm-up HH, skip nulls)
     t_warmup_hours   = warmup_hh_count × 0.5
-    E_heatloss_kj = htc × (T_mean_warmup − T_outdoor_warmup) × t_warmup_hours × 3.6
+    E_heatloss_kj    = htc × (T_mean_warmup − T_outdoor_warmup) × t_warmup_hours × 3.6
 
     E_net_kj = E_warmup_kj × eta − E_heatloss_kj
-    delta_T   = setpointC − T_at_restart
+    delta_T  = setpointC − T_at_restart
 
     if E_net_kj > 0 AND delta_T > 0.5:
       C_estimates.push(E_net_kj / delta_T)
 
-  if C_estimates.length === 0: break (no events — handled below)
-  C_median = median(C_estimates)
-  τ_seed   = C_median / (htc × 3.6)
+  if C_estimates.length > 0:
+    last_good_estimates = C_estimates
+    C_median = median(C_estimates)
+    τ_seed   = C_median / (htc × 3.6)
+  // else: keep last_good_estimates and τ_seed from previous iteration; do not break,
+  // continue trying later iterations (a later iteration's τ_seed update may still help,
+  // but since τ_seed is unchanged here the loop simply re-runs with the same seed and
+  // produces the same empty result — the carry-over guarantees we use the best result
+  // we have rather than discarding it).
 ```
 
-After 3 iterations, apply 5th–95th percentile outlier filter to the final `C_estimates`.
-`thermal_mass_kj_per_k = median(filtered)`.
+**Final-result selection:**
 
-If `thermal_mass_events_used < TC_CONFIG.MIN_EVENTS_FOR_MASS`:
-- If zero off-periods were ever found: warn "Heating appears to run continuously overnight
-  — not enough cold-soak data to estimate thermal mass."
+- If `last_good_estimates === null` (iteration 1 itself produced zero `C_estimates`):
+  no usable events overall — return `thermal_mass_kj_per_k = null`,
+  `events_used = 0`. Emit warning per the "minimum events" rule below.
+- Otherwise: apply the 5th–95th percentile outlier filter to `last_good_estimates`.
+  `thermal_mass_kj_per_k = median(filtered)`.
+  `events_used = last_good_estimates.length` (count BEFORE the percentile filter — this
+  matches the design doc's "events contributing" wording).
+
+**Minimum events:** if `events_used < TC_CONFIG.MIN_EVENTS_FOR_MASS`:
+- If zero off-periods were ever found in event detection: warn "Heating appears to run
+  continuously overnight — not enough cold-soak data to estimate thermal mass."
 - Otherwise: warn "Not enough overnight cold-soak events to estimate thermal mass. More
   winter data needed."
-- Return `thermal_mass_kj_per_k = null`.
+- Set `thermal_mass_kj_per_k = null`.
 
 #### 1h. `computeRatingAndTimeConstant(thermalMassKjPerK, htcWPerK)`
 
@@ -245,13 +282,17 @@ range values.
 
 #### 1j. `computeValidationStatus(setpointC, thermalMassKjPerK, setpointDaysUsed, eventsUsed)`
 
+Final union (matches design doc): `"good" | "acceptable" | "insufficient_data" | "no_htc" | "no_gas"`.
+There is no `"low_confidence"` value — sub-threshold confidence is communicated via warnings,
+not a separate status.
+
 ```
 htc null → "no_htc"           (checked before calling this)
 no-gas   → "no_gas"           (checked before calling this)
 setpoint non-null AND mass non-null AND setpointDaysUsed >= 50 AND eventsUsed >= 10 → "good"
 setpoint non-null AND mass non-null (lower counts) → "acceptable"
 setpoint non-null AND mass null (or vice versa) → "acceptable"  (with warnings already appended)
-either null due to insufficient data → "insufficient_data"
+both null due to insufficient data → "insufficient_data"
 ```
 
 #### 1k. Main export `estimateThermalCharacter(heating, external, heatLoss, baseloadMethod, wallConstructionType)`
@@ -277,7 +318,35 @@ Steps:
 8. `{ time_constant_hours, thermal_mass_rating, tcWarns } = computeRatingAndTimeConstant(thermal_mass_kj_per_k, htc)`.
 9. `checkWallConstruction(thermal_mass_kj_per_k, wallConstructionType, allWarnings)`.
 10. `validation_status = computeValidationStatus(...)`.
-11. Assemble and return the output object per design doc spec.
+11. Assemble and return the output object. Internal local-variable names are mapped onto
+    the design doc's output field names as follows (only fields where the names differ
+    are listed; the rest pass through unchanged):
+
+    | Internal var (this function) | Output field (design doc) |
+    |------------------------------|---------------------------|
+    | `events_used`                | `thermal_mass_events_used` |
+    | `tcWarns`, `spWarns`, `massWarns`, `owWarn` (concatenated) | `warnings` |
+
+    The full output object shape is:
+
+    ```javascript
+    return {
+      setpoint_c,                              // from estimateSetpoint
+      thermal_mass_kj_per_k,                   // from estimateThermalMass
+      time_constant_hours,                     // from computeRatingAndTimeConstant
+      thermal_mass_rating,                     // from computeRatingAndTimeConstant
+      occupancy_weights,                       // from computeOccupancyWeights
+      setpoint_days_used,                      // from estimateSetpoint
+      thermal_mass_events_used: events_used,   // renamed
+      validation_status,                       // from computeValidationStatus
+      warnings: [...spWarns, ...massWarns, ...tcWarns, ...(owWarn ? [owWarn] : [])],
+    };
+    ```
+
+    The `no_htc` / `no_gas` early-return branches assemble the same shape but with all
+    numeric fields set to null, `setpoint_days_used = 0`, `thermal_mass_events_used = 0`,
+    `occupancy_weights = null`, `thermal_mass_rating = null`, and `warnings = []` (per
+    design doc §Step 0: "no warnings — M4/M3 already surfaced the reason").
 
 #### 1l. State management
 
@@ -365,7 +434,7 @@ hidden class). Handle each `validation_status`:
   requires a heat loss result."
 - `"no_gas"`: info message "No gas supply — thermal character estimation requires gas data."
 - `"insufficient_data"`: show warnings, no numeric table.
-- `"good"` / `"acceptable"` / `"low_confidence"`: render numeric table plus warnings.
+- `"good"` / `"acceptable"`: render numeric table plus warnings.
 
 Numeric rows to render (skip row if value is null):
 - Inferred setpoint
@@ -484,9 +553,35 @@ window.__getThermalCharacterResult = () => getThermalCharacterResult();
   - `occupancy_weights[34]` (17:00) in [0.6, 0.85]
   - `occupancy_weights[4]` (02:00) < 0.05
 
-- [ ] **T4 — Thermal mass recovery — synthetic.** HTC = 250 W/K, η = 0.9,
-  T_setpoint = 20°C, C = 9,000 kJ/K, 15 events, off = 7h, T_outdoor = 5°C.
-  Expected: `thermal_mass_kj_per_k` within 15% of 9,000 after 3 iterations.
+- [ ] **T4 — Thermal mass recovery — synthetic.** Per design doc §Test Criteria #4
+  (revised): HTC = 250 W/K, η = 0.9, T_setpoint = 20°C, target C = 9,000 kJ/K
+  (true τ = 9,000 / (250 × 3.6) = 10.0 h). T_outdoor held constant at 5°C throughout.
+
+  For each of 15 warm-up events, construct gas consumption with this exact profile:
+  - **Off period:** 14 consecutive HH (7 h) with `heating_kwh = 0`.
+  - **Warm-up:** 4 HH (2 h) with `heating_kwh = 6.80` per HH.
+  - **Steady state thereafter:** `heating_kwh = 2.083` per HH
+    (= HTC × ΔT × 0.5 / (η × 1000) at T_outdoor = 5°C).
+
+  Derivation (energy balance assuming linear T_indoor ramp from
+  `T_at_restart` (true) = 5 + 15 × exp(−7/10) = 12.45°C up to 20°C over 4 HH):
+  - Mass heating: `C × ΔT_mass = 9,000 × 7.55 = 67,950 kJ`
+  - Fabric loss during ramp: `HTC × ΔT_mean × t × 3.6 = 250 × 11.225 × 2 × 3.6 = 20,205 kJ`
+  - Gas energy required: `(67,950 + 20,205) / 0.9 = 97,950 kJ = 27.21 kWh over 4 HH`
+    → 6.80 kWh per HH
+
+  The settled criterion (`heating_kwh ≤ 1.2 × steady_state_kwh = 2.5 kWh per HH`)
+  classifies HH 14–17 as warm-up and HH 18 as settled; the settled HH is excluded
+  from the warm-up sum (matches the boundary-marker rule in design doc §Step 4
+  condition 2).
+
+  **Expected:** `thermal_mass_kj_per_k` ≈ 7,990 kJ/K at 3 iterations
+  (≈ 11% under true; within the 15% tolerance). The algorithm converges from
+  τ_seed = 5.0 toward true τ = 10.0 across the 3 iterations.
+
+  **Fails if** the heat-loss correction is missing — without it the algorithm
+  diverges, reaching ≈ 13,000 kJ/K (~45% over true) at 3 iterations. Also fails on
+  unit-conversion mistakes or non-convergence.
 
 - [ ] **T5 — Time constant.** Inputs: `thermal_mass = 12,000`, `htc = 300`.
   Expected: `time_constant_hours = 11.11` within 0.05 h.
