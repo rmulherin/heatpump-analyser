@@ -1110,5 +1110,6 @@ function readFileAsText(file) {
 
 // debug-only — remove in post-launch cleanup (after 28-Apr-2026 launch)
 window.__getIngestionResult = () => getIngestionResult();
-window.__getBaseloadResult = () => getBaseloadResult();
-window.__getHeatLossResult = () => getHeatLossResult();
+window.__getExternalResult  = () => getExternalResult();
+window.__getBaseloadResult  = () => getBaseloadResult();
+window.__getHeatLossResult  = () => getHeatLossResult();
