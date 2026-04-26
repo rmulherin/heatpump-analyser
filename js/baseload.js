@@ -16,7 +16,6 @@ const BASELOAD_CONFIG = {
   METHOD_B_MIN_SUMMER_DAYS: 30,
   METHOD_C_MIN_SUMMER_DAYS: 14,
   ABSENCE_THRESHOLD_FRACTION: 0.20,
-  ABSENCE_MIN_CONSECUTIVE_DAYS: 3,
   HIGH_ABSENCE_WARNING_DAYS: 30,
   EXCESSIVE_ABSENCE_DAYS: 300,
   LITERATURE_BASELOAD_KWH_PER_DAY: 8,
@@ -431,7 +430,7 @@ export function detectAbsences(consumption, heating, baseloadMedianKwhPerDay, wa
     if (records.reduce((s, r) => s + r.gas_kwh, 0) < threshold) lowGasDays.add(day);
   }
 
-  // Find runs of ≥3 calendar-consecutive low-gas whole days
+  // Group calendar-consecutive low-gas whole days into periods; no minimum run — isWholeDay is the misread guard
   const absence_periods = [];
   let i = 0;
   while (i < sortedDays.length) {
@@ -442,10 +441,7 @@ export function detectAbsences(consumption, heating, baseloadMedianKwhPerDay, wa
       lowGasDays.has(sortedDays[j]) &&
       DateTime.fromISO(sortedDays[j], { zone: 'utc' }).diff(DateTime.fromISO(sortedDays[j - 1], { zone: 'utc' }), 'days').days === 1
     ) j++;
-    const runLength = j - i;
-    if (runLength >= BASELOAD_CONFIG.ABSENCE_MIN_CONSECUTIVE_DAYS) {
-      absence_periods.push({ start: sortedDays[i], end: sortedDays[j - 1], days: runLength });
-    }
+    absence_periods.push({ start: sortedDays[i], end: sortedDays[j - 1], days: j - i });
     i = j;
   }
 
