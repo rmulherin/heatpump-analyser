@@ -58,15 +58,36 @@ Add to `STEP_H_LIMITATIONS`:
 
 ### Change 5 — Add progress updates during Elexon price fetch
 
-**File:** `js/app.js` (or wherever `fetchWholesalePrices` / the chunk loop lives)
+**Files:** `js/external-data.js` (chunk loop), `js/app.js` (call site)
 
-The Elexon chunked fetch loop (stride 7, ~52 chunks/year) blocks the browser long enough to trigger the "page unresponsive" warning with no visible progress. Fix: call `showProgressFn` with a percentage after each chunk completes. Also add at least one `await new Promise(r => setTimeout(r, 0))` yield per chunk to keep the browser responsive.
+The existing progress mechanism is `showProgress(text, percent)` in `app.js`. Pipeline stages pass it down as `showProgressFn` — a callback taking `(text, percent?)`. `fetchWholesalePrices` currently takes no progress callback and has no yield points; this is why the browser freezes.
+
+**Two-part fix:**
+
+1. **`js/external-data.js`** — add an optional third parameter `onProgress` to `fetchWholesalePrices(dataStart, dataEnd, onProgress)`. Compute `totalChunks` before the loop as `Math.ceil((endDate - startDate) / (7 * 86400000)) + 1`. After each chunk completes, call `onProgress?.(Math.round((chunksDone / totalChunks) * 100))` and then `await new Promise(r => setTimeout(r, 0))` to yield to the browser.
+
+2. **`js/app.js`** — update the `fetchWholesalePrices` call site in `runExternalData` (currently line 596) from:
+   ```js
+   fetchWholesalePrices(metadata.data_start, metadata.data_end)
+   ```
+   to:
+   ```js
+   fetchWholesalePrices(metadata.data_start, metadata.data_end,
+     (pct) => showProgressFn(`Fetching price data… ${pct}%`))
+   ```
+   The call is inside `Promise.allSettled` alongside `fetchWeather`; the progress callback wires through without changing the settled-result structure.
+
+The `await` yield is the primary fix for the unresponsive-page warning. The `onProgress` callback is a secondary UX improvement.
 
 ### Change 6 — Suppress individual SP count warnings from UI
 
-**File:** `js/app.js` or `js/external-data.js` (wherever "Unexpected SP count" strings are generated)
+**Files:** `js/app.js` (filtering at call site), `js/external-data.js` (retain as `console.warn`)
 
-Replace per-date "Unexpected SP count N for YYYY-MM-DD" lines in the UI with a single summary if any gaps are found: e.g. "Wholesale price data incomplete on N dates — affected periods will use null prices." Retain individual messages as `console.warn` only. The last date's partial count (today/yesterday with only 3 SPs) should also be suppressed from the UI.
+"Unexpected SP count N for YYYY-MM-DD" warnings are generated in `convertSpToUtc` (external-data.js line ~321) and returned in the `warnings` array of `fetchWholesalePrices`. In `app.js` `runExternalData`, these are emitted one-by-one via `showStatusFn(w, 'warning')` (currently lines ~619–621).
+
+**Fix in `js/app.js`:** Before the `for (const w of priceWarnings)` loop, partition warnings into SP-count warnings and others. Emit non-SP-count warnings as before. If any SP-count warnings exist, emit a single summary: `"Wholesale price data incomplete on N dates — affected periods will use null prices."` Log the individual messages with `console.warn` instead.
+
+**Fix in `js/external-data.js`:** No change to generation logic — individual warnings are still built and returned. The suppression happens entirely at the call site in `app.js`.
 
 ### Change 4 — Soften M4 Step 4D warning text
 
@@ -82,8 +103,9 @@ Proposed: `"Your electricity use rises in cold weather (estimated N kWh — poss
 | File | Change |
 |------|--------|
 | `js/baseload.js` | STEP_H_LIMITATIONS text; remove "air conditioning" from warning strings |
-| `js/app.js` | displayBaseloadResults — drop AC label; new energy table render function |
+| `js/app.js` | displayBaseloadResults — drop AC label; new energy table render function; progress callback at fetchWholesalePrices call site; SP count warning suppression |
 | `js/heat-loss.js` | Step 4D warning text |
+| `js/external-data.js` | fetchWholesalePrices — add optional onProgress param; yield per chunk |
 
 ---
 
