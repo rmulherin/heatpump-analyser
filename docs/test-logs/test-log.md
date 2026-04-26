@@ -164,7 +164,7 @@ Run 2026-04-26, console script batch.
 | M2 | Weather fetch | ✅ | 17,471 periods loaded (≈ 364×48); "Gaps: 0" |
 | M2 | Price fetch | ✅ | 17,300 periods (elexon-mid-n2ex); some days with partial SP counts (expected Elexon gaps) |
 | M2 | Alignment | ✅ | Weather 17,471 = electricity records 17,471 |
-| M2 | SP→UTC clock-change timestamps | ⏳ | Needs Script C — awaiting GitHub Pages deploy of __getExternalResult |
+| M2 | SP→UTC clock-change timestamps | ✅ | 2026-03-29 (spring fwd, 46 SPs) and 2025-10-26 (autumn back, 50 SPs) absent from UI "Unexpected SP count" warnings — code got exactly the expected counts. Other flagged dates are genuine Elexon gaps. Corroborated by Luxon IANA timezone DST handling (learnings.md). |
 
 ---
 
