@@ -206,7 +206,7 @@ export function buildWeatherLookup(weatherMap) {
 
 // ===== Step 6: Elexon MID fetch =====
 
-export async function fetchWholesalePrices(dataStart, dataEnd) {
+export async function fetchWholesalePrices(dataStart, dataEnd, onProgress) {
   const warnings = [];
   // API limit: max 8 days per request (filtered by startTime UTC, not settlementDate).
   // Stride 7 days and extend `to` by 1 day so BST settlement dates at chunk boundaries
@@ -216,6 +216,9 @@ export async function fetchWholesalePrices(dataStart, dataEnd) {
   const startDate = new Date(dateOnly(dataStart) + 'T00:00:00Z');
   const endDate = new Date(dateOnly(dataEnd) + 'T00:00:00Z');
   let allRecords = [];
+
+  const totalChunks = Math.ceil((endDate - startDate) / (MAX_CHUNK_DAYS * 86400000)) + 1;
+  let chunksDone = 0;
 
   try {
     let cursor = new Date(startDate);
@@ -248,6 +251,9 @@ export async function fetchWholesalePrices(dataStart, dataEnd) {
         }
       }
 
+      chunksDone++;
+      onProgress?.(Math.round((chunksDone / totalChunks) * 100));
+      await new Promise(r => setTimeout(r, 0));
       cursor.setUTCDate(cursor.getUTCDate() + MAX_CHUNK_DAYS);
     }
   } catch (e) {

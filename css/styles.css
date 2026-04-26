@@ -321,6 +321,42 @@ input:focus {
   color: var(--colour-dark);
 }
 
+/* ===== Energy Summary Table ===== */
+.energy-summary-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  margin-top: 0.5rem;
+}
+
+.energy-summary-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--colour-navy);
+  padding: 0.4rem 0.75rem;
+  border-bottom: 2px solid var(--colour-border);
+}
+
+.energy-summary-table th:not(:first-child) {
+  text-align: right;
+}
+
+.energy-summary-table td {
+  padding: 0.4rem 0.75rem;
+  border-bottom: 1px solid var(--colour-border);
+  color: var(--colour-dark);
+}
+
+.energy-summary-table td:not(:first-child) {
+  text-align: right;
+}
+
+.energy-summary-table tfoot .total-row td {
+  font-weight: 600;
+  border-top: 2px solid var(--colour-border);
+  border-bottom: none;
+}
+
 /* ===== Utility ===== */
 .hidden { display: none; }
 

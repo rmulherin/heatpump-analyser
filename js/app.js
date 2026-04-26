@@ -111,6 +111,10 @@ const csvProgressArea = document.getElementById('csv-progress-area');
 const csvProgressText = document.getElementById('csv-progress-text');
 const csvStatusArea = document.getElementById('csv-status-area');
 
+// Energy summary DOM references
+const energySummaryCard = document.getElementById('energy-summary-card');
+const energySummaryContent = document.getElementById('energy-summary-content');
+
 // Heat loss DOM references
 const heatLossCard = document.getElementById('heat-loss-card');
 const heatLossResults = document.getElementById('heat-loss-results');
@@ -593,7 +597,8 @@ async function runExternalData(showProgressFn, showStatusFn) {
 
   const [weatherResult, priceResult] = await Promise.allSettled([
     fetchWeather(latitude, longitude, metadata.data_start, metadata.data_end),
-    fetchWholesalePrices(metadata.data_start, metadata.data_end),
+    fetchWholesalePrices(metadata.data_start, metadata.data_end,
+      (pct) => showProgressFn(`Fetching price data… ${pct}%`)),
   ]);
 
   // Step 3: Handle results with asymmetric rejection
@@ -616,8 +621,17 @@ async function runExternalData(showProgressFn, showStatusFn) {
     priceLookup = priceResult.value.priceLookup;
     priceSource = priceResult.value.source;
     priceWarnings = priceResult.value.warnings;
-    for (const w of priceWarnings) {
+    const spCountWarnings = priceWarnings.filter(w => w.startsWith('Unexpected SP count'));
+    const otherPriceWarnings = priceWarnings.filter(w => !w.startsWith('Unexpected SP count'));
+    for (const w of otherPriceWarnings) {
       showStatusFn(w, 'warning');
+    }
+    if (spCountWarnings.length > 0) {
+      for (const w of spCountWarnings) console.warn(w);
+      showStatusFn(
+        `Wholesale price data incomplete on ${spCountWarnings.length} date${spCountWarnings.length === 1 ? '' : 's'} — affected periods will use null prices.`,
+        'warning'
+      );
     }
   }
 
@@ -658,6 +672,69 @@ async function runExternalData(showProgressFn, showStatusFn) {
     `External data loaded. Weather: ${weatherCount} periods. Wholesale prices: ${priceCount} periods (${priceSource}). Gaps: ${gapCount}.`,
     'success'
   );
+}
+
+// ===== Module 3: Energy Summary Table =====
+
+function renderEnergySummaryTable() {
+  const baseload = getBaseloadResult();
+  const ingestion = getIngestionResult();
+  if (!baseload || !ingestion) return;
+
+  const { heating, supplementary_loads: sl } = baseload;
+  const { consumption } = ingestion;
+
+  let gasHeating = 0;
+  let gasBaseload = 0;
+  for (const slot of heating) {
+    if (slot.heating_kwh !== null) gasHeating += slot.heating_kwh;
+    if (slot.baseload_kwh !== null) gasBaseload += slot.baseload_kwh;
+  }
+
+  let elecTotal = 0;
+  for (const rec of consumption) {
+    if (rec.elec_kwh !== null) elecTotal += rec.elec_kwh;
+  }
+
+  const elecHeating = sl.electric_heating_kwh_estimate ?? 0;
+  const elecCooling = Math.max(0, (sl.cdd_coefficient_kwh_per_dd ?? 0) * (sl.sum_cdd_k_day ?? 0));
+  const elecBaseline = Math.max(0, elecTotal - elecHeating - elecCooling);
+
+  const grandTotal = gasBaseload + elecBaseline + gasHeating + elecHeating + elecCooling;
+  const pct = (v) => grandTotal > 0 ? `${Math.round((v / grandTotal) * 100)}%` : '—';
+  const kwh = (v) => `${Math.round(v).toLocaleString()} kWh`;
+
+  const rows = [
+    ['Gas baseload',                    gasBaseload],
+    ['Electricity baseline',            elecBaseline],
+    ['Gas heating',                     gasHeating],
+    ['Electricity cold-weather uplift', elecHeating],
+    ['Electricity warm-weather uplift', elecCooling],
+  ];
+
+  energySummaryContent.innerHTML = `
+    <table class="energy-summary-table">
+      <thead>
+        <tr><th>Category</th><th>kWh</th><th>% of total</th></tr>
+      </thead>
+      <tbody>
+        ${rows.map(([label, value]) => `
+          <tr>
+            <td>${escapeHtml(label)}</td>
+            <td>${kwh(value)}</td>
+            <td>${pct(value)}</td>
+          </tr>`).join('')}
+      </tbody>
+      <tfoot>
+        <tr class="total-row">
+          <td>Total</td>
+          <td>${kwh(grandTotal)}</td>
+          <td>100%</td>
+        </tr>
+      </tfoot>
+    </table>`;
+
+  energySummaryCard.classList.remove('hidden');
 }
 
 // ===== Module 3: Baseload Separation Orchestration =====
@@ -739,16 +816,18 @@ async function runBaseloadSeparation(showProgressFn, showStatusFn) {
     );
   }
 
-  // AC messages
+  // Warm-weather electricity uplift messages
   if (sl.air_conditioning_detected) {
     const acConf = CONFIDENCE_LABELS[sl.air_conditioning_confidence] ?? sl.air_conditioning_confidence;
+    const estKwh = sl.air_conditioning_kwh_estimate !== null
+      ? ` (estimated ${sl.air_conditioning_kwh_estimate.toFixed(0)} kWh)` : '';
     showStatusFn(
-      `Air conditioning detected (${acConf}). An air-source heat pump could replace your existing cooling system as well as providing heating.`,
+      `Warm-weather electricity uplift detected${estKwh} (${acConf}). Your electricity use rises in warm weather — this may reflect cooling equipment, but could also be fans, refrigeration, or increased summer activity.`,
       'info'
     );
   } else if (sl.ac_detection_note === 'insufficient_cdd_data') {
     showStatusFn(
-      'Not enough warm-weather data to assess whether you have air conditioning.',
+      'Not enough warm-weather data to assess warm-weather electricity uplift.',
       'info'
     );
   }
@@ -760,6 +839,8 @@ async function runBaseloadSeparation(showProgressFn, showStatusFn) {
       showStatusFn(limitation, 'info');
     }
   }
+
+  renderEnergySummaryTable();
 }
 
 // ===== Module 4: Heat Loss Estimation Orchestration =====

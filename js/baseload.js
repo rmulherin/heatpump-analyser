@@ -44,6 +44,7 @@ const STEP_H_LIMITATIONS = [
   'Solar PV generation is not modelled. If your electricity consumption excludes generation (net metering) or exported energy, the fitted baseline may be distorted. Slope coefficients (HDD, CDD) are less affected because they measure gradient, not level.',
   "If you already have a heat pump or electric immersion tied to heating, it will show here as 'electric heating'. The tool cannot distinguish an existing heat pump from supplementary resistance heating.",
   'Electric water heating (e.g. immersion on a timer) is typically weather-independent and appears in the baseline rather than as heating. Usually acceptable but may inflate the baseline estimate.',
+  'Electricity use that correlates with temperature may reflect occupancy patterns — households tend to spend more time at home in very cold or very hot weather, increasing electricity use from always-on appliances and lighting. This is indistinguishable from heating or cooling equipment in aggregate daily data.',
 ];
 
 // ===== Shared state =====

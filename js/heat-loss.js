@@ -341,7 +341,7 @@ export function estimateHeatLoss(heating, external, baseloadMetadata, supplement
       ? `${supplementaryLoads.electric_heating_kwh_estimate.toFixed(0)} kWh`
       : 'some kWh';
     warnings.push(
-      `Your home appears to use some electric heating (estimated ${estKwh}). Your heat loss may be underestimated by up to ${htc_correction.toFixed(0)} W/K — an adjusted estimate is ${htc_adjusted.toFixed(0)} W/K.`
+      `Your electricity use rises in cold weather (estimated ${estKwh} — possibly supplementary electric heating, EV charging, or winter occupancy patterns). Your heat loss may be underestimated by up to ${htc_correction.toFixed(0)} W/K — an adjusted estimate is ${htc_adjusted.toFixed(0)} W/K.`
     );
   }
 
