@@ -337,7 +337,7 @@ export function estimateHeatLoss(heating, external, baseloadMetadata, supplement
   ) {
     htc_correction = (1000 / 24) * supplementaryLoads.electric_heating_kwh_per_dd;
     htc_adjusted = htc + htc_correction;
-    const estKwh = supplementaryLoads.electric_heating_kwh_estimate !== null
+    const estKwh = supplementaryLoads.electric_heating_kwh_estimate != null
       ? `${supplementaryLoads.electric_heating_kwh_estimate.toFixed(0)} kWh`
       : 'some kWh';
     warnings.push(
