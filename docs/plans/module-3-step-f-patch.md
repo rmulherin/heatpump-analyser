@@ -1,7 +1,7 @@
 # Module 3 Patch — Step F: Remove run-length filter from absence detection
 
 **Date:** 2026-04-24
-**Status:** Awaiting approval — review via claude.ai before implementation begins.
+**Status:** ✅ Approved — 2026-04-24
 
 ---
 
@@ -99,30 +99,51 @@ Update the comment above the grouping loop in `detectAbsences()`:
 
 ---
 
-## Claude.ai Review — yyyy-mm-dd
+## Design Review
 
 **Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Date:** 2026-04-24
+**Review type:** Plan review (pre-implementation)
+**Authoritative design:** `praxis-claude-hub/projects/tools/heatpump-analyser/design/baseload-separation.md` (commit `199d67a`)
 
-**Overall verdict:** [Approved / Approved with clarifications / Revise and resubmit]
+### Context
 
-### What is solid
-[What the plan gets right. Be specific.]
+Step F was amended on 2026-04-24 after user-testing on Rhiannon's 12-month real data showed R² = 0.49 and spurious regression signals caused by 1–2 day low-gas events (boiler faults, short trips) not being excluded. Design doc amended in `199d67a` to remove the ≥3-day run-length minimum; `isWholeDay` (all 48 HH non-null) is now the sole meter-misread guard.
 
-### Clarifications required before implementation
-[Any ambiguity, missing specification, or underdefined behaviour that would force
-Claude Code to make an undocumented decision mid-build. Each item must include
-the resolution — not just the problem.]
+### Required changes for implementation
+
+None.
 
 ### Minor observations (not blockers)
-[Optional. Suggestions for V2, style notes, things to keep in mind.]
+
+None. Plan is minimal, targeted, and complete.
+
+### Resolution of review changes
+
+No changes required. Plan approved as submitted.
+
+## Review Summary
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| CRITICAL | 0     | ✓ pass |
+| HIGH     | 0     | ✓ pass |
+| MEDIUM   | 0     | ✓ pass |
+| LOW      | 0     | — |
+
+**Approach challenge confirmed:** root cause addressed (outlier days removed from regression); plan removes code rather than adding it; `absenceDateSet` loop verified to handle single-day periods correctly; no shared infrastructure affected; Step G/H day-count guards unchanged.
+
+**No items deferred — all functionality specified in this plan is delivered.**
+
+Verdict: APPROVE — targeted removal, complete test coverage, no regressions.
 
 ---
 
 ## Approval
 
-**Status:** Awaiting approval — review via claude.ai before implementation begins.
-**Approved by:** —
-**Clarifications confirmed:** —
+**Status:** ✅ Approved — 2026-04-24
+**Approved by:** Rhiannon (via Opus review)
+**Clarifications confirmed:** Option B selected (remove run-length minimum); isWholeDay is the misread guard; Test 13 and 15 inverted; Test 15a added.
 
 ---
 

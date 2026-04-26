@@ -38,7 +38,7 @@ to Rhiannon rather than proceeding. The Opus window is the right place for that 
 **Owner:** Rhiannon (Praxis Insight)
 **Classification:** GREEN — full Claude assistance permitted.
 **Language:** HTML + vanilla JavaScript + Chart.js
-**Status:** Modules 1–3 implemented. CORS probe confirmed PASS (2026-04-23). M1 patch implemented (2026-04-23): tariff windowing clamped, meter-stitching unit detection (Tier 1/2), gas sanity check shows kWh+£, total gas kWh in summary, baseload £/day display. Elexon wholesale price bug resolved (2026-04-24): date-only format, chunked fetch (stride 7 + to+1), boundary-SP dedup — 17,300 price periods, baseload separation passes. Module 3b user test pending.
+**Status:** Modules 1–4 implemented. CORS probe confirmed PASS (2026-04-23). M1 patch implemented (2026-04-23): tariff windowing clamped, meter-stitching unit detection (Tier 1/2), gas sanity check shows kWh+£, total gas kWh in summary, baseload £/day display. Elexon wholesale price bug resolved (2026-04-24): date-only format, chunked fetch (stride 7 + to+1), boundary-SP dedup — 17,300 price periods, baseload separation passes. M4 implemented (2026-04-26): Siviour regression, sanity checks 4A–4D, ratings, solar aperture, HLP. Module 3b user test pending. M3 Step F patch approved (2026-04-24), implementation not yet started.
 
 Praxis hub context (in `~/Documents/git-repos/praxis-claude-hub/`):
 - `context/about-rhiannon.md`
@@ -302,7 +302,7 @@ there is no spot-instance risk, but mid-session context exhaustion is still poss
 - [x] Module 1: Data Ingestion (Octopus API + CSV + meter stitching)
 - [x] Module 2: External Data (weather + wholesale prices)
 - [x] Module 3: Baseload Separation
-- [ ] Module 4: Heat Loss Estimation (Siviour regression)
+- [x] Module 4: Heat Loss Estimation (Siviour regression)
 - [ ] Module 5: Thermal Character (setpoint, thermal mass, time constant, occupancy weights)
 - [ ] Module 6: Heat Pump Model (COP curves)
 - [ ] Module 7: Scenario Consumption (RC model + pre-heating optimiser + dumb scenarios)

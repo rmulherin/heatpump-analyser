@@ -35,6 +35,12 @@ import {
   getBaseloadResult,
 } from './baseload.js';
 
+import {
+  estimateHeatLoss,
+  setHeatLossResult,
+  getHeatLossResult,
+} from './heat-loss.js';
+
 // ===== Module 3 — Label maps =====
 
 const BASELOAD_METHOD_LABELS = {
@@ -51,6 +57,24 @@ const CONFIDENCE_LABELS = {
   'moderate': 'moderate confidence',
   'low': 'low confidence — treat with caution',
   'none': '',
+};
+
+// ===== Module 4 — Label maps =====
+
+const HEAT_LOSS_RATING_DISPLAY = {
+  'excellent': 'Excellent (very well insulated)',
+  'good': 'Good',
+  'average': 'Average',
+  'poor': 'Poor',
+  'very_poor': 'Very poor (poorly insulated)',
+};
+
+const SOLAR_RATING_DISPLAY = {
+  'minimal': 'Minimal',
+  'moderate': 'Moderate',
+  'good': 'Good',
+  'high': 'High',
+  'very_high': 'Very high',
 };
 
 // ===== DOM References =====
@@ -86,6 +110,15 @@ const csvPostcodeNote = document.getElementById('csv-postcode-note');
 const csvProgressArea = document.getElementById('csv-progress-area');
 const csvProgressText = document.getElementById('csv-progress-text');
 const csvStatusArea = document.getElementById('csv-status-area');
+
+// Heat loss DOM references
+const heatLossCard = document.getElementById('heat-loss-card');
+const heatLossResults = document.getElementById('heat-loss-results');
+const heatLossSummary = document.getElementById('heat-loss-summary');
+const heatLossStatus = document.getElementById('heat-loss-status');
+const boilerEfficiencyInput = document.getElementById('boiler-efficiency');
+const floorAreaInput = document.getElementById('floor-area');
+const btnRecalculateHeatLoss = document.getElementById('btn-recalculate-heat-loss');
 
 // ===== Tab Switching =====
 const tabBtns = document.querySelectorAll('.tab-btn');
@@ -450,6 +483,12 @@ async function continueWithProperty(apiKey) {
     (msg, type) => showStatus(msg, type)
   );
 
+  // Step 11: Trigger Module 4 — Heat Loss Estimation
+  await runHeatLoss(
+    (text) => showProgress(text, undefined),
+    (msg, type) => showStatus(msg, type)
+  );
+
   hideProgress();
   setFetchEnabled(true);
 }
@@ -723,6 +762,130 @@ async function runBaseloadSeparation(showProgressFn, showStatusFn) {
   }
 }
 
+// ===== Module 4: Heat Loss Estimation Orchestration =====
+
+function displayHeatLossResults(result) {
+  heatLossStatus.innerHTML = '';
+  heatLossSummary.innerHTML = '';
+
+  for (const warning of result.warnings) {
+    const div = document.createElement('div');
+    div.className = 'status-msg warning';
+    div.textContent = warning;
+    heatLossStatus.appendChild(div);
+  }
+
+  if (result.validation_status === 'no_gas') {
+    const div = document.createElement('div');
+    div.className = 'status-msg info';
+    div.textContent = 'No gas supply detected — heat loss estimation requires gas consumption data.';
+    heatLossStatus.appendChild(div);
+    heatLossResults.classList.remove('hidden');
+    return;
+  }
+
+  if (result.validation_status === 'insufficient_data') {
+    heatLossResults.classList.remove('hidden');
+    return;
+  }
+
+  if (result.htc_w_per_k === null) {
+    const div = document.createElement('div');
+    div.className = 'status-msg error';
+    div.textContent = 'Heat loss could not be calculated. See warnings above.';
+    heatLossStatus.appendChild(div);
+    heatLossResults.classList.remove('hidden');
+    return;
+  }
+
+  const fmt = (v, dp = 0) => v !== null && v !== undefined ? v.toFixed(dp) : '—';
+  const rows = [];
+
+  rows.push(['Heat transfer coefficient (HTC)', `${fmt(result.htc_w_per_k)} W/K`]);
+  if (result.htc_confidence_interval_95) {
+    const ci = result.htc_confidence_interval_95;
+    rows.push(['95% confidence interval', `${fmt(ci.lower)} – ${fmt(ci.upper)} W/K`]);
+  }
+  if (result.htc_w_per_k_adjusted !== null) {
+    rows.push(['Adjusted HTC (incl. electric heating)', `${fmt(result.htc_w_per_k_adjusted)} W/K`]);
+  }
+  rows.push(['Insulation rating', HEAT_LOSS_RATING_DISPLAY[result.rating] ?? result.rating ?? '—']);
+  if (result.hlp_w_per_m2_k !== null) {
+    rows.push(['Heat loss parameter (HLP)', `${result.hlp_w_per_m2_k.toFixed(2)} W/m²K`]);
+  }
+  if (result.solar_correction_applied && result.solar_aperture_m2 !== null) {
+    rows.push(['Effective solar aperture', `${fmt(result.solar_aperture_m2, 1)} m²`]);
+    rows.push(['Solar gain rating', SOLAR_RATING_DISPLAY[result.solar_rating] ?? result.solar_rating ?? '—']);
+    if (result.cooling_consideration) {
+      const coolingLabel = result.cooling_consideration.replace(/_/g, ' ');
+      rows.push(['Summer cooling consideration', coolingLabel]);
+    }
+  }
+  rows.push(['Degree-day base temperature', `${result.degree_day_base_c}°C`]);
+  rows.push(['Boiler efficiency used', result.boiler_efficiency_used.toFixed(2)]);
+  rows.push(['Days used in fit', result.days_used_in_fit]);
+  if (result.regression_r2 !== null) {
+    rows.push(['Fit quality (R²)', result.regression_r2.toFixed(2)]);
+  }
+  rows.push(['Validation status', result.validation_status]);
+
+  heatLossSummary.innerHTML = rows
+    .map(([dt, dd]) => `<dt>${escapeHtml(String(dt))}</dt><dd>${escapeHtml(String(dd))}</dd>`)
+    .join('');
+
+  heatLossResults.classList.remove('hidden');
+}
+
+async function runHeatLoss(showProgressFn, showStatusFn) {
+  const ingestion = getIngestionResult();
+  const externalResult = getExternalResult();
+  const baseloadResult = getBaseloadResult();
+  if (!ingestion || !externalResult || !baseloadResult) return;
+
+  showProgressFn('Estimating heat loss…');
+
+  const boilerEfficiency = parseFloat(boilerEfficiencyInput.value) || 0.90;
+  const floorAreaRaw = parseFloat(floorAreaInput.value);
+  const floorAreaM2 = isNaN(floorAreaRaw) ? null : floorAreaRaw;
+
+  let result;
+  try {
+    result = estimateHeatLoss(
+      baseloadResult.heating,
+      externalResult.external,
+      baseloadResult.baseload_metadata,
+      baseloadResult.supplementary_loads,
+      boilerEfficiency,
+      floorAreaM2,
+    );
+  } catch (err) {
+    showStatusFn('Heat loss estimation failed: ' + err.message, 'error');
+    console.error('runHeatLoss error:', err);
+    return;
+  }
+
+  setHeatLossResult(result);
+  heatLossCard.classList.remove('hidden');
+  displayHeatLossResults(result);
+}
+
+btnRecalculateHeatLoss.addEventListener('click', async () => {
+  btnRecalculateHeatLoss.disabled = true;
+  heatLossStatus.innerHTML = '';
+  heatLossSummary.innerHTML = '';
+  heatLossResults.classList.add('hidden');
+  await runHeatLoss(
+    () => {},
+    (msg, type) => {
+      const div = document.createElement('div');
+      div.className = `status-msg ${type}`;
+      div.textContent = msg;
+      heatLossStatus.appendChild(div);
+    }
+  );
+  btnRecalculateHeatLoss.disabled = false;
+});
+
 // ===== CSV Helpers =====
 
 function showCsvProgress(text) {
@@ -920,6 +1083,12 @@ btnCsvAnalyse.addEventListener('click', async () => {
       (msg, type) => showCsvStatus(msg, type)
     );
 
+    // Step 11: Trigger Module 4 — Heat Loss Estimation
+    await runHeatLoss(
+      (text) => showCsvProgress(text),
+      (msg, type) => showCsvStatus(msg, type)
+    );
+
     hideCsvProgress();
 
   } catch (err) {
@@ -942,3 +1111,4 @@ function readFileAsText(file) {
 // debug-only — remove in post-launch cleanup (after 28-Apr-2026 launch)
 window.__getIngestionResult = () => getIngestionResult();
 window.__getBaseloadResult = () => getBaseloadResult();
+window.__getHeatLossResult = () => getHeatLossResult();

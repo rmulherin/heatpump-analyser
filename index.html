@@ -138,10 +138,28 @@
       <div class="results-summary" id="results-summary"></div>
     </section>
 
-    <!-- Placeholder sections for downstream modules -->
-    <section class="card hidden" id="analysis-card">
-      <h2>Analysis</h2>
-      <p class="form-hint">Modules 2–9 will appear here as they are implemented.</p>
+    <!-- Module 4: Heat Loss Estimation -->
+    <section class="card hidden" id="heat-loss-card">
+      <h2>Heat Loss Estimation</h2>
+      <div id="heat-loss-params">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="boiler-efficiency">Boiler efficiency</label>
+            <input type="number" id="boiler-efficiency" value="0.90" step="0.01" min="0.60" max="0.98">
+            <p class="form-hint">Typical condensing boiler: 0.85–0.92. Check your boiler manual.</p>
+          </div>
+          <div class="form-group">
+            <label for="floor-area">Floor area (m²) <span style="font-weight:normal;color:var(--colour-dark)">(optional)</span></label>
+            <input type="number" id="floor-area" placeholder="e.g. 85" step="1" min="0">
+            <p class="form-hint">Total heated floor area. Used to calculate heat loss per m².</p>
+          </div>
+        </div>
+        <button class="btn btn-primary" id="btn-recalculate-heat-loss">Recalculate</button>
+      </div>
+      <div id="heat-loss-results" class="hidden">
+        <div class="status-area" id="heat-loss-status"></div>
+        <dl id="heat-loss-summary"></dl>
+      </div>
     </section>
 
   </div>

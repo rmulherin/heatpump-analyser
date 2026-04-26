@@ -512,4 +512,14 @@ Verdict: **APPROVE WITH EDITS** — all six findings resolved inline. Implementa
 
 ## Implementation Deviations
 
-[None.]
+**D1 — `btn-secondary` absent, used `btn-primary`.** Pre-implementation check confirmed `btn-secondary` is not defined in `css/styles.css`. Used `btn-primary` for the Recalculate button as specified in the L2 fallback instruction.
+
+**D2 — `heat-loss-params` structure.** Plan HTML has `<div class="form-row" id="heat-loss-params">` (form-row and ID on the same element). Implemented as `<div id="heat-loss-params"><div class="form-row">…</div></div>` — outer div holds the ID, inner div holds the form-row class. Functionally identical; JS refs the ID only.
+
+**D3 — `floorAreaM2 > 0` guard on HLP.** Plan specifies `floorAreaM2 !== null ? htc / floorAreaM2 : null`. Implementation uses `floorAreaM2 !== null && floorAreaM2 > 0` — prevents division by zero if user enters 0 in the floor area field.
+
+**D4 — Recalculate button uses local progress/status fns.** Plan wires recalculate to `showProgress`/`showStatus` (Octopus main flow). Implemented with `() => {}` as progress fn (avoids firing the main progress bar on recalculate) and a local lambda that appends to `heatLossStatus` rather than the main `statusArea`. Exception messages therefore appear in the heat-loss panel rather than the general status area, which is more contextually appropriate.
+
+**D5 — `runHeatLoss` guards on all three upstream results.** Plan guards on `!baseload || !externalResult`. Implementation adds `!ingestion` as a third guard (consistent with `runBaseloadSeparation`'s pattern). No functional difference — if baseload is non-null, ingestion and external are always non-null in the current pipeline.
+
+**D6 — Browser testing not completed.** No dev server was available during this session. Calculations verified by manual cross-check against design doc formulae. All 20 tests (T1–T20) to be completed by Rhiannon during the user-test phase.
