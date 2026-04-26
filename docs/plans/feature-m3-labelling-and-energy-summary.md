@@ -1,7 +1,7 @@
 # Feature — M3 Labelling Fix and Energy Summary Table
 
 **Date:** 2026-04-26
-**Status:** ⏳ Requires approval
+**Status:** ✅ Approved — 2026-04-26
 **Depends on:** M3a, M3a-step-h, M3b, M4 all implemented
 
 ---
@@ -118,6 +118,8 @@ Proposed: `"Your electricity use rises in cold weather (estimated N kWh — poss
 - [ ] Step 4D warning in M4 uses neutral "cold-weather electricity uplift" framing
 - [ ] STEP_H_LIMITATIONS includes occupancy-correlation note
 - [ ] All existing M3 and M4 tests still pass after changes
+- [ ] (B1) No "page unresponsive" browser warning during Elexon fetch on a large date range; progress percentage visible in UI while fetch runs
+- [ ] (B2) SP count warnings reduced to a single summary line in the status panel; individual per-date messages suppressed to console only
 
 ---
 
@@ -133,3 +135,44 @@ Proposed: `"Your electricity use rises in cold weather (estimated N kWh — poss
 
 - `getIngestionResult()` is already imported in `app.js` (exposed as `window.__getIngestionResult`); no new imports needed
 - Energy table must handle the case where `electric_heating_kwh_estimate` is null (detection off) — cooling uplift is always available as `cdd_coefficient × sum_cdd` regardless of detection flag
+
+---
+
+## Design Review
+
+**Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Date:** 2026-04-26
+**Review type:** Plan review (pre-implementation)
+**Authoritative design:** `baseload-separation.md`, `heat-loss.md` (M3/M4 modules)
+
+### Context
+
+Plan produced by Sonnet following diagnostic testing on Rhiannon's real data (2026-04-26). Two labelling issues and an energy summary table were identified, plus two bugs (Elexon fetch blocking the browser; SP count warning noise). Initial review raised one HIGH finding: Change 5 was under-specified — `showProgressFn` was named as the callback but not defined, leaving Sonnet to infer the existing function signature. Rhiannon edited the plan to add the full specification before re-review.
+
+### Required changes for implementation
+
+No required changes remain. The HIGH finding was resolved by Rhiannon's edit to Change 5. Two missing success criteria (B1, B2) were added inline as a LOW observation.
+
+### Resolution of review changes
+
+1. **Change 5 progress callback under-specified (HIGH)** — resolved by Rhiannon's edit. Plan now specifies `showProgress(text, percent)` as the existing mechanism, `onProgress` as the optional third parameter to `fetchWholesalePrices`, the `await new Promise(r => setTimeout(r, 0))` yield, and the call site at app.js line 596.
+2. **Missing B1/B2 success criteria (LOW)** — resolved inline. Two criteria appended to Success criteria section.
+
+## Review Summary
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| CRITICAL | 0     | ✓ pass |
+| HIGH     | 1     | ✅ resolved |
+| MEDIUM   | 0     | ✓ pass |
+| LOW      | 1     | ✅ resolved |
+
+Verdict: APPROVE — all findings resolved before implementation; highest-risk item is Change 2 field names matching M3b result object exactly, covered by the "values matching console diagnostic" success criterion.
+
+---
+
+## Approval
+
+**Status:** ✅ Approved — 2026-04-26
+**Approved by:** Rhiannon (via Opus review)
+**Clarifications confirmed:** `setTimeout(r, 0)` yield is the correct browser event loop mechanism for B1. Change 5 call site is app.js line 596 inside `runExternalData`. Field names `electric_heating_kwh_estimate`, `cdd_coefficient_kwh_per_dd`, `sum_cdd_k_day` must match M3b result object exactly — verify at implementation time.
