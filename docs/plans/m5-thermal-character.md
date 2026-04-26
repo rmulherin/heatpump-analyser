@@ -612,24 +612,177 @@ window.__getThermalCharacterResult = () => getThermalCharacterResult();
 
 ---
 
-## Claude.ai Review — yyyy-mm-dd
+## Design Review
 
 **Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Date:** 2026-04-26
+**Review type:** Plan review (pre-implementation, second pass)
+**Authoritative design:** `~/Documents/git-repos/praxis-claude-hub/projects/tools/heatpump-analyser/design/thermal-character.md`
 
-### What is solid
-[To be completed by reviewer]
+### Context
 
-### Clarifications required before implementation
-[To be completed by reviewer]
+Two-pass review. Pass 1 raised three required design-level changes (Test 4 inverted
+synthesis, whole-day filter contract, winter-filter ambiguity for midnight-spanning
+off periods) and a few minor items. The Opus architect window updated the design doc
+in-pass for items in design-doc scope:
 
-### Minor observations (not blockers)
-[To be completed by reviewer]
+- Test 4 rewritten with explicit gas profile (14 HH off, 4 HH × 6.80 kWh, 2.083 kWh/HH
+  steady) and corrected expected output (~7,990 kJ/K at 3 iterations, within 15%
+  tolerance; broken-algo result ~13,000 kJ/K).
+- Step 4 winter filter switched from `daily_mean_temp_c` to `T_outdoor_off`
+  (the off period's own mean) — handles midnight-spanning off periods cleanly.
+- Step 4 condition 2 explicitly states the settled HH is the boundary marker and is
+  excluded from the warm-up sum.
+- `low_confidence` removed from the `validation_status` union (sub-threshold
+  confidence is communicated via warnings, not a separate status).
+
+This pass-2 review confirms the plan revision tracks the updated design doc and
+specifies the residual changes needed before implementation begins.
+
+### Required changes for implementation
+
+**1. Wall-construction warning is silently lost (HIGH).**
+
+§1i (`checkWallConstruction`) is described as "push warning" with no explicit
+return value, implying it mutates a `warnings` array passed as the third argument.
+§1k step 9 calls it as `checkWallConstruction(thermal_mass_kj_per_k, wallConstructionType, allWarnings)`.
+But §1k step 11's return concatenation is:
+
+```javascript
+warnings: [...spWarns, ...massWarns, ...tcWarns, ...(owWarn ? [owWarn] : [])]
+```
+
+— `allWarnings` (or whatever channel `checkWallConstruction` writes to) is not
+included. Test T10 explicitly verifies the wall-mismatch warning surfaces; as
+written, T10 fails.
+
+**Fix:** change `checkWallConstruction` to return `{ warning: string | null }`,
+matching the shape used by other helpers (`computeOccupancyWeights` returns
+`{ warning }`).
+
+- §1i — change description from "push warning" to "returns `{ warning: string | null }`
+  — `null` if no mismatch, else the warning string."
+- §1k step 9 — capture the return: `const { warning: wcWarn } = checkWallConstruction(thermal_mass_kj_per_k, wallConstructionType);`
+  (drop the third argument entirely — there is nothing to push to).
+- §1k step 11 — extend the warnings concatenation to include `wcWarn`:
+  ```javascript
+  warnings: [
+    ...spWarns,
+    ...massWarns,
+    ...tcWarns,
+    ...(owWarn ? [owWarn] : []),
+    ...(wcWarn ? [wcWarn] : []),
+  ]
+  ```
+
+**2. `daySummaries` is now an unused parameter in `estimateThermalMass` (LOW).**
+
+The pass-1 fix moved the winter filter from `dailyMeanTempC` (looked up via
+`daySummaries`) to a locally-computed `T_outdoor_off`. As a result, `daySummaries`
+is no longer referenced inside `estimateThermalMass`. The dead parameter should be
+dropped to keep the signature honest and avoid implying a dependency that doesn't
+exist.
+
+**Fix:**
+
+- §1g — change the function signature from `estimateThermalMass(heating, external, daySummaries, htc, eta, setpointC)`
+  to `estimateThermalMass(heating, external, htc, eta, setpointC)`.
+- §1k step 7 — update the call site to match the new signature
+  (`estimateThermalMass(heating, external, htc, eta, setpoint_c)`).
+
+**3. Settled-HH boundary needed in event detection, not just iteration (MEDIUM).**
+
+§1g step 4 of event detection requires checking `is_absence` over the off period
+**and the prospective warm-up phase** — but the warm-up phase boundary is currently
+only computed inside the iteration loop. This leaves the implementer with an
+implicit choice: re-do the settled scan during event detection, defer the
+warm-up-phase absence check into the iteration body, or ignore the warm-up portion
+of the absence check entirely. The plan should specify the answer.
+
+The clean answer is: **the warm-up boundary is iteration-invariant** — it depends
+only on `setpointC`, `htc`, `eta`, and per-HH `temp_c`, none of which change
+between iterations. Compute it once in event detection, cache on the event record,
+reuse in the iteration body.
+
+**Fix to §1g event detection** — add as a new step between current step 3
+(winter filter) and current step 4 (absence check):
+
+> **3a. Determine warm-up range (cached for the iteration loop).** From the
+> restart HH, scan forward (cap at 48 HH for safety) using the settled criterion:
+> for each HH `j`, compute
+> `ss_kwh = htc × (setpointC − external[j].temp_c) × 0.5 / (eta × 1000)`;
+> the first HH where `heating[j].heating_kwh ≤ 1.2 × ss_kwh` is the settled HH and
+> is **excluded** from the warm-up range. Cache the following on the event record:
+>
+> - `warmup_indices` — the list of HH indices in the warm-up phase
+> - `warmup_hh_count` — `warmup_indices.length`
+> - `E_warmup_kwh` — `sum(heating[i].heating_kwh for i in warmup_indices)`
+> - `T_outdoor_warmup` — `mean(external[i].temp_c for i in warmup_indices, skip nulls)`
+>
+> If any warm-up HH has `external[j].temp_c === null` for the settled-criterion
+> calculation, skip that HH (cannot evaluate settled criterion); if no settled HH
+> is found within 48 HH, treat all 48 as the warm-up range (existing risk-table
+> mitigation).
+
+**Fix to §1g step 4 (absence check)** — clarify it now uses the cached
+`warmup_indices`:
+
+> Skip if any HH in the off-period range OR in `warmup_indices` has
+> `is_absence === true`.
+
+**Fix to §1g iteration loop** — replace the per-iteration warm-up scan with
+cached values. The body becomes:
+
+```
+T_at_restart    = T_outdoor_off + (setpointC − T_outdoor_off) × exp(−t_off_hours / τ_seed)
+E_warmup_kj     = event.E_warmup_kwh × 3600
+T_mean_warmup   = (T_at_restart + setpointC) / 2
+t_warmup_hours  = event.warmup_hh_count × 0.5
+E_heatloss_kj   = htc × (T_mean_warmup − event.T_outdoor_warmup) × t_warmup_hours × 3.6
+E_net_kj        = E_warmup_kj × eta − E_heatloss_kj
+delta_T         = setpointC − T_at_restart
+
+if E_net_kj > 0 AND delta_T > 0.5:
+  C_estimates.push(E_net_kj / delta_T)
+```
+
+This also resolves an existing risk-table mitigation
+("`T_outdoor_warmup` null (all temp_c null in warm-up phase)") — the event would
+be discarded in the cache step (`T_outdoor_warmup` cannot be computed) rather than
+inside the iteration.
+
+### Resolution of review changes
+
+[To be completed by Sonnet after applying the above changes inline to the plan body.]
+
+1. **Wall-construction warning channel** — [how resolved]
+2. **Unused `daySummaries` parameter** — [how resolved]
+3. **Settled-HH boundary cached in event detection** — [how resolved]
+
+## Review Summary
+
+| Severity | Count | Status                            |
+|----------|-------|-----------------------------------|
+| CRITICAL | 0     | ✓ pass                            |
+| HIGH     | 1     | ⚠ warn — fix #1 before implement  |
+| MEDIUM   | 1     | ⚠ warn — fix #3 before implement  |
+| LOW      | 1     | — fix #2 in same edit pass        |
+
+Verdict: **APPROVE WITH EDITS** — three required changes documented above; once
+applied inline by the implementer, plan is ready to implement.
 
 ---
 
 ## Approval
 
-**Status:** Awaiting approval.
+**Status:** ⚠ Approved with edits — 2026-04-26
+**Approved by:** Rhiannon (via Opus review)
+**Clarifications confirmed:**
+- Test 4 synthetic-data construction uses derived gas profile (27.21 kWh / 4 HH = 6.80 kWh per HH) per revised design Test 4; expected ~7,990 kJ/K at 3 iterations within 15% tolerance.
+- Winter filter for warm-up events uses `T_outdoor_off` (off period's own mean), not a calendar-day mean.
+- `validation_status` union has no `low_confidence` value; sub-threshold confidence surfaces via warnings only.
+- Settled HH is the boundary marker excluded from the warm-up sum (resolved in Pass 1 design-doc clarification).
+- Wall-construction input lives in M4's heat-loss card for now; UI placement may be revisited when M10 is designed.
 
 ---
 
