@@ -176,6 +176,15 @@ Run 2026-04-26, console script batch.
 
 ---
 
+## UX bugs found during testing (2026-04-26)
+
+| # | Bug | Impact | Fix needed |
+|---|-----|--------|------------|
+| B1 | **No progress shown during Elexon price fetch** — browser shows "page unresponsive" warning; user must click "Wait". The chunked Elexon fetch loop (stride 7, ~52 chunks for a year) runs with no progress callbacks, blocking the UI thread. | User thinks the page has crashed | Add progress updates inside the chunk loop in `runExternalData()` / `fetchWholesalePrices()` — call `showProgressFn` with chunk count. May also need `await` yield points to keep browser responsive. |
+| B2 | **"Unexpected SP count" warnings flood the UI on load** — 13 lines like "Unexpected SP count 47 for 2025-06-13" appear in the status area. These are genuine Elexon data gaps (not a code bug) but look alarming and make the UI look broken. | Poor UX, users alarmed by "errors" that are actually normal | Suppress individual SP count warnings from UI; replace with a single summary if any gaps found: "Wholesale price data has gaps on N dates — affected periods will use null prices." Keep individual warnings as `console.warn` only. |
+
+---
+
 ## Open issues (not bugs — design/labelling)
 
 | Issue | Status |

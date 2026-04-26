@@ -56,6 +56,18 @@ Table is only rendered when both `getBaseloadResult()` and `getIngestionResult()
 Add to `STEP_H_LIMITATIONS`:
 > "Electricity use that correlates with temperature may reflect occupancy patterns — households tend to spend more time at home in very cold or very hot weather, increasing electricity use from always-on appliances and lighting. This is indistinguishable from heating or cooling equipment in aggregate daily data."
 
+### Change 5 — Add progress updates during Elexon price fetch
+
+**File:** `js/app.js` (or wherever `fetchWholesalePrices` / the chunk loop lives)
+
+The Elexon chunked fetch loop (stride 7, ~52 chunks/year) blocks the browser long enough to trigger the "page unresponsive" warning with no visible progress. Fix: call `showProgressFn` with a percentage after each chunk completes. Also add at least one `await new Promise(r => setTimeout(r, 0))` yield per chunk to keep the browser responsive.
+
+### Change 6 — Suppress individual SP count warnings from UI
+
+**File:** `js/app.js` or `js/external-data.js` (wherever "Unexpected SP count" strings are generated)
+
+Replace per-date "Unexpected SP count N for YYYY-MM-DD" lines in the UI with a single summary if any gaps are found: e.g. "Wholesale price data incomplete on N dates — affected periods will use null prices." Retain individual messages as `console.warn` only. The last date's partial count (today/yesterday with only 3 SPs) should also be suppressed from the UI.
+
 ### Change 4 — Soften M4 Step 4D warning text
 
 **File:** `js/heat-loss.js`
