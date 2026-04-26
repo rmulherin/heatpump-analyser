@@ -1,7 +1,7 @@
 # Feature — M3 Labelling Fix and Energy Summary Table
 
 **Date:** 2026-04-26
-**Status:** ✅ Approved — 2026-04-26
+**Status:** ✅ Implemented — 2026-04-26 (commit f74c1f1)
 **Depends on:** M3a, M3a-step-h, M3b, M4 all implemented
 
 ---
