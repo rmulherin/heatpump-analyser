@@ -1,7 +1,7 @@
 # Module 5 — Thermal Character
 
 **Date:** 2026-04-26
-**Status:** Awaiting approval — review via claude.ai before implementation begins.
+**Status:** ✅ Approved — implementation may begin.
 
 ---
 
@@ -174,7 +174,7 @@ Plausibility warnings if setpoint outside `[SETPOINT_LOW_WARN_C, SETPOINT_HIGH_W
 
 Returns `{ setpoint_c, setpoint_days_used, warnings }`.
 
-#### 1g. `estimateThermalMass(heating, external, daySummaries, htc, eta, setpointC)`
+#### 1g. `estimateThermalMass(heating, external, htc, eta, setpointC)`
 
 Requires `setpointC` non-null. Returns `{ thermal_mass_kj_per_k, events_used, warnings }`.
 
@@ -191,7 +191,21 @@ For each candidate:
    `T_outdoor_off !== null AND T_outdoor_off < WINTER_TEMP_MAX_C` (10 °C). The off
    period's own mean replaces the previous calendar-day-mean test, so off periods
    spanning midnight are handled cleanly. Skip the candidate if the gate fails.
-4. Skip if any HH in the off period OR in the prospective warm-up phase has
+3a. **Determine warm-up range (cached for the iteration loop).** From the restart HH,
+    scan forward (cap at 48 HH for safety) using the settled criterion: for each HH `j`,
+    compute `ss_kwh = htc × (setpointC − external[j].temp_c) × 0.5 / (eta × 1000)`; the
+    first HH where `heating[j].heating_kwh ≤ 1.2 × ss_kwh` is the settled HH and is
+    **excluded** from the warm-up range. Cache on the event record:
+    - `warmup_indices` — list of HH indices in the warm-up phase
+    - `warmup_hh_count` — `warmup_indices.length`
+    - `E_warmup_kwh` — `sum(heating[i].heating_kwh for i in warmup_indices)`
+    - `T_outdoor_warmup` — `mean(external[i].temp_c for i in warmup_indices, skip nulls)`
+
+    If any warm-up HH has `external[j].temp_c === null` for the settled-criterion
+    calculation, skip that HH; if no settled HH is found within 48 HH, treat all 48 as
+    the warm-up range. If `T_outdoor_warmup` cannot be computed (all nulls), discard the
+    candidate.
+4. Skip if any HH in the off-period range OR in `warmup_indices` has
    `is_absence === true`.
 
 Each surviving candidate becomes a `validEvent` carrying: off-period HH range,
@@ -211,27 +225,13 @@ last_good_estimates = null   // C_estimates from the most recent non-empty itera
 for iter in 1..3:
   C_estimates = []
   for each event in validEvents:
-    T_outdoor_off = event.T_outdoor_off            // cached pre-iteration
-    t_off_hours   = event.t_off_hours
-    T_at_restart  = T_outdoor_off + (setpointC − T_outdoor_off) × exp(−t_off_hours / τ_seed)
-
-    Scan warm-up phase from event.restart index forward (cap at 48 HH for safety):
-      For each HH j from restart:
-        ss_kwh = htc × (setpointC − external[j].temp_c) × 0.5 / (eta × 1000)
-        if heating[j].heating_kwh ≤ 1.2 × ss_kwh: this is the settled HH — stop (do NOT include)
-        else: include in warm-up sum
-
-      E_warmup_kwh    = sum(heating_kwh over warm-up HH, settled HH excluded)
-      warmup_hh_count = count of those HH
-
-    E_warmup_kj      = E_warmup_kwh × 3600
-    T_mean_warmup    = (T_at_restart + setpointC) / 2
-    T_outdoor_warmup = mean(external[i].temp_c over warm-up HH, skip nulls)
-    t_warmup_hours   = warmup_hh_count × 0.5
-    E_heatloss_kj    = htc × (T_mean_warmup − T_outdoor_warmup) × t_warmup_hours × 3.6
-
-    E_net_kj = E_warmup_kj × eta − E_heatloss_kj
-    delta_T  = setpointC − T_at_restart
+    T_at_restart   = event.T_outdoor_off + (setpointC − event.T_outdoor_off) × exp(−event.t_off_hours / τ_seed)
+    E_warmup_kj    = event.E_warmup_kwh × 3600
+    T_mean_warmup  = (T_at_restart + setpointC) / 2
+    t_warmup_hours = event.warmup_hh_count × 0.5
+    E_heatloss_kj  = htc × (T_mean_warmup − event.T_outdoor_warmup) × t_warmup_hours × 3.6
+    E_net_kj       = E_warmup_kj × eta − E_heatloss_kj
+    delta_T        = setpointC − T_at_restart
 
     if E_net_kj > 0 AND delta_T > 0.5:
       C_estimates.push(E_net_kj / delta_T)
@@ -240,11 +240,8 @@ for iter in 1..3:
     last_good_estimates = C_estimates
     C_median = median(C_estimates)
     τ_seed   = C_median / (htc × 3.6)
-  // else: keep last_good_estimates and τ_seed from previous iteration; do not break,
-  // continue trying later iterations (a later iteration's τ_seed update may still help,
-  // but since τ_seed is unchanged here the loop simply re-runs with the same seed and
-  // produces the same empty result — the carry-over guarantees we use the best result
-  // we have rather than discarding it).
+  // else: keep last_good_estimates and τ_seed; carry-over guarantees we use the best
+  // result we have rather than discarding it.
 ```
 
 **Final-result selection:**
@@ -274,11 +271,13 @@ rating thresholds (< 6000 → "low", 6000–14999 → "medium", 15000–29999 �
 
 Time constant warnings: `> TAU_HIGH_WARN_HOURS` or `< TAU_LOW_WARN_HOURS`.
 
-#### 1i. `checkWallConstruction(thermalMassKjPerK, wallConstructionType, warnings)`
+#### 1i. `checkWallConstruction(thermalMassKjPerK, wallConstructionType)`
+
+Returns `{ warning: string | null }` — `null` if no mismatch, else the warning string.
 
 If `wallConstructionType` non-null and `thermalMassKjPerK` non-null: check against
-`WALL_CONSTRUCTION_RANGES`. If outside range, push warning with measured and expected
-range values.
+`WALL_CONSTRUCTION_RANGES`. If outside range, return warning string with measured and
+expected range values. Otherwise return `{ warning: null }`.
 
 #### 1j. `computeValidationStatus(setpointC, thermalMassKjPerK, setpointDaysUsed, eventsUsed)`
 
@@ -313,10 +312,10 @@ Steps:
 5. `{ occupancy_weights, warning: owWarn } = computeOccupancyWeights(heating, daySummaries)`.
 6. `{ setpoint_c, setpoint_days_used, warnings: spWarns } = estimateSetpoint(heating, external, htc, eta)`.
 7. If `setpoint_c !== null`:
-   `{ thermal_mass_kj_per_k, events_used, warnings: massWarns } = estimateThermalMass(heating, external, daySummaries, htc, eta, setpoint_c)`.
+   `{ thermal_mass_kj_per_k, events_used, warnings: massWarns } = estimateThermalMass(heating, external, htc, eta, setpoint_c)`.
    Else: `thermal_mass_kj_per_k = null, events_used = 0, massWarns = []`.
 8. `{ time_constant_hours, thermal_mass_rating, tcWarns } = computeRatingAndTimeConstant(thermal_mass_kj_per_k, htc)`.
-9. `checkWallConstruction(thermal_mass_kj_per_k, wallConstructionType, allWarnings)`.
+9. `const { warning: wcWarn } = checkWallConstruction(thermal_mass_kj_per_k, wallConstructionType)`.
 10. `validation_status = computeValidationStatus(...)`.
 11. Assemble and return the output object. Internal local-variable names are mapped onto
     the design doc's output field names as follows (only fields where the names differ
@@ -339,7 +338,13 @@ Steps:
       setpoint_days_used,                      // from estimateSetpoint
       thermal_mass_events_used: events_used,   // renamed
       validation_status,                       // from computeValidationStatus
-      warnings: [...spWarns, ...massWarns, ...tcWarns, ...(owWarn ? [owWarn] : [])],
+      warnings: [
+        ...spWarns,
+        ...massWarns,
+        ...tcWarns,
+        ...(owWarn ? [owWarn] : []),
+        ...(wcWarn ? [wcWarn] : []),
+      ],
     };
     ```
 
@@ -753,11 +758,9 @@ inside the iteration.
 
 ### Resolution of review changes
 
-[To be completed by Sonnet after applying the above changes inline to the plan body.]
-
-1. **Wall-construction warning channel** — [how resolved]
-2. **Unused `daySummaries` parameter** — [how resolved]
-3. **Settled-HH boundary cached in event detection** — [how resolved]
+1. **Wall-construction warning channel** — §1i changed to return `{ warning: string | null }` (no third parameter). §1k step 9 updated to `const { warning: wcWarn } = checkWallConstruction(...)`. §1k step 11 warnings array extended with `...(wcWarn ? [wcWarn] : [])`.
+2. **Unused `daySummaries` parameter** — §1g signature updated to `estimateThermalMass(heating, external, htc, eta, setpointC)`. §1k step 7 call site updated to match.
+3. **Settled-HH boundary cached in event detection** — Step 3a added to event detection: scans from restart HH, caches `warmup_indices`, `warmup_hh_count`, `E_warmup_kwh`, `T_outdoor_warmup` on the event record. Step 4 (absence check) updated to use `warmup_indices`. Iteration loop simplified to read all warm-up values from cached fields — no per-iteration settled-criterion scan.
 
 ## Review Summary
 
