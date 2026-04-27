@@ -1,7 +1,7 @@
 # Module 8 — Pricing Engine
 
 **Date:** 2026-04-27
-**Status:** Awaiting approval — review via claude.ai before implementation begins.
+**Status:** ⚠ Approved with edits — 2026-04-27
 **Depends on:**
 - `docs/plans/m7-scenario-consumption.md` — must be ✅ Approved AND merged. M8 Phase B
   consumes `getScenarioConsumptionResult().scenarios` and `validation_status`.
@@ -719,6 +719,125 @@ the first and last calendar months of the data period.
 - [ ] **T15: SVT vs HH cost ordering (design doc test 11)** — with Rhiannon's real data,
   `dumb_hp_hh.annual_cost_gbp ≤ dumb_hp_svt.annual_cost_gbp` when mean HH rate is below
   `(SVT_rate − overhead)`. Verify ordering makes directional sense.
+
+---
+
+## Design Review — 2026-04-27
+
+**Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Review date:** 2026-04-27
+**Design doc reviewed:** `pricing-engine.md` (praxis-claude-hub)
+
+---
+
+### Scope decisions — accepted as stated
+
+All four scope decisions are correct. Formally accepted:
+
+1. **SD1 — Phase A and B both run after M7.** M7's approved dispatch uses raw wholesale;
+   M8's overhead-adjusted rate is not needed by M7. Running both phases after M7 is simpler
+   with no correctness cost. ✓
+2. **SD2 — Standing charges from tariff data in Phase A; params overrides in Phase B only.** ✓
+3. **SD3 — SVT rate and HH overhead at Ofgem cap defaults; standing charges pre-filled from
+   tariff data.** Correct — no per-user equivalent for SVT rate in M1 output. ✓
+4. **SD4 — Monthly partial threshold = 20 days.** Matches design doc. ✓
+
+---
+
+### What is solid
+
+- **`SCENARIO_FUELS` and `SCENARIO_ELEC_RATE_TYPE` lookup tables.** All six scenarios
+  correctly encoded. The table-driven design avoids per-scenario conditional branches in the
+  HH loop, making the standing-charge and rate logic easy to audit against the design doc. ✓
+
+- **`electricityRateForHH` helper isolates the only per-scenario branching.** SVT vs HH
+  dispatch logic lives in one place; T5 directly tests it. ✓
+
+- **Negative wholesale passthrough.** No clamp in the HH rate construction. T3 explicitly
+  verifies this. Critical for smart scenarios to exploit near-zero/negative price windows. ✓
+
+- **Gap tariff handling.** `findLast` fallback to nearest window + warning is correct
+  behaviour. The warning fires only once per Phase A run. ✓
+
+- **Phase A/B separation.** `prepareRates` (Phase A) builds rate arrays once; `computeCosts`
+  (Phase B) reuses them. Recalculating Phase B when only the SVT rate changes avoids
+  rebuilding the 17,520-entry arrays unnecessarily. ✓
+
+- **Monthly breakdown structural consistency.** Both the annual loop and the monthly loop
+  use the same `electricityRateForHH` helper and the same `rateMetadata.gas_rate_by_hh`.
+  The plan correctly notes consistency is structural — no explicit reconciliation needed. ✓
+
+- **M1 field name corrections.** The Research Findings table accurately corrects the
+  design doc's field names (`tariff_rates.gas`, `rate_p_kwh`, `standing_p_day`, etc.)
+  against the live code. Sonnet must use the plan's corrected names throughout. ✓
+
+---
+
+### Required changes before implementation
+
+**MEDIUM — §1d: `computeCosts` calls `buildMonthGroups(ingestion.consumption)` but
+`ingestion` is not in the function signature**
+
+`computeCosts(rateMetadata, scenarioResult, params)` has no access to
+`ingestion.consumption`. The call `buildMonthGroups(ingestion.consumption)` would throw
+a ReferenceError at runtime.
+
+Fix: in `prepareRates` (§1c), add consumption timestamps to the return value:
+
+```javascript
+return {
+  gas_rate_by_hh,
+  elec_hh_rate_by_hh,
+  svt_rate_p_per_kwh: ...,
+  gas_standing_charge_p_per_day: gas_standing_p_day,
+  elec_standing_charge_p_per_day: elec_standing_p_day,
+  data_period_days,
+  consumption: ingestion.consumption,  // ← ADD: needed by computeCosts for monthly grouping
+  warnings,
+};
+```
+
+Then in `computeCosts`, call `buildMonthGroups(rateMetadata.consumption)`.
+This keeps `computeCosts`'s signature unchanged.
+
+---
+
+### Minor observations (not blockers)
+
+1. **LOW — `const warnings = [];` missing from `prepareRates` pseudo-code.** The return
+   statement includes `warnings` and `warnings.push(...)` is called in the body, but no
+   declaration is shown. Must declare at the top of `prepareRates`. The pattern is
+   consistent with all previous modules.
+
+2. **LOW — `const pricingWarnings = [];` missing from `computeCosts` pseudo-code.** Same
+   issue — used in return and body but not declared. Must be added.
+
+3. **LOW — `const hh_overhead = ...` declared inside the 17,520-iteration loop.** Hoist
+   outside: `const hh_overhead = params.hh_overhead_p_per_kwh ?? PE_CONFIG.HH_OVERHEAD_DEFAULT_P;`
+   before the loop.
+
+4. **LOW — `parseFloat(...) || default` rejects user input of 0 in `readRateParams`.** The
+   design doc explicitly requires SVT rate = 0 to be accepted ("user may be testing"). Use
+   a NaN-only fallback: `(v => isNaN(v) ? fallback : v)(parseFloat(input.value))`. Apply
+   to all four inputs in `readRateParams`.
+
+5. **LOW — §2g comment-line instruction will be stale by implementation time.** M6 and M7
+   are already approved and will be wired before M8 is implemented. Update §2g to: "Add
+   `await runPricingEngine(...)` immediately after the existing `runScenarioConsumption(...)`
+   call in both pipelines."
+
+---
+
+## Approval
+
+**Status:** ⚠ Approved with edits — 2026-04-27
+**Approved by:** Rhiannon (via Opus review)
+
+One MEDIUM required change before implementation:
+- **§1c/§1d** — Add `consumption: ingestion.consumption` to `rateMetadata` return in
+  `prepareRates`; update `computeCosts` call to `buildMonthGroups(rateMetadata.consumption)`.
+
+Four LOW observations recommended but not conditions of approval.
 
 ---
 
