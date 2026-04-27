@@ -706,41 +706,51 @@ is correct regardless.
 
 ## Success criteria
 
-- [ ] **T1: Net investment — basic.** Installation £12,500, grant £7,500, avoided AC £0 →
+- [x] **T1: Net investment — basic.** Installation £12,500, grant £7,500, avoided AC £0 →
   `net_full_hp = £5,000`. With avoided AC £1,500 → `net_full_hp = £3,500`. (Design doc test 1.)
+  ✅ Node test-m9.mjs T1a/T1b/T1c — 2026-04-27.
 
-- [ ] **T2: Net investment — floor.** Installation £8,000, grant £7,500, avoided AC £2,000 →
+- [x] **T2: Net investment — floor.** Installation £8,000, grant £7,500, avoided AC £2,000 →
   unclamped −£1,500 → clamped to £0. (Design doc test 2.)
+  ✅ Node test-m9.mjs T2a/T2b — 2026-04-27.
 
-- [ ] **T3: Payback — positive case.** Current £2,200, dumb_hp_svt £1,900, net_investment
+- [x] **T3: Payback — positive case.** Current £2,200, dumb_hp_svt £1,900, net_investment
   £5,000 → saving £300, payback ≈ 16.7 years. (Design doc test 3.)
+  ✅ Node test-m9.mjs T3a/T3b/T3c — 2026-04-27.
 
-- [ ] **T4: Standing charges in payback.** Annual saving equals difference in total annual
+- [x] **T4: Standing charges in payback.** Annual saving equals difference in total annual
   costs (including standing charges), verified by inspection in browser devtools.
   (Design doc test 4.)
+  ✅ Node test-m9.mjs T4 (all 5 HP scenarios: saving = currentAnnual − hpAnnual verified) — 2026-04-27.
 
-- [ ] **T5: Payback — no saving.** Current £1,800, dumb_hp_svt £1,900 → saving −£100,
+- [x] **T5: Payback — no saving.** Current £1,800, dumb_hp_svt £1,900 → saving −£100,
   `payback_status = 'no_saving'`, `payback_years = null`. (Design doc test 5.)
+  ✅ Node test-m9.mjs T5a/T5b — 2026-04-27.
 
-- [ ] **T6: Sensitivity grid direction — gas multiplier.** At `(gas_mult=1.2, elec_mult=1.0)`,
+- [x] **T6: Sensitivity grid direction — gas multiplier.** At `(gas_mult=1.2, elec_mult=1.0)`,
   boiler cost increases, HP saving increases, payback decreases relative to `(1.0, 1.0)`.
   (Design doc test 6.)
+  ✅ Node test-m9.mjs T6a/T6b (current=gas-heavy, HP=elec-heavy; payback verified numerically) — 2026-04-27.
 
-- [ ] **T7: COP sensitivity direction.** `cop_mult = 0.85` → `scaled_elec × (1/0.85)` →
+- [x] **T7: COP sensitivity direction.** `cop_mult = 0.85` → `scaled_elec × (1/0.85)` →
   HP costs more → payback increases vs `cop_mult = 1.0`. Fails if same direction as rate
   rescaling. (Design doc test 7.)
+  ✅ Node test-m9.mjs T7a/T7b — 2026-04-27.
 
-- [ ] **T8: Break-even numerical check.** Gas total data-period £1,400 → gas_energy_dp_pence
+- [x] **T8: Break-even numerical check.** Gas total data-period £1,400 → gas_energy_dp_pence
   = 140,000. Gas SC: 31.66 p/day × 365 days ≈ 11,556 pence (or data-period equivalent).
   HP elec kWh = 5,200. Expected: `svt_be_p ≈ (140,000 + 11,556) / 5,200 ≈ 29.1p` (using
   365-day data period; design doc reference T8 uses different inputs — verify against
   design doc). (Design doc test 8 — verify formula and units match.)
+  ✅ Node test-m9.mjs T8a/T8b/T8c (svt_be≈29.1p, gas_be non-null, interpretation string verified) — 2026-04-27.
 
-- [ ] **T9: All-no-saving warning.** All HP scenarios cost more than current → warning
+- [x] **T9: All-no-saving warning.** All HP scenarios cost more than current → warning
   emitted, all `payback_status = 'no_saving'`. (Design doc test 9.)
+  ✅ Node test-m9.mjs T9a/T9b — 2026-04-27.
 
-- [ ] **T10: BUS grant = 0.** `bus_grant_gbp = 0` → `net_investment = installation_cost`.
+- [x] **T10: BUS grant = 0.** `bus_grant_gbp = 0` → `net_investment = installation_cost`.
   Payback increases proportionally. (Design doc test 10.)
+  ✅ Node test-m9.mjs T10a/T10b (net_inv=12500, payback=41.67y) — 2026-04-27.
 
 - [ ] **T11: Financial card visible** — card renders after M9 runs; payback table shows all
   5 HP scenarios with correct display names.

@@ -375,6 +375,50 @@ Ran via `node test-m8.mjs`. 24 assertions. All pass.
 
 ---
 
+### M9 — Financial Analysis: synthetic unit tests (`test-m9.mjs`)
+
+Ran via `node test-m9.mjs`. 28 assertions. All pass.
+
+**Environment:** Windows 11, Node v24. **Date:** 2026-04-27.
+
+| ID | Description | Result | Notes |
+|----|-------------|--------|-------|
+| CONFIG | FA_CONFIG exports BUS grant default £7,500; 5 gas multipliers | ✅ | Export smoke test |
+| T1a | full HP net investment = £5,000 (12500−7500) | ✅ | |
+| T1b | hybrid net investment = £2,500 (10000−7500) | ✅ | |
+| T1c | avoided_ac £1,500 → full HP net investment = £3,500 | ✅ | |
+| T2a | full HP clamped to £0 (8000−7500−2000=−1500→0) | ✅ | floor at 0 |
+| T2b | hybrid not clamped: 10000−9500=£500 | ✅ | Only full HP was clamped |
+| T3a | annual_saving = £300 (2200−1900) | ✅ | |
+| T3b | payback_years = 16.667 (5000/300) | ✅ | |
+| T3c | payback_status = "positive" | ✅ | |
+| T4 (×5) | For all 5 HP scenarios: annual_saving = currentAnnual − hpAnnual | ✅ | Saving invariant verified for each scenario |
+| T5a | payback_status = "no_saving" when HP costs more | ✅ | |
+| T5b | payback_years = null when no saving | ✅ | |
+| T6a | grid(1.0,1.0) payback = 8.33y | ✅ | current=gas-heavy, HP=elec-heavy setup |
+| T6b | grid(1.2,1.0) payback < grid(1.0,1.0) | ✅ | Rising gas → savings improve → payback shorter |
+| T7a | cop_axis(1.0) payback = 8.33y | ✅ | |
+| T7b | cop_mult=0.85 → higher payback than cop_mult=1.0 | ✅ | Lower COP → more electricity → worse economics |
+| T8a | svt_be_p ≈ 29.1p/kWh (formula: (gas_dp_pence+gas_sc_pence)/elec_kwh) | ✅ | £1,400 gas, 31.66 p/day × 365, 5,200 kWh HP |
+| T8b | gas_to_elec_ratio_at_break_even non-null | ✅ | |
+| T8c | interpretation string contains "29.1p/kWh" | ✅ | |
+| T9a | all 5 HP scenarios payback_status = "no_saving" | ✅ | |
+| T9b | all-no-saving warning emitted | ✅ | |
+| T10a | bus_grant=0 → net_investment = £12,500 (full installation) | ✅ | |
+| T10b | payback = 41.67y (12500/300) | ✅ | Proportionally larger than T3b's 16.67y |
+
+**Total: 28/28 ✅**
+
+### M9 — Financial Analysis: browser tests
+
+| ID | Description | Result | Notes |
+|----|-------------|--------|-------|
+| T11 | Financial card visible after M9 runs; payback table shows all 5 HP scenarios with correct display names | ⏳ | Pending user browser test |
+| T12 | Change installation cost + Recalculate → updated payback for all scenarios | ⏳ | Pending user browser test |
+| T13 | Break-even interpretation string renders with Rhiannon's real data; directional sense check | ⏳ | Pending user browser test |
+
+---
+
 ### Deferred (blocked — cannot run without missing data or state)
 
 | ID | Module | Reason |
