@@ -1,7 +1,7 @@
 # Module 8 — Pricing Engine
 
 **Date:** 2026-04-27
-**Status:** ⚠ Approved with edits — 2026-04-27
+**Status:** ✅ Approved — 2026-04-27
 **Depends on:**
 - `docs/plans/m7-scenario-consumption.md` — must be ✅ Approved AND merged. M8 Phase B
   consumes `getScenarioConsumptionResult().scenarios` and `validation_status`.
@@ -860,14 +860,22 @@ This keeps `computeCosts`'s signature unchanged.
 
 ## Approval
 
-**Status:** ⚠ Approved with edits — 2026-04-27
+**Status:** ✅ Approved — 2026-04-27 (re-reviewed after Sonnet edits)
 **Approved by:** Rhiannon (via Opus review)
 
-One MEDIUM required change before implementation:
-- **§1c/§1d** — Add `consumption: ingestion.consumption` to `rateMetadata` return in
-  `prepareRates`; update `computeCosts` call to `buildMonthGroups(rateMetadata.consumption)`.
+All required changes applied and verified:
+- **§1c/§1d** — `consumption: ingestion.consumption` in `rateMetadata`; `buildMonthGroups(rateMetadata.consumption)`. ✓
+- `warnings` and `pricingWarnings` declarations added. ✓
+- `hh_overhead` hoisted outside loop. ✓
+- `parseRate` helper replaces `||` pattern. ✓
+- §2g updated to explicit wiring instruction. ✓
 
-Four LOW observations recommended but not conditions of approval.
+**Additional change (commit 7487b05):** `ScenarioCost` now exposes `gas_energy_cost_gbp` and
+`elec_energy_cost_gbp` separately. Sound enhancement; design doc deviation to record after
+implementation.
+
+**Trivial artefact:** stray triple-backtick fence after `parseRate` commentary in §2c. Does
+not affect implementation.
 
 ---
 
