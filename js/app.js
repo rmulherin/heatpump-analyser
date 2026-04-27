@@ -41,6 +41,12 @@ import {
   getHeatLossResult,
 } from './heat-loss.js';
 
+import {
+  estimateThermalCharacter,
+  setThermalCharacterResult,
+  getThermalCharacterResult,
+} from './thermal-character.js';
+
 // ===== Module 3 — Label maps =====
 
 const BASELOAD_METHOD_LABELS = {
@@ -75,6 +81,15 @@ const SOLAR_RATING_DISPLAY = {
   'good': 'Good',
   'high': 'High',
   'very_high': 'Very high',
+};
+
+// ===== Module 5 — Label maps =====
+
+const THERMAL_MASS_RATING_LABELS = {
+  low:       'Low (lightweight — timber frame or thin construction)',
+  medium:    'Medium (typical cavity-brick semi-detached)',
+  high:      'High (solid brick — 1930s–1950s terrace or semi)',
+  very_high: 'Very high (solid stone, large Victorian, concrete)',
 };
 
 // ===== DOM References =====
@@ -123,6 +138,14 @@ const heatLossStatus = document.getElementById('heat-loss-status');
 const boilerEfficiencyInput = document.getElementById('boiler-efficiency');
 const floorAreaInput = document.getElementById('floor-area');
 const btnRecalculateHeatLoss = document.getElementById('btn-recalculate-heat-loss');
+
+// Thermal character DOM references
+const thermalCharCard       = document.getElementById('thermal-char-card');
+const thermalCharResults    = document.getElementById('thermal-char-results');
+const thermalCharStatus     = document.getElementById('thermal-char-status');
+const thermalCharSummary    = document.getElementById('thermal-char-summary');
+const wallConstructionInput = document.getElementById('wall-construction');
+const btnRecalcThermalChar  = document.getElementById('btn-recalculate-thermal-char');
 
 // ===== Tab Switching =====
 const tabBtns = document.querySelectorAll('.tab-btn');
@@ -489,6 +512,12 @@ async function continueWithProperty(apiKey) {
 
   // Step 11: Trigger Module 4 — Heat Loss Estimation
   await runHeatLoss(
+    (text) => showProgress(text, undefined),
+    (msg, type) => showStatus(msg, type)
+  );
+
+  // Step 12: Trigger Module 5 — Thermal Character
+  await runThermalCharacter(
     (text) => showProgress(text, undefined),
     (msg, type) => showStatus(msg, type)
   );
@@ -967,6 +996,115 @@ btnRecalculateHeatLoss.addEventListener('click', async () => {
   btnRecalculateHeatLoss.disabled = false;
 });
 
+// ===== Module 5: Thermal Character Orchestration =====
+
+function displayThermalCharacterResults(result) {
+  thermalCharStatus.innerHTML  = '';
+  thermalCharSummary.innerHTML = '';
+  thermalCharResults.classList.remove('hidden');
+
+  for (const warning of result.warnings) {
+    const div = document.createElement('div');
+    div.className = 'status-msg warning';
+    div.textContent = warning;
+    thermalCharStatus.appendChild(div);
+  }
+
+  if (result.validation_status === 'no_htc') {
+    const div = document.createElement('div');
+    div.className = 'status-msg info';
+    div.textContent = 'Heat loss data not available — thermal character estimation requires a heat loss result.';
+    thermalCharStatus.appendChild(div);
+    return;
+  }
+
+  if (result.validation_status === 'no_gas') {
+    const div = document.createElement('div');
+    div.className = 'status-msg info';
+    div.textContent = 'No gas supply — thermal character estimation requires gas data.';
+    thermalCharStatus.appendChild(div);
+    return;
+  }
+
+  if (result.validation_status === 'insufficient_data') return;
+
+  const fmt = (v, dp = 0) => v !== null && v !== undefined ? v.toFixed(dp) : '—';
+  const rows = [];
+
+  if (result.setpoint_c !== null) {
+    rows.push(['Inferred thermostat setpoint', `${fmt(result.setpoint_c, 1)}°C`]);
+  }
+  if (result.thermal_mass_kj_per_k !== null) {
+    rows.push(['Thermal mass', `${Math.round(result.thermal_mass_kj_per_k).toLocaleString()} kJ/K`]);
+  }
+  if (result.time_constant_hours !== null) {
+    rows.push(['Thermal time constant', `${fmt(result.time_constant_hours, 1)} hours`]);
+  }
+  if (result.thermal_mass_rating !== null) {
+    rows.push(['Thermal mass rating', THERMAL_MASS_RATING_LABELS[result.thermal_mass_rating] ?? result.thermal_mass_rating]);
+  }
+
+  const occupancyLabel = result.occupancy_weights !== null
+    ? 'Available (feeds pre-heating optimiser)'
+    : 'Insufficient data';
+  rows.push(['Occupancy pattern', occupancyLabel]);
+
+  rows.push(['Half-hourly periods used (setpoint fit)', result.setpoint_days_used]);
+  rows.push(['Warm-up events used (thermal mass)', result.thermal_mass_events_used]);
+  rows.push(['Validation status', result.validation_status]);
+
+  thermalCharSummary.innerHTML = rows
+    .map(([dt, dd]) => `<dt>${escapeHtml(String(dt))}</dt><dd>${escapeHtml(String(dd))}</dd>`)
+    .join('');
+}
+
+async function runThermalCharacter(showProgressFn, showStatusFn) {
+  const baseloadResult = getBaseloadResult();
+  const externalResult = getExternalResult();
+  const heatLossResult = getHeatLossResult();
+  if (!baseloadResult || !externalResult) return;
+
+  showProgressFn('Estimating thermal character…');
+
+  const wallConstruction = wallConstructionInput.value || null;
+
+  let result;
+  try {
+    result = estimateThermalCharacter(
+      baseloadResult.heating,
+      externalResult.external,
+      heatLossResult,
+      baseloadResult.baseload_metadata.method,
+      wallConstruction,
+    );
+  } catch (err) {
+    showStatusFn('Thermal character estimation failed: ' + err.message, 'error');
+    console.error('runThermalCharacter error:', err);
+    return;
+  }
+
+  setThermalCharacterResult(result);
+  thermalCharCard.classList.remove('hidden');
+  displayThermalCharacterResults(result);
+}
+
+btnRecalcThermalChar.addEventListener('click', async () => {
+  btnRecalcThermalChar.disabled = true;
+  thermalCharStatus.innerHTML  = '';
+  thermalCharSummary.innerHTML = '';
+  thermalCharResults.classList.add('hidden');
+  await runThermalCharacter(
+    () => {},
+    (msg, type) => {
+      const div = document.createElement('div');
+      div.className = `status-msg ${type}`;
+      div.textContent = msg;
+      thermalCharStatus.appendChild(div);
+    }
+  );
+  btnRecalcThermalChar.disabled = false;
+});
+
 // ===== CSV Helpers =====
 
 function showCsvProgress(text) {
@@ -1170,6 +1308,12 @@ btnCsvAnalyse.addEventListener('click', async () => {
       (msg, type) => showCsvStatus(msg, type)
     );
 
+    // Step 12: Trigger Module 5 — Thermal Character
+    await runThermalCharacter(
+      (text) => showCsvProgress(text),
+      (msg, type) => showCsvStatus(msg, type)
+    );
+
     hideCsvProgress();
 
   } catch (err) {
@@ -1190,7 +1334,8 @@ function readFileAsText(file) {
 }
 
 // debug-only — remove in post-launch cleanup (after 28-Apr-2026 launch)
-window.__getIngestionResult = () => getIngestionResult();
-window.__getExternalResult  = () => getExternalResult();
-window.__getBaseloadResult  = () => getBaseloadResult();
-window.__getHeatLossResult  = () => getHeatLossResult();
+window.__getIngestionResult        = () => getIngestionResult();
+window.__getExternalResult         = () => getExternalResult();
+window.__getBaseloadResult         = () => getBaseloadResult();
+window.__getHeatLossResult         = () => getHeatLossResult();
+window.__getThermalCharacterResult = () => getThermalCharacterResult();

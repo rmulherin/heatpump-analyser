@@ -791,4 +791,14 @@ applied inline by the implementer, plan is ready to implement.
 
 ## Implementation Deviations
 
-None — implementation not yet started.
+**Date:** 2026-04-27
+
+### D1. `warmup_indices` not stored in event record
+
+**Plan said:** Cache `warmup_indices`, `warmup_hh_count`, `E_warmup_kwh`, and `T_outdoor_warmup` on the event record.
+
+**Problem:** `warmup_indices` is only needed within event detection (for the step-4 absence check). The iteration loop needs only the derived scalars (`warmup_hh_count`, `E_warmup_kwh`, `T_outdoor_warmup`).
+
+**Change:** `warmup_indices` is computed locally during event detection and used immediately for the absence check, but not stored in `validEvents`. Only the three derived scalars are cached on the event record.
+
+**Rationale:** Achieves the plan's intent (compute warm-up range once, not per iteration) while avoiding storing a variable-length array per event. No functional difference — the iteration loop's cached values are identical.

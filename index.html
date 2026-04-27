@@ -160,12 +160,32 @@
             <p class="form-hint">Total heated floor area. Used to calculate heat loss per m².</p>
           </div>
         </div>
+        <div class="form-group" style="margin-top: 0.5rem;">
+          <label for="wall-construction">Wall construction <span style="font-weight:normal;color:var(--colour-dark)">(optional)</span></label>
+          <select id="wall-construction">
+            <option value="">Unknown</option>
+            <option value="solid_masonry">Solid masonry (pre-1920s brick / stone)</option>
+            <option value="cavity_wall">Cavity wall (1930s–2000s brick)</option>
+            <option value="timber_frame">Timber frame</option>
+          </select>
+          <p class="form-hint">Used to cross-check the estimated thermal mass.</p>
+        </div>
         <button class="btn btn-primary" id="btn-recalculate-heat-loss">Recalculate</button>
       </div>
       <div id="heat-loss-results" class="hidden">
         <div class="status-area" id="heat-loss-status"></div>
         <dl id="heat-loss-summary"></dl>
       </div>
+    </section>
+
+    <!-- Module 5: Thermal Character -->
+    <section class="card hidden" id="thermal-char-card">
+      <h2>Thermal Character</h2>
+      <div id="thermal-char-results" class="hidden">
+        <div class="status-area" id="thermal-char-status"></div>
+        <dl id="thermal-char-summary"></dl>
+      </div>
+      <button class="btn btn-primary" id="btn-recalculate-thermal-char">Recalculate with updated construction type</button>
     </section>
 
   </div>

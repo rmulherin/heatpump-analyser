@@ -50,6 +50,7 @@ heatpump-analyser/
 │   ├── external-data.js    ← weather + wholesale prices
 │   ├── baseload.js         ← heating/hot water/cooking separation
 │   ├── heat-loss.js        ← Siviour regression (HTC)
+│   ├── thermal-character.js ← setpoint, thermal mass, time constant, occupancy weights
 │   ├── thermal-sim.js      ← RC model + pre-heating optimiser
 │   ├── heatpump-model.js   ← COP curves + HP sizing
 │   ├── pricing-engine.js   ← 6-scenario cost calculation
