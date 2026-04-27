@@ -53,6 +53,12 @@ import {
   getHeatPumpModelResult,
 } from './heatpump-model.js';
 
+import {
+  estimateScenarioConsumption,
+  setScenarioConsumptionResult,
+  getScenarioConsumptionResult,
+} from './scenario-consumption.js';
+
 // ===== Module 3 — Label maps =====
 
 const BASELOAD_METHOD_LABELS = {
@@ -163,10 +169,30 @@ const copScalarInput     = document.getElementById('cop-scalar');
 const copScalarValue     = document.getElementById('cop-scalar-value');
 const btnRecalcHpModel   = document.getElementById('btn-recalculate-hp-model');
 
+// Scenario consumption DOM references
+const scenarioCard            = document.getElementById('scenario-card');
+const scenarioResults         = document.getElementById('scenario-results');
+const scenarioStatus          = document.getElementById('scenario-status');
+const scenarioSummary         = document.getElementById('scenario-summary');
+const preheatOffsetInput      = document.getElementById('preheat-offset');
+const preheatOffsetValue      = document.getElementById('preheat-offset-value');
+const occupancyThresholdInput = document.getElementById('occupancy-threshold');
+const occupancyThresholdValue = document.getElementById('occupancy-threshold-value');
+const btnRecalcScenario       = document.getElementById('btn-recalculate-scenario');
+
 // ===== Module 6: Live slider value display =====
 
 copScalarInput.addEventListener('input', () => {
   copScalarValue.textContent = parseFloat(copScalarInput.value).toFixed(2);
+});
+
+// ===== Module 7: Live slider value display =====
+
+preheatOffsetInput.addEventListener('input', () => {
+  preheatOffsetValue.textContent = parseFloat(preheatOffsetInput.value).toFixed(1);
+});
+occupancyThresholdInput.addEventListener('input', () => {
+  occupancyThresholdValue.textContent = parseFloat(occupancyThresholdInput.value).toFixed(2);
 });
 
 // ===== Tab Switching =====
@@ -546,6 +572,12 @@ async function continueWithProperty(apiKey) {
 
   // Step 13: Trigger Module 6 — Heat Pump Model
   await runHeatPumpModel(
+    (text) => showProgress(text, undefined),
+    (msg, type) => showStatus(msg, type)
+  );
+
+  // Step 14: Trigger Module 7 — Scenario Consumption
+  await runScenarioConsumption(
     (text) => showProgress(text, undefined),
     (msg, type) => showStatus(msg, type)
   );
@@ -1258,6 +1290,156 @@ btnRecalcHpModel.addEventListener('click', async () => {
   btnRecalcHpModel.disabled = false;
 });
 
+// ===== Module 7: Scenario Consumption =====
+
+function buildRateArrays(consumption, external, tariffRates) {
+  const n = consumption.length;
+  const gasRateByHh    = new Array(n);
+  const elecHhRateByHh = new Array(n);
+
+  const gasWindows = [...tariffRates.gas].sort((a, b) =>
+    new Date(a.valid_from) - new Date(b.valid_from));
+
+  for (let i = 0; i < n; i++) {
+    const tsDate = new Date(consumption[i].timestamp);
+
+    let gasRate = null;
+    for (const w of gasWindows) {
+      if (new Date(w.valid_from) > tsDate) break;
+      if (!w.valid_to || new Date(w.valid_to) > tsDate) gasRate = w.rate_p_kwh;
+    }
+    gasRateByHh[i]    = gasRate;
+    elecHhRateByHh[i] = external[i]?.wholesale_p_kwh ?? null;
+  }
+
+  return { gasRateByHh, elecHhRateByHh };
+}
+
+const SCENARIO_LABELS = {
+  current:      'Current boiler',
+  dumb_hp_svt:  'Dumb HP (SVT pricing)',
+  dumb_hp_hh:   'Dumb HP (HH wholesale pricing)',
+  hybrid_dumb:  'Hybrid — dumb dispatch',
+  smart_hp_hh:  'Smart HP',
+  hybrid_smart: 'Smart hybrid',
+};
+
+function displayScenarioResults(result) {
+  scenarioStatus.innerHTML = '';
+  scenarioSummary.querySelector('tbody').innerHTML = '';
+  scenarioResults.classList.remove('hidden');
+
+  for (const warning of result.warnings) {
+    const div = document.createElement('div');
+    div.className = 'status-msg warning';
+    div.textContent = warning;
+    scenarioStatus.appendChild(div);
+  }
+
+  if (result.validation_status.dumb === 'no_data') {
+    const div = document.createElement('div');
+    div.className = 'status-msg info';
+    div.textContent = 'No gas heating detected — heat pump scenarios cannot be modelled.';
+    scenarioStatus.appendChild(div);
+    return;
+  }
+
+  function totalKwh(arr) {
+    let s = 0;
+    for (const v of arr) if (v !== null) s += v;
+    return s;
+  }
+
+  const { scenarios, validation_status } = result;
+  const tbody = scenarioSummary.querySelector('tbody');
+
+  for (const [key, label] of Object.entries(SCENARIO_LABELS)) {
+    const sc      = scenarios[key];
+    const gasKwh  = totalKwh(sc.gas_kwh);
+    const elecKwh = totalKwh(sc.elec_kwh);
+    let notes = '';
+
+    if (key === 'smart_hp_hh' || key === 'hybrid_smart') {
+      if (validation_status.smart !== 'ok') {
+        notes = validation_status.smart.replace(/_/g, ' ');
+      }
+    } else if (key === 'dumb_hp_svt' || key === 'dumb_hp_hh') {
+      if (validation_status.dumb === 'partial') {
+        notes = 'partial (some HP COP data missing)';
+      }
+    }
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(label)}</td>
+      <td>${Math.round(gasKwh).toLocaleString()}</td>
+      <td>${Math.round(elecKwh).toLocaleString()}</td>
+      <td>${escapeHtml(notes)}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+async function runScenarioConsumption(showProgressFn, showStatusFn) {
+  const ingestion      = getIngestionResult();
+  const externalResult = getExternalResult();
+  const baseloadResult = getBaseloadResult();
+  const heatLossResult = getHeatLossResult();
+  const thermalChar    = getThermalCharacterResult();
+  const hpModel        = getHeatPumpModelResult();
+  if (!ingestion || !externalResult || !baseloadResult || !hpModel) return;
+
+  showProgressFn('Computing scenarios (this is the longest step)…');
+
+  // Yield to the browser before the DP-heavy step so the progress message paints
+  await new Promise(r => setTimeout(r, 0));
+
+  const { gasRateByHh, elecHhRateByHh } = buildRateArrays(
+    ingestion.consumption, externalResult.external, ingestion.tariff_rates);
+
+  const tMaxPreheatOffsetC = parseFloat(preheatOffsetInput.value) || 2.0;
+  const occupancyThreshold = parseFloat(occupancyThresholdInput.value) || 0.5;
+
+  let result;
+  try {
+    result = estimateScenarioConsumption({
+      heating:         baseloadResult.heating,
+      external:        externalResult.external,
+      heatLoss:        heatLossResult,
+      thermalCharacter: thermalChar,
+      heatPumpModel:   hpModel,
+      baseloadMethod:  baseloadResult.baseload_metadata.method,
+      gasRateByHh, elecHhRateByHh,
+      tMaxPreheatOffsetC, occupancyThreshold,
+    });
+  } catch (err) {
+    showStatusFn('Scenario computation failed: ' + err.message, 'error');
+    console.error('runScenarioConsumption error:', err);
+    return;
+  }
+
+  setScenarioConsumptionResult(result);
+  scenarioCard.classList.remove('hidden');
+  displayScenarioResults(result);
+}
+
+btnRecalcScenario.addEventListener('click', async () => {
+  btnRecalcScenario.disabled = true;
+  scenarioStatus.innerHTML = '';
+  scenarioSummary.querySelector('tbody').innerHTML = '';
+  scenarioResults.classList.add('hidden');
+  await runScenarioConsumption(
+    () => {},
+    (msg, type) => {
+      const div = document.createElement('div');
+      div.className = `status-msg ${type}`;
+      div.textContent = msg;
+      scenarioStatus.appendChild(div);
+    }
+  );
+  btnRecalcScenario.disabled = false;
+});
+
 // ===== CSV Helpers =====
 
 function showCsvProgress(text) {
@@ -1473,6 +1655,12 @@ btnCsvAnalyse.addEventListener('click', async () => {
       (msg, type) => showCsvStatus(msg, type)
     );
 
+    // Step 14: Trigger Module 7 — Scenario Consumption
+    await runScenarioConsumption(
+      (text) => showCsvProgress(text),
+      (msg, type) => showCsvStatus(msg, type)
+    );
+
     hideCsvProgress();
 
   } catch (err) {
@@ -1493,9 +1681,11 @@ function readFileAsText(file) {
 }
 
 // debug-only — remove in post-launch cleanup (after 28-Apr-2026 launch)
-window.__getIngestionResult        = () => getIngestionResult();
-window.__getExternalResult         = () => getExternalResult();
-window.__getBaseloadResult         = () => getBaseloadResult();
-window.__getHeatLossResult         = () => getHeatLossResult();
-window.__getThermalCharacterResult = () => getThermalCharacterResult();
-window.__getHeatPumpModelResult    = () => getHeatPumpModelResult();
+window.__getIngestionResult           = () => getIngestionResult();
+window.__getExternalResult            = () => getExternalResult();
+window.__getBaseloadResult            = () => getBaseloadResult();
+window.__getHeatLossResult            = () => getHeatLossResult();
+window.__getThermalCharacterResult    = () => getThermalCharacterResult();
+window.__getHeatPumpModelResult       = () => getHeatPumpModelResult();
+window.__getScenarioConsumptionResult = () => getScenarioConsumptionResult();
+window.__buildRateArrays              = (cs, ex, tr) => buildRateArrays(cs, ex, tr);

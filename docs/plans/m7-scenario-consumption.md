@@ -920,4 +920,19 @@ Four LOW observations are recommended but not conditions of approval.
 
 ## Implementation Deviations
 
-None — implementation not yet started.
+**D1 — `runDpForDay` double-infeasibility guard (not in plan)**
+
+Added an early return after the second (relaxed) `runForwardPass` if all costs remain
+Infinity. Returns `{ q_delivered_kwh: zeros, fuel_mode: 'hp', indoor_temp_c: T_init,
+T_init_next: T_init, feasible: false }`. Prevents a negative-index access on `dpPrev`
+(`dpPrev[-1]` is undefined in JS typed arrays) which would occur if backtrack starts
+from an unreachable `sFinal`. Triggered only when HP capacity is so small that no
+transition is feasible even without the comfort gate — not reachable with normal inputs
+(`hp_capacity_kw ?? Infinity`).
+
+**D2 — `scenarioResults.classList.remove('hidden')` moved to top of `displayScenarioResults`**
+
+Plan implied late reveal (only at end of function), which would leave status messages
+invisible when the early-return `no_data` path fires (the status div is inside the
+hidden container). Moved to mirror M6's `displayHeatPumpModelResults` pattern: reveal
+the results container immediately, populate status and table inside it.
