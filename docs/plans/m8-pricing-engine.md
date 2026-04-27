@@ -881,4 +881,21 @@ not affect implementation.
 
 ## Implementation Deviations
 
-*(To be completed after implementation.)*
+**D1 — `btn-secondary` replaced with `btn btn-primary`.**
+The plan specifies `class="btn-secondary hidden"` for the Recalculate costs button. No `.btn-secondary`
+rule exists in `styles.css` — the project uses only `.btn` + `.btn-primary`. Changed to
+`class="btn btn-primary hidden"` to match all other module buttons and avoid an unstyled element.
+
+**D2 — CSS classes added to `styles.css`.**
+The plan's HTML references `.card-intro`, `.params-grid`, and `.unit` classes but includes no
+corresponding CSS update. Added minimal CSS for all three to `styles.css` immediately before the
+existing Energy Summary Table section. No existing rules affected.
+
+**D3 — `energy-summary-table` CSS class reused for pricing table.**
+`displayPricingResults` uses `class="energy-summary-table"` for the scenario costs table.
+`energy-summary-table` provides the correct column alignment (left first, right others) and is
+generic in its implementation. No `pricing-summary-table` class was required.
+
+**D4 — `ScenarioCost` exposes `gas_energy_cost_gbp` and `elec_energy_cost_gbp` separately.**
+Noted as additional change in plan Approval section (commit 7487b05 on Opus side). Implemented
+as specified — both fields are computed and included in each non-null scenario cost object.

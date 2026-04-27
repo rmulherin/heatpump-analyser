@@ -59,6 +59,13 @@ import {
   getScenarioConsumptionResult,
 } from './scenario-consumption.js';
 
+import {
+  prepareRates, computeCosts,
+  setRateMetadata, getRateMetadata,
+  setPricingResult, getPricingResult,
+  PE_CONFIG,
+} from './pricing-engine.js';
+
 // ===== Module 3 — Label maps =====
 
 const BASELOAD_METHOD_LABELS = {
@@ -180,6 +187,18 @@ const occupancyThresholdInput = document.getElementById('occupancy-threshold');
 const occupancyThresholdValue = document.getElementById('occupancy-threshold-value');
 const btnRecalcScenario       = document.getElementById('btn-recalculate-scenario');
 
+// Pricing engine DOM references
+const pricingParamsCard  = document.getElementById('pricing-params-card');
+const pricingCard        = document.getElementById('pricing-card');
+const pricingResults     = document.getElementById('pricing-results');
+const pricingStatus      = document.getElementById('pricing-status');
+const pricingSummary     = document.getElementById('pricing-summary');
+const svtRateInput       = document.getElementById('svt-rate');
+const elecStandingInput  = document.getElementById('elec-standing-charge');
+const gasStandingInput   = document.getElementById('gas-standing-charge');
+const hhOverheadInput    = document.getElementById('hh-overhead');
+const btnRecalcPricing   = document.getElementById('btn-recalculate-pricing');
+
 // ===== Module 6: Live slider value display =====
 
 copScalarInput.addEventListener('input', () => {
@@ -194,6 +213,22 @@ preheatOffsetInput.addEventListener('input', () => {
 occupancyThresholdInput.addEventListener('input', () => {
   occupancyThresholdValue.textContent = parseFloat(occupancyThresholdInput.value).toFixed(2);
 });
+
+// ===== Module 8: Rate param helpers =====
+
+function parseRate(input, fallback) {
+  const v = parseFloat(input.value);
+  return isNaN(v) ? fallback : v;
+}
+
+function readRateParams() {
+  return {
+    svt_rate_p_per_kwh:    parseRate(svtRateInput,      PE_CONFIG.SVT_RATE_DEFAULT_P),
+    svt_standing_charge_p: parseRate(elecStandingInput, PE_CONFIG.ELEC_STANDING_DEFAULT_P_DAY),
+    gas_standing_charge_p: parseRate(gasStandingInput,  PE_CONFIG.GAS_STANDING_DEFAULT_P_DAY),
+    hh_overhead_p_per_kwh: parseRate(hhOverheadInput,   PE_CONFIG.HH_OVERHEAD_DEFAULT_P),
+  };
+}
 
 // ===== Tab Switching =====
 const tabBtns = document.querySelectorAll('.tab-btn');
@@ -541,6 +576,7 @@ async function continueWithProperty(apiKey) {
     tariff_rates: tariffRates,
     metadata: fullMetadata,
   });
+  prefillRateInputs(tariffRates);
 
   // Step 8: Show success
   hideProgress();
@@ -578,6 +614,12 @@ async function continueWithProperty(apiKey) {
 
   // Step 14: Trigger Module 7 — Scenario Consumption
   await runScenarioConsumption(
+    (text) => showProgress(text, undefined),
+    (msg, type) => showStatus(msg, type)
+  );
+
+  // Step 15: Trigger Module 8 — Pricing Engine
+  await runPricingEngine(
     (text) => showProgress(text, undefined),
     (msg, type) => showStatus(msg, type)
   );
@@ -1440,6 +1482,132 @@ btnRecalcScenario.addEventListener('click', async () => {
   btnRecalcScenario.disabled = false;
 });
 
+// ===== Module 8: Pricing Engine =====
+
+const SCENARIO_DISPLAY_NAMES = {
+  current:      'Current (gas boiler)',
+  dumb_hp_svt:  'Heat pump — flat rate',
+  dumb_hp_hh:   'Heat pump — HH rate',
+  hybrid_dumb:  'Hybrid — HH rate',
+  smart_hp_hh:  'Smart heat pump — HH rate',
+  hybrid_smart: 'Smart hybrid — HH rate',
+};
+
+function prefillRateInputs(tariffRates) {
+  const gasArr  = tariffRates.gas;
+  const elecArr = tariffRates.electricity;
+  if (gasArr.length)  gasStandingInput.value  = gasArr[gasArr.length - 1].standing_p_day.toFixed(2);
+  if (elecArr.length) elecStandingInput.value = elecArr[elecArr.length - 1].standing_p_day.toFixed(2);
+}
+
+function displayPricingResults(pricingResult) {
+  pricingSummary.innerHTML = '';
+  pricingStatus.innerHTML  = '';
+
+  const rateMetadata = getRateMetadata();
+  const scale = rateMetadata && rateMetadata.data_period_days > 0
+    ? 365 / rateMetadata.data_period_days : 1;
+
+  const displayOrder = ['current', 'dumb_hp_svt', 'dumb_hp_hh', 'hybrid_dumb', 'smart_hp_hh', 'hybrid_smart'];
+  const fmtGbp = (v) => {
+    if (v === null || v === undefined) return '—';
+    return '£' + v.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+
+  let hasNullSmart = false;
+  const rows = displayOrder.map(key => {
+    const sc = pricingResult.scenarios[key];
+    if (sc.annual_cost_gbp === null) hasNullSmart = true;
+    const annualEnergy   = sc.energy_cost_gbp    !== null ? sc.energy_cost_gbp    * scale : null;
+    const annualStanding = sc.standing_charge_gbp !== null ? sc.standing_charge_gbp * scale : null;
+    return `<tr>
+      <td>${escapeHtml(SCENARIO_DISPLAY_NAMES[key])}</td>
+      <td>${fmtGbp(annualEnergy)}</td>
+      <td>${fmtGbp(annualStanding)}</td>
+      <td>${fmtGbp(sc.annual_cost_gbp)}</td>
+    </tr>`;
+  }).join('');
+
+  pricingSummary.innerHTML = `
+    <table class="energy-summary-table">
+      <thead>
+        <tr>
+          <th>Scenario</th>
+          <th>Annual energy cost</th>
+          <th>Standing charges (£/yr)</th>
+          <th>Total (£/yr)</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+    ${hasNullSmart ? '<p class="status-msg info" style="margin-top:0.75rem;">Insufficient data for smart scenarios — wholesale price data required.</p>' : ''}
+  `;
+
+  for (const w of (rateMetadata?.warnings ?? [])) {
+    const div = document.createElement('div');
+    div.className = 'status-msg warning';
+    div.textContent = w;
+    pricingStatus.appendChild(div);
+  }
+  for (const w of pricingResult.warnings) {
+    const div = document.createElement('div');
+    div.className = 'status-msg warning';
+    div.textContent = w;
+    pricingStatus.appendChild(div);
+  }
+
+  pricingResults.classList.remove('hidden');
+  pricingCard.classList.remove('hidden');
+  pricingParamsCard.classList.remove('hidden');
+  btnRecalcPricing.classList.remove('hidden');
+}
+
+async function runPricingEngine(showProgressFn, showStatusFn) {
+  const ingestion      = getIngestionResult();
+  const external       = getExternalResult();
+  const scenarioResult = getScenarioConsumptionResult();
+
+  if (!ingestion || !external) {
+    showStatusFn('Ingestion or external data not available.', 'error');
+    return;
+  }
+  if (!scenarioResult) {
+    showStatusFn('Scenario consumption not yet computed.', 'error');
+    return;
+  }
+
+  showProgressFn('Computing tariff rates…');
+  const params       = readRateParams();
+  const rateMetadata = prepareRates(ingestion, external, params);
+  setRateMetadata(rateMetadata);
+
+  showProgressFn('Computing scenario costs…');
+  const pricingResult = computeCosts(rateMetadata, scenarioResult, params);
+  setPricingResult(pricingResult);
+
+  displayPricingResults(pricingResult);
+
+  for (const w of rateMetadata.warnings)  showStatusFn(w, 'warning');
+  for (const w of pricingResult.warnings) showStatusFn(w, 'warning');
+}
+
+btnRecalcPricing.addEventListener('click', async () => {
+  btnRecalcPricing.disabled = true;
+  pricingStatus.innerHTML   = '';
+  pricingSummary.innerHTML  = '';
+  pricingResults.classList.add('hidden');
+  await runPricingEngine(
+    () => {},
+    (msg, type) => {
+      const div = document.createElement('div');
+      div.className = `status-msg ${type}`;
+      div.textContent = msg;
+      pricingStatus.appendChild(div);
+    }
+  );
+  btnRecalcPricing.disabled = false;
+});
+
 // ===== CSV Helpers =====
 
 function showCsvProgress(text) {
@@ -1619,6 +1787,7 @@ btnCsvAnalyse.addEventListener('click', async () => {
       tariff_rates: tariffRates,
       metadata: fullMetadata,
     });
+    prefillRateInputs(tariffRates);
 
     // Step 8: Show success
     hideCsvProgress();
@@ -1661,6 +1830,12 @@ btnCsvAnalyse.addEventListener('click', async () => {
       (msg, type) => showCsvStatus(msg, type)
     );
 
+    // Step 15: Trigger Module 8 — Pricing Engine
+    await runPricingEngine(
+      (text) => showCsvProgress(text),
+      (msg, type) => showCsvStatus(msg, type)
+    );
+
     hideCsvProgress();
 
   } catch (err) {
@@ -1689,3 +1864,5 @@ window.__getThermalCharacterResult    = () => getThermalCharacterResult();
 window.__getHeatPumpModelResult       = () => getHeatPumpModelResult();
 window.__getScenarioConsumptionResult = () => getScenarioConsumptionResult();
 window.__buildRateArrays              = (cs, ex, tr) => buildRateArrays(cs, ex, tr);
+window.__getRateMetadata              = () => getRateMetadata();
+window.__getPricingResult             = () => getPricingResult();

@@ -321,6 +321,38 @@ input:focus {
   color: var(--colour-dark);
 }
 
+/* ===== Pricing Parameters Card ===== */
+.card-intro {
+  font-size: 0.875rem;
+  color: var(--colour-dark);
+  opacity: 0.75;
+  margin-bottom: 1rem;
+}
+
+.params-grid {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.5rem 1rem;
+  align-items: center;
+}
+
+.params-grid label {
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.params-grid input {
+  width: 7rem;
+  text-align: right;
+}
+
+.unit {
+  font-size: 0.8rem;
+  color: var(--colour-dark);
+  opacity: 0.7;
+  margin-left: 0.25rem;
+}
+
 /* ===== Energy Summary Table ===== */
 .energy-summary-table {
   width: 100%;
