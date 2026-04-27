@@ -535,24 +535,94 @@ window.__getHeatPumpModelResult = () => getHeatPumpModelResult();
 
 ---
 
-## Claude.ai Review — yyyy-mm-dd
+## Design Review — 2026-04-27
 
 **Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Review date:** 2026-04-27
+**Design doc reviewed:** `heatpump-model.md` (praxis-claude-hub)
+
+---
 
 ### What is solid
-[To be completed by reviewer]
 
-### Clarifications required before implementation
-[To be completed by reviewer]
+- **COP model fully specified and anti-patterns explicitly guarded.** The anchor table,
+  piecewise interpolation, boundary clamping, multiplicative scalar order, and
+  post-scaling clamp are all correct. T4 and T5 are precisely targeted failure cases
+  that will catch the two most dangerous implementation errors (additive scalar, wrong
+  clamp order).
+
+- **`computeDiagnostics` single-pass logic is correct.** The parallel-array iteration
+  accumulates all four accumulators in one pass. `cop_range` correctly uses all non-null
+  COP entries (including absence days — the rationale is sound: absences do not change
+  which temperatures were physically encountered). `annual_mean_cop` and
+  `fraction_below_design_temp` both apply `!absent` — consistent with each other and
+  now consistent with the updated design doc.
+
+- **Null propagation is complete.** Every null path (no HTC, no setpoint, no gas,
+  no temp data) is traced end-to-end through Step 0 and `computeValidationStatus`.
+  `cop_by_hh` is always populated when temperature data exists, regardless of
+  HTC/setpoint/gas availability — correct, because M7 needs the COP array independently.
+
+- **`hp_capacity_kw` setpoint guard (`setpointC <= T_DESIGN_C`) is more correct than
+  the original design doc edge case table, which said `<`.** Setpoint equal to T_design
+  gives 0 kW capacity, which is nonsensical. Plan catches this correctly. Design doc
+  updated to `≤` to match.
+
+- **Slider UX pattern is correct.** `<output>` updates on `input`; recompute fires only
+  on button click. Avoids 17,520-entry `.map()` on every drag tick.
+
+- **`T_DESIGN_C` in `HP_CONFIG` is the single source.** T10 guards against the constant
+  being hardcoded in multiple places. This is the right pattern.
+
+- **`fraction_below_design_temp` absence-filter rationale.** This plan improves on the
+  design doc. Absence periods produce frost-protection behaviour: boiler runs at low
+  temperatures while the owner is away — unrepresentative of normal heating. Including
+  them inflates the cold-weather fraction without informing HP sizing for the household's
+  actual usage. Plan's interpretation is the correct one; design doc updated to match.
+
+---
+
+### Design doc corrections made by Opus (not plan deviations)
+
+Two corrections applied to `heatpump-model.md` during this review:
+
+1. **`fraction_below_design_temp` — added `is_absence === false` filter to both
+   numerator and denominator of Step 4.** Added rationale (absence = frost-protection,
+   unrepresentative of household heating behaviour). Updated the Outputs comment to match.
+
+2. **Setpoint edge case — changed `setpoint_c < T_design` to `setpoint_c ≤ T_design`
+   in the Edge Cases table.** Zero capacity is as nonsensical as negative capacity; the
+   plan's `<=` guard is the correct implementation.
+
+---
 
 ### Minor observations (not blockers)
-[To be completed by reviewer]
+
+1. **LOW — No test explicitly covering the `is_absence` filter.**
+   T8 validates demand-weighting but its synthetic data has no absent HH periods.
+   T16 tests the warning threshold, not the filter itself. Consider adding T17:
+   - Set up 4 HH periods where HH 2 has `is_absence = true`, `heating_kwh = 0.5`,
+     `temp_c = −5` (below design).
+   - Assert that `annual_mean_cop` and `fraction_below_design_temp` are unchanged from
+     the 3-period baseline (absent HH excluded from both).
+   - Assert that the absent HH's COP still appears in `cop_range.min` (absences
+     included in COP range).
+   This is an optional but recommended addition; T8 as written is still a valid test.
+
+---
+
+### Clarifications required before implementation
+
+None. The plan is unambiguous and complete.
 
 ---
 
 ## Approval
 
-**Status:** Awaiting approval.
+**Status:** ✅ Approved — 2026-04-27
+**Approved by:** Rhiannon (via Opus review)
+
+No required changes. T17 is a recommended addition but not a condition of approval.
 
 ---
 
