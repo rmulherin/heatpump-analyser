@@ -47,6 +47,12 @@ import {
   getThermalCharacterResult,
 } from './thermal-character.js';
 
+import {
+  estimateHeatPumpModel,
+  setHeatPumpModelResult,
+  getHeatPumpModelResult,
+} from './heatpump-model.js';
+
 // ===== Module 3 — Label maps =====
 
 const BASELOAD_METHOD_LABELS = {
@@ -146,6 +152,22 @@ const thermalCharStatus     = document.getElementById('thermal-char-status');
 const thermalCharSummary    = document.getElementById('thermal-char-summary');
 const wallConstructionInput = document.getElementById('wall-construction');
 const btnRecalcThermalChar  = document.getElementById('btn-recalculate-thermal-char');
+
+// Heat pump model DOM references
+const hpModelCard        = document.getElementById('hp-model-card');
+const hpModelResults     = document.getElementById('hp-model-results');
+const hpModelStatus      = document.getElementById('hp-model-status');
+const hpModelSummary     = document.getElementById('hp-model-summary');
+const hpCopTableBody     = document.querySelector('#hp-cop-table tbody');
+const copScalarInput     = document.getElementById('cop-scalar');
+const copScalarValue     = document.getElementById('cop-scalar-value');
+const btnRecalcHpModel   = document.getElementById('btn-recalculate-hp-model');
+
+// ===== Module 6: Live slider value display =====
+
+copScalarInput.addEventListener('input', () => {
+  copScalarValue.textContent = parseFloat(copScalarInput.value).toFixed(2);
+});
 
 // ===== Tab Switching =====
 const tabBtns = document.querySelectorAll('.tab-btn');
@@ -518,6 +540,12 @@ async function continueWithProperty(apiKey) {
 
   // Step 12: Trigger Module 5 — Thermal Character
   await runThermalCharacter(
+    (text) => showProgress(text, undefined),
+    (msg, type) => showStatus(msg, type)
+  );
+
+  // Step 13: Trigger Module 6 — Heat Pump Model
+  await runHeatPumpModel(
     (text) => showProgress(text, undefined),
     (msg, type) => showStatus(msg, type)
   );
@@ -1105,6 +1133,131 @@ btnRecalcThermalChar.addEventListener('click', async () => {
   btnRecalcThermalChar.disabled = false;
 });
 
+// ===== Module 6: Heat Pump Model Orchestration =====
+
+function renderHpCopTable(copCurvePoints) {
+  hpCopTableBody.innerHTML = copCurvePoints
+    .map(p => `<tr><td>${p.temp_c}°C</td><td>${p.cop.toFixed(2)}</td></tr>`)
+    .join('');
+}
+
+function displayHeatPumpModelResults(result) {
+  hpModelStatus.innerHTML  = '';
+  hpModelSummary.innerHTML = '';
+  hpCopTableBody.innerHTML = '';
+  hpModelResults.classList.remove('hidden');
+
+  for (const warning of result.warnings) {
+    const div = document.createElement('div');
+    div.className = 'status-msg warning';
+    div.textContent = warning;
+    hpModelStatus.appendChild(div);
+  }
+
+  if (result.validation_status === 'no_temp_data') {
+    const div = document.createElement('div');
+    div.className = 'status-msg info';
+    div.textContent = 'Temperature data unavailable — heat pump COP cannot be modelled.';
+    hpModelStatus.appendChild(div);
+    renderHpCopTable(result.cop_curve_points);
+    return;
+  }
+
+  if (result.validation_status === 'no_gas') {
+    const div = document.createElement('div');
+    div.className = 'status-msg info';
+    div.textContent = 'No gas supply detected. COP curve shown for reference; HP sizing unavailable without a gas-derived heat loss measurement.';
+    hpModelStatus.appendChild(div);
+  } else if (result.validation_status === 'no_htc') {
+    const div = document.createElement('div');
+    div.className = 'status-msg info';
+    div.textContent = 'Heat loss data unavailable — HP sizing requires a heat loss result. COP curve shown for reference.';
+    hpModelStatus.appendChild(div);
+  } else if (result.validation_status === 'no_setpoint') {
+    const div = document.createElement('div');
+    div.className = 'status-msg info';
+    div.textContent = 'Thermostat setpoint not available — HP sizing requires a setpoint estimate. COP curve shown for reference.';
+    hpModelStatus.appendChild(div);
+  }
+
+  const fmt = (v, dp = 2) => v !== null && v !== undefined ? v.toFixed(dp) : '—';
+  const rows = [];
+
+  if (result.hp_capacity_kw !== null) {
+    rows.push(['HP heat output (design conditions, −3°C)', `${fmt(result.hp_capacity_kw, 1)} kW`]);
+  }
+  if (result.hp_capacity_kw_elec !== null) {
+    rows.push(['HP electrical input (design conditions)', `${fmt(result.hp_capacity_kw_elec, 1)} kW`]);
+  }
+  if (result.annual_mean_cop !== null) {
+    rows.push(['Annual mean COP (demand-weighted)', fmt(result.annual_mean_cop)]);
+  }
+  if (result.cop_range !== null) {
+    rows.push(['COP range across the year', `${fmt(result.cop_range.min)} — ${fmt(result.cop_range.max)}`]);
+  }
+  if (result.fraction_below_design_temp !== null) {
+    rows.push(['Hours below design temperature', `${(result.fraction_below_design_temp * 100).toFixed(1)}% of heating hours`]);
+  }
+  rows.push(['Design outdoor temperature', '−3 °C (BS EN 12831)']);
+  rows.push(['Validation status', result.validation_status]);
+
+  hpModelSummary.innerHTML = rows
+    .map(([dt, dd]) => `<dt>${escapeHtml(String(dt))}</dt><dd>${escapeHtml(String(dd))}</dd>`)
+    .join('');
+
+  renderHpCopTable(result.cop_curve_points);
+}
+
+async function runHeatPumpModel(showProgressFn, showStatusFn) {
+  const externalResult = getExternalResult();
+  const baseloadResult = getBaseloadResult();
+  const heatLossResult = getHeatLossResult();
+  const thermalChar    = getThermalCharacterResult();
+  if (!externalResult || !baseloadResult) return;
+
+  showProgressFn('Modelling heat pump performance…');
+
+  const scalar = parseFloat(copScalarInput.value) || 1.0;
+
+  let result;
+  try {
+    result = estimateHeatPumpModel(
+      externalResult.external,
+      baseloadResult.heating,
+      heatLossResult,
+      thermalChar,
+      baseloadResult.baseload_metadata.method,
+      scalar,
+    );
+  } catch (err) {
+    showStatusFn('Heat pump modelling failed: ' + err.message, 'error');
+    console.error('runHeatPumpModel error:', err);
+    return;
+  }
+
+  setHeatPumpModelResult(result);
+  hpModelCard.classList.remove('hidden');
+  displayHeatPumpModelResults(result);
+}
+
+btnRecalcHpModel.addEventListener('click', async () => {
+  btnRecalcHpModel.disabled = true;
+  hpModelStatus.innerHTML  = '';
+  hpModelSummary.innerHTML = '';
+  hpCopTableBody.innerHTML = '';
+  hpModelResults.classList.add('hidden');
+  await runHeatPumpModel(
+    () => {},
+    (msg, type) => {
+      const div = document.createElement('div');
+      div.className = `status-msg ${type}`;
+      div.textContent = msg;
+      hpModelStatus.appendChild(div);
+    }
+  );
+  btnRecalcHpModel.disabled = false;
+});
+
 // ===== CSV Helpers =====
 
 function showCsvProgress(text) {
@@ -1314,6 +1467,12 @@ btnCsvAnalyse.addEventListener('click', async () => {
       (msg, type) => showCsvStatus(msg, type)
     );
 
+    // Step 13: Trigger Module 6 — Heat Pump Model
+    await runHeatPumpModel(
+      (text) => showCsvProgress(text),
+      (msg, type) => showCsvStatus(msg, type)
+    );
+
     hideCsvProgress();
 
   } catch (err) {
@@ -1339,3 +1498,4 @@ window.__getExternalResult         = () => getExternalResult();
 window.__getBaseloadResult         = () => getBaseloadResult();
 window.__getHeatLossResult         = () => getHeatLossResult();
 window.__getThermalCharacterResult = () => getThermalCharacterResult();
+window.__getHeatPumpModelResult    = () => getHeatPumpModelResult();

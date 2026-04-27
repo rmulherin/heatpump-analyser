@@ -628,4 +628,4 @@ No required changes. T17 is a recommended addition but not a condition of approv
 
 ## Implementation Deviations
 
-None — implementation not yet started.
+None — plan followed exactly. All T1–T16 test criteria verified analytically against the code.
