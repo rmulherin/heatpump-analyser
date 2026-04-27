@@ -131,7 +131,7 @@ All arithmetic is plain JS. No new CDN entries required.
 | Action | File | Purpose |
 |--------|------|---------|
 | CREATE | `js/pricing-engine.js` | `prepareRates()`, `computeCosts()`, module state |
-| MODIFY | `js/app.js` | Import, DOM refs, `readRateParams()`, `runPricingEngine()`, `displayPricingResults()`, recalculate button, pipeline comment marker, debug export |
+| MODIFY | `js/app.js` | Import, DOM refs, `readRateParams()`, `runPricingEngine()`, `displayPricingResults()`, recalculate button, pipeline wiring (after M7), debug export |
 | MODIFY | `index.html` | Rate parameters card, pricing results card |
 
 ---
@@ -202,12 +202,14 @@ const gasWindows = [...ingestion.tariff_rates.gas]
 
 **Build `gas_rate_by_hh` and `elec_hh_rate_by_hh` in a single pass:**
 ```javascript
+const warnings = [];   // declare before any push calls
 const n = ingestion.consumption.length;
 const gas_rate_by_hh  = new Array(n);
 const elec_hh_rate_by_hh = new Array(n);
 let warnedNullWholesale = false;
 let warnedGapTariff     = false;
 let hasExtremeNeg       = false;
+const hh_overhead = params.hh_overhead_p_per_kwh ?? PE_CONFIG.HH_OVERHEAD_DEFAULT_P;  // hoisted
 
 for (let i = 0; i < n; i++) {
   const ts     = ingestion.consumption[i].timestamp;
@@ -228,7 +230,6 @@ for (let i = 0; i < n; i++) {
   gas_rate_by_hh[i] = gasRate;
 
   // HH electricity rate = wholesale + overhead
-  const hh_overhead = params.hh_overhead_p_per_kwh ?? PE_CONFIG.HH_OVERHEAD_DEFAULT_P;
   const wholesale = external[i]?.wholesale_p_kwh;
   if (wholesale === null || wholesale === undefined) {
     elec_hh_rate_by_hh[i] = hh_overhead;
@@ -280,10 +281,11 @@ If `data_period_days < PE_CONFIG.MIN_DAYS_WARN`: add warning
 return {
   gas_rate_by_hh,
   elec_hh_rate_by_hh,
-  svt_rate_p_per_kwh:            params.svt_rate_p_per_kwh ?? PE_CONFIG.SVT_RATE_DEFAULT_P,
-  gas_standing_charge_p_per_day: gas_standing_p_day,
+  svt_rate_p_per_kwh:             params.svt_rate_p_per_kwh ?? PE_CONFIG.SVT_RATE_DEFAULT_P,
+  gas_standing_charge_p_per_day:  gas_standing_p_day,
   elec_standing_charge_p_per_day: elec_standing_p_day,
   data_period_days,
+  consumption: ingestion.consumption,  // needed by computeCosts for monthly grouping
   warnings,
 };
 ```
@@ -302,6 +304,7 @@ The standing charges to apply come from `params` (user-overridable), defaulting 
 
 Effective standing charges (resolved once):
 ```javascript
+const pricingWarnings = [];   // declare before any push calls
 const gasSc   = params.gas_standing_charge_p  ?? rateMetadata.gas_standing_charge_p_per_day;
 const elecSc  = params.svt_standing_charge_p  ?? rateMetadata.elec_standing_charge_p_per_day;
 const svtRate = params.svt_rate_p_per_kwh     ?? rateMetadata.svt_rate_p_per_kwh;
@@ -310,7 +313,7 @@ const svtRate = params.svt_rate_p_per_kwh     ?? rateMetadata.svt_rate_p_per_kwh
 Pre-compute month groupings once (reused for every scenario):
 ```javascript
 // monthGroups: Map<'YYYY-MM', { indices: number[], distinctDates: number, partial: boolean }>
-const monthGroups = buildMonthGroups(ingestion.consumption);
+const monthGroups = buildMonthGroups(rateMetadata.consumption);
 ```
 
 `buildMonthGroups(consumption)`: iterate `consumption`, group index `i` by
@@ -441,14 +444,22 @@ const btnRecalcPricing      = document.getElementById('btn-recalculate-pricing')
 #### 2c. `readRateParams()` — private helper
 
 ```javascript
+function parseRate(input, fallback) {
+  const v = parseFloat(input.value);
+  return isNaN(v) ? fallback : v;
+}
 function readRateParams() {
   return {
-    svt_rate_p_per_kwh:    parseFloat(svtRateInput.value)       || PE_CONFIG.SVT_RATE_DEFAULT_P,
-    svt_standing_charge_p: parseFloat(elecStandingInput.value)  || PE_CONFIG.ELEC_STANDING_DEFAULT_P_DAY,
-    gas_standing_charge_p: parseFloat(gasStandingInput.value)   || PE_CONFIG.GAS_STANDING_DEFAULT_P_DAY,
-    hh_overhead_p_per_kwh: parseFloat(hhOverheadInput.value)    || PE_CONFIG.HH_OVERHEAD_DEFAULT_P,
+    svt_rate_p_per_kwh:    parseRate(svtRateInput,    PE_CONFIG.SVT_RATE_DEFAULT_P),
+    svt_standing_charge_p: parseRate(elecStandingInput, PE_CONFIG.ELEC_STANDING_DEFAULT_P_DAY),
+    gas_standing_charge_p: parseRate(gasStandingInput,  PE_CONFIG.GAS_STANDING_DEFAULT_P_DAY),
+    hh_overhead_p_per_kwh: parseRate(hhOverheadInput,   PE_CONFIG.HH_OVERHEAD_DEFAULT_P),
   };
 }
+```
+
+`parseRate` uses a NaN-only fallback so SVT rate = 0 is accepted (user may be testing
+zero-cost electricity); `|| default` would incorrectly replace 0 with the default.
 ```
 
 #### 2d. `displayPricingResults(pricingResult)`
@@ -531,20 +542,18 @@ btnRecalcPricing.addEventListener('click', async () => {
 });
 ```
 
-#### 2g. Pipeline wiring — forward declaration
+#### 2g. Pipeline wiring
 
-In both the Octopus and CSV pipelines, immediately after the `runThermalCharacter` call
-(current end of pipeline), add:
+M6 (`runHeatPumpModel`) is already wired into both pipelines. M7 (`runScenarioConsumption`)
+will be wired when M7 is implemented. Add `runPricingEngine` immediately after the M7 call:
 
 ```javascript
-// M6: await runHeatPumpModel(showProgressFn, showStatusFn);
-// M7: await runScenarioConsumption(showProgressFn, showStatusFn);
-// M8: await runPricingEngine(showProgressFn, showStatusFn);
+await runScenarioConsumption(showProgressFn, showStatusFn);  // M7 — already present when M8 is implemented
+await runPricingEngine(showProgressFn, showStatusFn);        // M8
 ```
 
-These three comment lines mark the future insertion points. When M6 and M7 are implemented,
-uncomment and add their function calls. M8's `runPricingEngine` call is added at the same
-time as M7's wiring (since M8 depends on M7's output).
+Apply in both the Octopus pipeline (after the existing M6 call) and the CSV pipeline
+(same position). Do not add M8 before M7 is wired — M8 requires M7's output.
 
 #### 2h. Pre-populate rate input defaults
 
