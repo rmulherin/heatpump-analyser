@@ -33,12 +33,24 @@ const TC_CONFIG = {
   MASS_RATING_VERY_HIGH_KJ: 30000,
   TAU_HIGH_WARN_HOURS:      30,
   TAU_LOW_WARN_HOURS:       2,
+  T_AT_RESTART_MIN_C:       5,
+  T_AT_RESTART_MAX_C:       19,
+  LONG_EVENT_OFF_HH:        48,
+  TAU_SANITY_HIGH_RATIO:    2.0,
+  TAU_SANITY_LOW_RATIO:     0.5,
 };
 
 const WALL_CONSTRUCTION_RANGES = {
   solid_masonry: { min: 15000, max: 45000 },
   cavity_wall:   { min:  6000, max: 20000 },
   timber_frame:  { min:  2000, max:  8000 },
+};
+
+const TAU_BUCKET_HOURS_MAP = {
+  fast:            4,
+  evening:        10,
+  all_day:        20,
+  stays_for_days: 40,
 };
 
 // ===== Helpers =====
@@ -59,6 +71,18 @@ function percentile(sortedArr, p) {
   const hi  = Math.ceil(idx);
   if (lo === hi) return sortedArr[lo];
   return sortedArr[lo] * (hi - idx) + sortedArr[hi] * (idx - lo);
+}
+
+function computeC(T_at_restart, E_warmup_kwh, warmup_hh_count, T_outdoor_warmup,
+                  htc, eta, setpointC) {
+  const E_warmup_kj   = E_warmup_kwh * 3600;
+  const T_mean_warmup = (T_at_restart + setpointC) / 2;
+  const t_warmup_h    = warmup_hh_count * 0.5;
+  const E_heatloss_kj = htc * (T_mean_warmup - T_outdoor_warmup) * t_warmup_h * 3.6;
+  const E_net_kj      = E_warmup_kj * eta - E_heatloss_kj;
+  const delta_T       = setpointC - T_at_restart;
+  if (E_net_kj > 0 && delta_T > 0.5) return E_net_kj / delta_T;
+  return null;
 }
 
 // ===== Step 1: Per-day summaries =====
@@ -190,14 +214,14 @@ function estimateSetpoint(heating, external, htc, eta) {
 
 // ===== Step 4: Thermal mass inference =====
 
-function estimateThermalMass(heating, external, htc, eta, setpointC) {
+function estimateThermalMass(heating, external, htc, eta, setpointC, tAtRestartWinterC) {
   const n = heating.length;
   const validEvents = [];
   let anyOffPeriodFound = false;
+  let longEventDiscardedForMissingUserTemp = false;
   let i = 0;
 
   while (i < n) {
-    // Find start of an off period
     if (!heating[i] || heating[i].heating_kwh === null ||
         heating[i].heating_kwh >= TC_CONFIG.OFF_PERIOD_THRESHOLD_KWH) {
       i++;
@@ -212,12 +236,17 @@ function estimateThermalMass(heating, external, htc, eta, setpointC) {
     if (offEnd - offStart < TC_CONFIG.OFF_PERIOD_MIN_HH) continue;
     anyOffPeriodFound = true;
 
-    // Step 1: Restart HH immediately after off period
+    // Anchor check: preceding HH must have positive non-absent heating
+    if (offStart === 0) continue;
+    const prev = heating[offStart - 1];
+    if (prev.heating_kwh == null || prev.heating_kwh <= 0 || prev.is_absence === true) continue;
+
+    // Restart HH valid check
     if (i >= n || heating[i].heating_kwh === null ||
         heating[i].heating_kwh < TC_CONFIG.OFF_PERIOD_THRESHOLD_KWH) continue;
     const restartIdx = i;
 
-    // Step 2: T_outdoor_off — off period's own mean
+    // T_outdoor_off mean
     let offTempSum = 0, offTempCount = 0;
     for (let j = offStart; j < offEnd; j++) {
       if (external[j] && external[j].temp_c !== null) {
@@ -229,10 +258,10 @@ function estimateThermalMass(heating, external, htc, eta, setpointC) {
     const T_outdoor_off = offTempSum / offTempCount;
     const t_off_hours   = (offEnd - offStart) * 0.5;
 
-    // Step 3: Winter filter (off period's mean must be < 10°C)
+    // Winter filter
     if (T_outdoor_off >= TC_CONFIG.WINTER_TEMP_MAX_C) continue;
 
-    // Step 3a: Compute and cache warm-up range (iteration-invariant)
+    // Warm-up phase scan
     const warmup_indices = [];
     let E_warmup_kwh = 0;
     let wuTempSum = 0, wuTempCount = 0;
@@ -242,7 +271,6 @@ function estimateThermalMass(heating, external, htc, eta, setpointC) {
       if (!heating[j] || heating[j].heating_kwh === null) break;
       const e = external[j];
 
-      // Evaluate settled criterion where temp_c is available
       if (e && e.temp_c !== null) {
         const ss_kwh = htc * (setpointC - e.temp_c) * 0.5 / (eta * 1000);
         if (ss_kwh > 0 && heating[j].heating_kwh <= TC_CONFIG.SETTLED_RATIO * ss_kwh) break;
@@ -253,66 +281,88 @@ function estimateThermalMass(heating, external, htc, eta, setpointC) {
       if (e && e.temp_c !== null) { wuTempSum += e.temp_c; wuTempCount++; }
     }
 
-    if (wuTempCount === 0) continue; // cannot compute T_outdoor_warmup
+    if (wuTempCount === 0) continue;
     const T_outdoor_warmup = wuTempSum / wuTempCount;
     const warmup_hh_count  = warmup_indices.length;
 
-    // Step 4: Absence check — off period and warm-up phase
-    let hasAbsence = false;
-    for (let j = offStart; j < offEnd && !hasAbsence; j++) {
-      if (heating[j].is_absence) hasAbsence = true;
-    }
+    // Relaxed absence check: warm-up must be absence-free; off period may contain absence
+    let warmupHasAbsence = false;
     for (const j of warmup_indices) {
-      if (heating[j].is_absence) { hasAbsence = true; break; }
+      if (heating[j].is_absence) { warmupHasAbsence = true; break; }
     }
-    if (hasAbsence) continue;
+    if (warmupHasAbsence) continue;
 
-    validEvents.push({ T_outdoor_off, t_off_hours, warmup_hh_count, E_warmup_kwh, T_outdoor_warmup });
+    let containsAbsenceInOff = false;
+    for (let j = offStart; j < offEnd; j++) {
+      if (heating[j].is_absence) { containsAbsenceInOff = true; break; }
+    }
+
+    // Classify: long if off-period > LONG_EVENT_OFF_HH or contains absence
+    const isLongEvent = (offEnd - offStart > TC_CONFIG.LONG_EVENT_OFF_HH) || containsAbsenceInOff;
+
+    if (isLongEvent) {
+      if (tAtRestartWinterC === null) {
+        longEventDiscardedForMissingUserTemp = true;
+        continue;
+      }
+      validEvents.push({ kind: 'long', T_at_restart: tAtRestartWinterC,
+                         warmup_hh_count, E_warmup_kwh, T_outdoor_warmup });
+    } else {
+      validEvents.push({ kind: 'short', T_outdoor_off, t_off_hours,
+                         warmup_hh_count, E_warmup_kwh, T_outdoor_warmup });
+    }
   }
 
-  // Iterative C estimation (3 passes, cached warm-up values)
+  // Long-event C estimates — independent of τ_seed, computed once
+  const longC = [];
+  for (const ev of validEvents.filter(ev => ev.kind === 'long')) {
+    const c = computeC(ev.T_at_restart, ev.E_warmup_kwh, ev.warmup_hh_count,
+                       ev.T_outdoor_warmup, htc, eta, setpointC);
+    if (c !== null) longC.push(c);
+  }
+
+  // Short-event C estimates — iterative with carry-over (mirrors original last_good_estimates)
   let tauSeed = TC_CONFIG.TAU_SEED_HOURS;
-  let last_good_estimates = null;
+  let lastGoodShortFinal = [];
 
   for (let iter = 0; iter < TC_CONFIG.ITERATIONS; iter++) {
-    const C_estimates = [];
-
-    for (const ev of validEvents) {
-      const T_at_restart  = ev.T_outdoor_off + (setpointC - ev.T_outdoor_off) * Math.exp(-ev.t_off_hours / tauSeed);
-      const E_warmup_kj   = ev.E_warmup_kwh * 3600;
-      const T_mean_warmup = (T_at_restart + setpointC) / 2;
-      const t_warmup_h    = ev.warmup_hh_count * 0.5;
-      const E_heatloss_kj = htc * (T_mean_warmup - ev.T_outdoor_warmup) * t_warmup_h * 3.6;
-      const E_net_kj      = E_warmup_kj * eta - E_heatloss_kj;
-      const delta_T       = setpointC - T_at_restart;
-
-      if (E_net_kj > 0 && delta_T > 0.5) C_estimates.push(E_net_kj / delta_T);
+    const shortFinal = [];
+    for (const ev of validEvents.filter(ev => ev.kind === 'short')) {
+      const T_at_restart = ev.T_outdoor_off + (setpointC - ev.T_outdoor_off)
+                                            * Math.exp(-ev.t_off_hours / tauSeed);
+      const c = computeC(T_at_restart, ev.E_warmup_kwh, ev.warmup_hh_count,
+                         ev.T_outdoor_warmup, htc, eta, setpointC);
+      if (c !== null) shortFinal.push(c);
     }
-
-    if (C_estimates.length > 0) {
-      last_good_estimates = C_estimates;
-      tauSeed = median(C_estimates) / (htc * 3.6);
+    if (shortFinal.length > 0) {
+      lastGoodShortFinal = shortFinal;
+      tauSeed = median(shortFinal) / (htc * 3.6);
     }
   }
 
-  const warnings = [];
+  // Pool: last good short estimates + all long estimates
+  // Note: events_used reflects count before percentile filter; the 5-event gate checks this count
+  const allEstimates = [...lastGoodShortFinal, ...longC];
+  const events_used = allEstimates.length;
 
-  if (!last_good_estimates || last_good_estimates.length < TC_CONFIG.MIN_EVENTS_FOR_MASS) {
-    warnings.push(anyOffPeriodFound
-      ? 'Not enough overnight cold-soak events to estimate thermal mass. More winter data needed.'
-      : 'Heating appears to run continuously overnight — not enough cold-soak data to estimate thermal mass.');
-    return { thermal_mass_kj_per_k: null, events_used: last_good_estimates?.length ?? 0, warnings };
+  let thermal_mass_kj_per_k = null;
+  let thermal_mass_source = null;
+
+  if (events_used >= TC_CONFIG.MIN_EVENTS_FOR_MASS) {
+    const sorted = [...allEstimates].sort((a, b) => a - b);
+    const lo = percentile(sorted, TC_CONFIG.OUTLIER_PCTILE_LOW);
+    const hi = percentile(sorted, TC_CONFIG.OUTLIER_PCTILE_HIGH);
+    thermal_mass_kj_per_k = median(sorted.filter(v => v >= lo && v <= hi));
+    thermal_mass_source = 'measured_cold_soak';
   }
-
-  // 5th–95th percentile outlier filter
-  const sorted = [...last_good_estimates].sort((a, b) => a - b);
-  const lo = percentile(sorted, TC_CONFIG.OUTLIER_PCTILE_LOW);
-  const hi = percentile(sorted, TC_CONFIG.OUTLIER_PCTILE_HIGH);
 
   return {
-    thermal_mass_kj_per_k: median(sorted.filter(v => v >= lo && v <= hi)),
-    events_used: last_good_estimates.length,
-    warnings,
+    thermal_mass_kj_per_k,
+    thermal_mass_source,
+    events_used,
+    warnings: [],
+    any_off_period_found: anyOffPeriodFound,
+    long_event_discarded_for_missing_user_temp: longEventDiscardedForMissingUserTemp,
   };
 }
 
@@ -342,6 +392,31 @@ function computeRatingAndTimeConstant(thermalMassKjPerK, htcWPerK) {
   return { time_constant_hours, thermal_mass_rating, tcWarns };
 }
 
+// ===== Tau-bucket sanity check =====
+
+function checkTauBucketSanity(time_constant_hours, tauBucket, source) {
+  if (source !== 'measured_cold_soak') return null;
+  if (!tauBucket || time_constant_hours == null) return null;
+  const midpoint = TAU_BUCKET_HOURS_MAP[tauBucket];
+  if (midpoint === undefined) return null;
+  const ratio = time_constant_hours / midpoint;
+  if (ratio > TC_CONFIG.TAU_SANITY_HIGH_RATIO || ratio < TC_CONFIG.TAU_SANITY_LOW_RATIO) {
+    // Lower-cased forms of the UI <option> text — appear inside a sentence
+    const labels = {
+      fast:           'cools noticeably within a few hours',
+      evening:        'stays warm into the evening, cooler by morning',
+      all_day:        'holds its warmth for most of a day',
+      stays_for_days: 'stays warm for days — takes ages to cool',
+    };
+    return `Your data suggests a thermal time constant of ${time_constant_hours.toFixed(1)} h, `
+         + `but your description (${labels[tauBucket]}) implies around ${midpoint} h. `
+         + 'The data-driven figure is used — a large gap can indicate measurement noise, '
+         + "irregular heating patterns, or that the lived-experience description didn't "
+         + 'match the data.';
+  }
+  return null;
+}
+
 // ===== Wall construction validation =====
 
 function checkWallConstruction(thermalMassKjPerK, wallConstructionType) {
@@ -359,25 +434,30 @@ function checkWallConstruction(thermalMassKjPerK, wallConstructionType) {
 
 // ===== Step 6: Validation status =====
 
-function computeValidationStatus(setpointC, thermalMassKjPerK, setpointDaysUsed, eventsUsed) {
+function computeValidationStatus(setpointC, thermalMassKjPerK, source, setpointDaysUsed, eventsUsed) {
   if (setpointC === null && thermalMassKjPerK === null) return 'insufficient_data';
-  if (setpointC !== null && thermalMassKjPerK !== null &&
-      setpointDaysUsed >= 50 && eventsUsed >= 10) return 'good';
+  if (setpointC !== null && thermalMassKjPerK !== null
+      && source === 'measured_cold_soak'
+      && setpointDaysUsed >= 50 && eventsUsed >= 10) return 'good';
   return 'acceptable';
 }
 
 // ===== Main export =====
 
-export function estimateThermalCharacter(heating, external, heatLoss, baseloadMethod, wallConstructionType) {
+export function estimateThermalCharacter(heating, external, heatLoss, baseloadMethod,
+                                          wallConstructionType,
+                                          tAtRestartWinterC, tauBucket) {
   const nullResult = (validation_status) => ({
     setpoint_c: null,
     thermal_mass_kj_per_k: null,
+    thermal_mass_source: null,
     time_constant_hours: null,
     thermal_mass_rating: null,
     occupancy_weights: null,
     setpoint_days_used: 0,
     thermal_mass_events_used: 0,
     validation_status,
+    long_event_discarded_for_missing_user_temp: false,
     warnings: [],
   });
 
@@ -387,6 +467,20 @@ export function estimateThermalCharacter(heating, external, heatLoss, baseloadMe
   const htc = heatLoss.htc_w_per_k;
   const eta = heatLoss.boiler_efficiency_used;
 
+  // Plausibility check on tAtRestartWinterC (range gate, before setpoint is known)
+  const inputWarnings = [];
+  let validatedTAtRestart = (tAtRestartWinterC == null) ? null : tAtRestartWinterC;
+  if (validatedTAtRestart !== null) {
+    if (validatedTAtRestart < TC_CONFIG.T_AT_RESTART_MIN_C
+        || validatedTAtRestart > TC_CONFIG.T_AT_RESTART_MAX_C) {
+      inputWarnings.push(
+        `Provided indoor temperature on return (${validatedTAtRestart}°C) is outside the `
+        + 'plausible range — value ignored.'
+      );
+      validatedTAtRestart = null;
+    }
+  }
+
   const daySummaries = buildDaySummaries(heating, external);
 
   const { occupancy_weights, warning: owWarn } = computeOccupancyWeights(heating, daySummaries);
@@ -394,37 +488,105 @@ export function estimateThermalCharacter(heating, external, heatLoss, baseloadMe
   const { setpoint_c, setpoint_days_used, warnings: spWarns } =
     estimateSetpoint(heating, external, htc, eta);
 
+  // Setpoint comparison: reject tAtRestart if at or above the inferred setpoint
+  if (validatedTAtRestart !== null && setpoint_c !== null
+      && validatedTAtRestart >= setpoint_c) {
+    inputWarnings.push(
+      `Provided indoor temperature on return (${validatedTAtRestart}°C) is at or above `
+      + `your inferred setpoint (${setpoint_c.toFixed(1)}°C) — value ignored.`
+    );
+    validatedTAtRestart = null;
+  }
+
+  // Defaults for fields from estimateThermalMass (used in Step 4c warnings even if not called)
   let thermal_mass_kj_per_k = null;
-  let events_used = 0;
+  let thermal_mass_source = null;
+  let thermal_mass_events_used = 0;
   let massWarns = [];
+  let any_off_period_found = false;
+  let long_event_discarded_for_missing_user_temp = false;
 
   if (setpoint_c !== null) {
-    ({ thermal_mass_kj_per_k, events_used, warnings: massWarns } =
-      estimateThermalMass(heating, external, htc, eta, setpoint_c));
+    const massResult = estimateThermalMass(
+      heating, external, htc, eta, setpoint_c, validatedTAtRestart
+    );
+    ({ thermal_mass_kj_per_k, thermal_mass_source,
+       events_used: thermal_mass_events_used,
+       warnings: massWarns,
+       any_off_period_found,
+       long_event_discarded_for_missing_user_temp } = massResult);
+  }
+
+  // Path B: lived-experience τ_bucket fallback when Path A produced insufficient events
+  let pathBWarning = null;
+  if (thermal_mass_source === null && tauBucket && htc !== null) {
+    const tauHours = TAU_BUCKET_HOURS_MAP[tauBucket];
+    if (tauHours !== undefined) {
+      thermal_mass_kj_per_k = tauHours * htc * 3.6;
+      thermal_mass_source   = 'user_tau';
+      pathBWarning = 'Thermal mass estimated from your description of how the home holds '
+                   + 'its warmth (insufficient cold-soak events were found in your data). '
+                   + 'For pre-heating analysis this is indicative — a data-driven estimate '
+                   + 'would normally be more precise.';
+    }
+  }
+
+  // Step 4c: failure-path warnings (only when both paths failed)
+  // thermal_mass_events_used reflects Path A's data-driven count even when Path B supplied the value
+  const stepCWarnings = [];
+  if (thermal_mass_source === null) {
+    if (!any_off_period_found && !tauBucket) {
+      stepCWarnings.push(
+        'Heating appears to run continuously overnight — not enough cold-soak data '
+        + 'to estimate thermal mass. Describing how your home holds its warmth would '
+        + 'unlock smart pre-heating analysis.'
+      );
+    } else if (any_off_period_found && !tauBucket) {
+      stepCWarnings.push(
+        'Not enough overnight cold-soak events to estimate thermal mass. Either more '
+        + 'winter data is needed, or you can describe how your home holds its warmth '
+        + 'to enable smart pre-heating analysis.'
+      );
+    }
+    if (long_event_discarded_for_missing_user_temp) {
+      stepCWarnings.push(
+        "If you've returned home from being away during winter, providing the indoor "
+        + 'temperature you typically find on return would unlock additional events from '
+        + 'your data.'
+      );
+    }
   }
 
   const { time_constant_hours, thermal_mass_rating, tcWarns } =
     computeRatingAndTimeConstant(thermal_mass_kj_per_k, htc);
 
+  const sanityWarning = checkTauBucketSanity(time_constant_hours, tauBucket, thermal_mass_source);
+
   const { warning: wcWarn } = checkWallConstruction(thermal_mass_kj_per_k, wallConstructionType);
 
   const validation_status = computeValidationStatus(
-    setpoint_c, thermal_mass_kj_per_k, setpoint_days_used, events_used
+    setpoint_c, thermal_mass_kj_per_k, thermal_mass_source, setpoint_days_used, thermal_mass_events_used
   );
 
   return {
     setpoint_c,
     thermal_mass_kj_per_k,
+    thermal_mass_source,
     time_constant_hours,
     thermal_mass_rating,
     occupancy_weights,
     setpoint_days_used,
-    thermal_mass_events_used: events_used,
+    thermal_mass_events_used,
     validation_status,
+    long_event_discarded_for_missing_user_temp,
     warnings: [
       ...spWarns,
       ...massWarns,
       ...tcWarns,
+      ...inputWarnings,
+      ...(pathBWarning ? [pathBWarning] : []),
+      ...stepCWarnings,
+      ...(sanityWarning ? [sanityWarning] : []),
       ...(owWarn ? [owWarn] : []),
       ...(wcWarn ? [wcWarn] : []),
     ],

@@ -181,11 +181,41 @@
     <!-- Module 5: Thermal Character -->
     <section class="card hidden" id="thermal-char-card">
       <h2>Thermal Character</h2>
+      <div id="thermal-char-inputs">
+        <p class="card-intro">
+          Two optional inputs help when your boiler runs continuously overnight, which
+          prevents the data-driven cold-soak estimate. Both can be left blank.
+        </p>
+        <div class="form-group">
+          <label for="t-at-restart">Indoor temperature on return from a winter trip
+            <span class="unit">°C</span>
+            <span style="font-weight:normal;color:var(--colour-dark)">(optional)</span>
+          </label>
+          <input id="t-at-restart" type="number" step="0.5" min="5" max="19" placeholder="e.g. 14">
+          <p class="form-hint">
+            When you've come home after several days away in winter, what does the indoor
+            thermometer typically read?
+          </p>
+        </div>
+        <div class="form-group">
+          <label for="tau-bucket">How does your home hold its warmth?
+            <span style="font-weight:normal;color:var(--colour-dark)">(optional)</span>
+          </label>
+          <select id="tau-bucket">
+            <option value="">Don't know</option>
+            <option value="fast">Cools noticeably within a few hours</option>
+            <option value="evening">Stays warm into the evening, cooler by morning</option>
+            <option value="all_day">Holds its warmth for most of a day</option>
+            <option value="stays_for_days">Stays warm for days — takes ages to cool</option>
+          </select>
+          <p class="form-hint">After turning the heating off in winter.</p>
+        </div>
+      </div>
       <div id="thermal-char-results" class="hidden">
         <div class="status-area" id="thermal-char-status"></div>
         <dl id="thermal-char-summary"></dl>
       </div>
-      <button class="btn btn-primary" id="btn-recalculate-thermal-char">Recalculate with updated construction type</button>
+      <button class="btn btn-primary" id="btn-recalculate-thermal-char">Recalculate</button>
     </section>
 
     <!-- Module 6: Heat Pump Model -->

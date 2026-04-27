@@ -1,7 +1,7 @@
 # Module 5b — Thermal Mass Multi-Path Estimation
 
 **Date:** 2026-04-27
-**Status:** Awaiting approval — review via claude.ai before implementation begins.
+**Status:** ✅ Approved — 2026-04-27
 **Depends on:**
 - `design/thermal-character.md` revised 2026-04-27 (multi-path Step 4 — Path A relaxation,
   long-event branch, Path B fallback). Authoritative spec for this plan.
@@ -194,7 +194,9 @@ for each off-period [offStart, offEnd) with length ≥ OFF_PERIOD_MIN_HH:
   // Anchor check (NEW)
   if offStart === 0: continue        // no preceding HH
   prev = heating[offStart - 1]
-  if prev.heating_kwh ≤ 0 OR prev.is_absence === true: continue
+  if (prev.heating_kwh == null OR prev.heating_kwh ≤ 0
+      OR prev.is_absence === true): continue
+  // Explicit null guard avoids relying on JS coercion (`null <= 0 === true`).
 
   // T_outdoor_off mean (existing)
   if no valid temp_c in off window: continue
@@ -243,9 +245,13 @@ for ev where ev.kind === 'long':
                ev.T_outdoor_warmup, htc, eta, setpointC)
   if c !== null: longC.push(c)
 
-// Short-event C estimates — iterative as before, but use computeC()
+// Short-event C estimates — iterative as before, but use computeC().
+// Carry-over: if an iteration produces 0 estimates (e.g. converged τ pushes a
+// borderline event over the delta_T > 0.5 gate), retain the last good iteration's
+// values rather than discarding them. Mirrors the original M5 implementation's
+// last_good_estimates pattern.
 tauSeed = TAU_SEED_HOURS
-shortFinal = []
+lastGoodShortFinal = []
 for iter in 0..ITERATIONS-1:
   shortFinal = []
   for ev where ev.kind === 'short':
@@ -255,10 +261,11 @@ for iter in 0..ITERATIONS-1:
                  ev.T_outdoor_warmup, htc, eta, setpointC)
     if c !== null: shortFinal.push(c)
   if shortFinal.length > 0:
+    lastGoodShortFinal = shortFinal
     tauSeed = median(shortFinal) / (htc * 3.6)
 
-// Pool and decide
-allEstimates = [...shortFinal, ...longC]
+// Pool and decide — use the last good iteration's short estimates, plus all long.
+allEstimates = [...lastGoodShortFinal, ...longC]
 events_used = allEstimates.length
 
 if events_used >= MIN_EVENTS_FOR_MASS:
@@ -389,11 +396,12 @@ function checkTauBucketSanity(time_constant_hours, tauBucket, source) {
   const ratio = time_constant_hours / midpoint;
   if (ratio > TC_CONFIG.TAU_SANITY_HIGH_RATIO
       || ratio < TC_CONFIG.TAU_SANITY_LOW_RATIO) {
+    // Lower-cased forms of the UI <option> text — appear inside a sentence.
     const labels = {
-      fast: 'cools in a few hours',
-      evening: 'stays warm into evening',
-      all_day: 'holds warmth most of a day',
-      stays_for_days: 'stays warm for days',
+      fast:           'cools noticeably within a few hours',
+      evening:        'stays warm into the evening, cooler by morning',
+      all_day:        'holds its warmth for most of a day',
+      stays_for_days: 'stays warm for days — takes ages to cool',
     };
     return `Your data suggests a thermal time constant of ${time_constant_hours.toFixed(1)} h, `
          + `but your description (${labels[tauBucket]}) implies around ${midpoint} h. `
@@ -605,15 +613,18 @@ list), add a row for `thermal_mass_source` immediately after the `thermal_mass_k
 row:
 
 ```javascript
-const sourceLabel = ({
-  measured_cold_soak: 'Measured from your heating data',
-  user_tau:           'Estimated from your description',
-})[result.thermal_mass_source] || '—';
-rows.push(['Thermal mass source', sourceLabel]);
+if (result.thermal_mass_source !== null) {
+  const sourceLabel = ({
+    measured_cold_soak: 'Measured from your heating data',
+    user_tau:           'Estimated from your description',
+  })[result.thermal_mass_source];
+  rows.push(['Thermal mass source', sourceLabel]);
+}
 ```
 
 (Use whichever push / template syntax matches the existing builder — the change is one row
-inserted in the same builder.)
+inserted in the same builder. The null guard avoids a redundant "Thermal mass source: —"
+row sitting next to a "Thermal mass: —" row when the failure path fires.)
 
 ---
 
@@ -654,9 +665,17 @@ Test coverage (each test maps to one or more design doc tests in `test-criteria.
 | T21a | Test 17 setup (both paths fail) | `thermal_mass_kj_per_k === null && thermal_mass_source === null` |
 | T21b | Test 15 setup (Path B succeeds) | `thermal_mass_kj_per_k !== null && thermal_mass_source === "user_tau"` |
 | T21c | Test 4 setup (Path A succeeds) | `thermal_mass_kj_per_k !== null && thermal_mass_source === "measured_cold_soak"` |
-| T22  | Path B result piped through M7's `estimateScenarioConsumption()` | M7 `validation_status.smart === "ok"`; `scenarios.smart_hp_hh.gas_kwh` non-null array |
 
-Total: 22 assertions. Each prints `✅ T## label` on pass and `❌ T## label — detail` on
+Design doc Test 22 (Path B output piped through M7's `estimateScenarioConsumption()`)
+is **not** included in the node test suite. Adding it would require importing
+`scenario-consumption.js` and fabricating plausible synthetic M2 / M4 / M6 outputs
+purely to drive M7 — substantial harness for limited extra signal. The contract is
+exercised end-to-end in browser test U2, which uses real upstream module outputs
+rather than synthetic stand-ins. Existing `test-m7.mjs` already verifies M7 handles
+arbitrary `thermal_mass_kj_per_k` values, so the M5/M7 boundary is covered without
+duplicating the harness.
+
+Total: 21 assertions. Each prints `✅ T## label` on pass and `❌ T## label — detail` on
 fail. Exit code is 0 if all pass, 1 otherwise (matches existing test-m\*.mjs convention).
 
 Synthetic builders: reuse the helpers from `test-m5.mjs` for warm-up event construction
@@ -674,6 +693,7 @@ regression gate before adding any new tests.
 | Risk | Mitigation |
 |------|-----------|
 | Refactoring `estimateThermalMass()` breaks `test-m5.mjs` short-event T4 (15-event happy path) | The two-pass pool-and-filter is structurally identical to the current single-pass for short-only inputs (longC = []). Run `test-m5.mjs` first; do not proceed to Step 4 of this plan until 26/26 still pass. |
+| Iteration N produces 0 short-event C estimates → final pool empty even though earlier iterations had valid values | `lastGoodShortFinal` carry-over (§1c) retains the most recent non-empty iteration's output, mirroring the original M5 implementation's `last_good_estimates` pattern. Required to prevent regression vs current shipped behaviour for borderline events. |
 | Path B activates accidentally when Path A had ≥5 events but they were percentile-filtered to <5 | The 5-event gate is checked on `events_used` (count **before** percentile filter). Percentile filter only narrows the median, never the count. Verified in pseudocode above. Add explicit code comment. |
 | `events_used` is reported as Path A's count even when Path B is used (per design intent) — could confuse a future reader | Add a comment in the main fn: `// thermal_mass_events_used reflects Path A's data-driven count even when Path B supplied the value (per design doc)`. The `thermal_mass_source` field disambiguates. |
 | Setpoint check on `t_at_restart` runs before setpoint is inferred | Plausibility against [5, 19] runs at entry; the setpoint comparison runs only after Step 3 returns a non-null `setpoint_c`. Order is enforced in code; setpoint-null short-circuits the comparison. |
@@ -700,7 +720,9 @@ regression gate before adding any new tests.
 - [ ] **T19** — Sanity-check suppressed when ratio inside [0.5, 2.0].
 - [ ] **T20** — `t_at_restart_winter_c` outside [5, 19] or ≥ setpoint: ignored with warning.
 - [ ] **T21** — `thermal_mass_kj_per_k === null` ⇔ `thermal_mass_source === null` across all paths.
-- [ ] **T22** — Path B result piped to M7: `validation_status.smart === "ok"`; smart scenarios non-null.
+
+Design doc Test 22 (M5→M7 contract preservation) is verified via browser test U2 below,
+not in the node suite — see §4 rationale.
 
 ### Regression
 - [ ] **`test-m5.mjs` 26/26 still pass** after refactor (no behavioural change to short-event happy path).
@@ -719,6 +741,124 @@ regression gate before adding any new tests.
 
 ---
 
+## Design Review
+
+**Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Date:** 2026-04-27
+**Review type:** Plan review (pre-implementation)
+**Authoritative design:** `~/Documents/git-repos/praxis-claude-hub/projects/tools/heatpump-analyser/design/thermal-character.md` (revised 2026-04-27)
+
+### Context
+
+This is the new plan that actions the multi-path Step 4 design revision. The
+implemented `m5-thermal-character.md` plan remains the historical record of the
+pre-revision build and is not modified. M7's contract is preserved (the new
+`thermal_mass_source` field is additive; M7 still consumes only
+`thermal_mass_kj_per_k` and the existing peer fields). Plan tracks the design
+closely; review found surgical issues only.
+
+### Required changes for implementation
+
+**1. Iteration carry-over regression vs current code (MEDIUM).**
+
+The original implemented M5 plan's iteration loop preserved `last_good_estimates`
+when an iteration produced zero C values. The pre-review m5b pseudocode reset
+`shortFinal = []` at every iteration, so a borderline event passing in iter 1 but
+failing in iter 3 (due to converged τ pushing it over the `delta_T > 0.5` gate)
+would silently disappear from the pool — a regression vs shipped behaviour.
+
+**Fix applied inline (§1c):** introduced `lastGoodShortFinal` carry-over mirroring
+the original implementation's pattern. Pool composition uses
+`lastGoodShortFinal`, not the live `shortFinal`. Risks-table entry added.
+
+**2. Test T22 not implementable as scoped (MEDIUM).**
+
+T22 ("Path B result piped through M7's `estimateScenarioConsumption()`") was
+listed in the node test table but the test file imports only
+`thermal-character.js`. Adding M7 + synthetic upstream stand-ins for one
+contract-preservation assertion was disproportionate to the value.
+
+**Fix applied inline (§4 + success criteria):** T22 removed from the node suite;
+substitution note added explaining that browser test U2 exercises the same
+contract end-to-end on real upstream outputs, and existing `test-m7.mjs` already
+verifies M7 with arbitrary `thermal_mass_kj_per_k` values. Total node assertions
+21 (was 22).
+
+**3. Anchor null-coercion subtlety (LOW).**
+
+The §1c anchor check used `if prev.heating_kwh ≤ 0` and relied on JS coercion
+(`null <= 0 === true`) to discard null prior-HH cases. Worked, but read as
+coincidence rather than intent.
+
+**Fix applied inline (§1c):** explicit `prev.heating_kwh == null` precondition
+added.
+
+**4. Sanity-check warning labels did not match UI option text (LOW).**
+
+§1g warning labels (`'cools in a few hours'` etc.) were paraphrased rather than
+matching the `<select>` `<option>` text. A user reading "your description (cools
+in a few hours)" against an option labelled "Cools noticeably within a few hours"
+would notice the inconsistency.
+
+**Fix applied inline (§1g):** labels now match the UI option text verbatim
+(lower-cased to flow inside a sentence).
+
+**5. Plan header status wording was stale (LOW).**
+
+"Awaiting approval — review via claude.ai before implementation begins" reflected
+the pre-two-window setup. Updated to the approved status.
+
+**6. UX: redundant null source row (LOW).**
+
+§3d unconditionally pushed a "Thermal mass source" row that rendered as `—` when
+`thermal_mass_source` was null — redundant next to a "Thermal mass: —" row in
+the failure path.
+
+**Fix applied inline (§3d):** null guard added; the row only renders when source
+is non-null.
+
+### Cross-cutting note (not a plan change)
+
+The design doc itself contained an internal contradiction in Step 4a item 1
+between "scanned backwards … at most 48 HH" wording and the long-event
+classification logic that requires the full physical off-period to be detected.
+The plan correctly resolved the ambiguity (full-extent scan, classify by length)
+without explicit instruction. The design doc is updated separately to remove the
+ambiguous wording; no corresponding plan change required.
+
+## Review Summary
+
+| Severity | Count | Status                       |
+|----------|-------|------------------------------|
+| CRITICAL | 0     | ✓ pass                       |
+| HIGH     | 0     | ✓ pass                       |
+| MEDIUM   | 2     | ⚠ resolved inline            |
+| LOW      | 4     | ⚠ resolved inline            |
+
+Verdict: **APPROVE WITH EDITS** — six required changes documented above; all
+applied inline. Plan ready to implement.
+
+---
+
+## Approval
+
+**Status:** ✅ Approved — 2026-04-27
+**Approved by:** Rhiannon (via Opus review)
+**Clarifications confirmed:**
+- Carry-over of `lastGoodShortFinal` mirrors the original M5 implementation's
+  `last_good_estimates` pattern; required to prevent regression for borderline
+  short events.
+- Design doc Test 22 (M5→M7 contract preservation) is verified via browser test
+  U2 on real upstream data, not via a node-suite end-to-end harness.
+- Design-doc Step 4a item 1 ambiguity (scan-window wording) is updated separately
+  in the design doc, not in this plan.
+
+---
+
 ## Implementation Deviations
 
-*To be filled in during implementation. Record any departure from this plan with rationale.*
+**D1 — `long_event_discarded_for_missing_user_temp` exposed in return object.**
+Plan showed this field only in the internal `estimateThermalMass()` return; the outer `estimateThermalCharacter()` return object in §1i did not include it. Test T12a asserts the field directly on the outer return. Added to both the main return and `nullResult` for shape consistency and test transparency. The field is unused by M7/M8/M9 (additive).
+
+**D2 — T14 test design: offStart=0 anchor, not kwh=0 preceding anchor.**
+The plan described T14 as "off-period preceded immediately by another off-period (anchor heating_kwh = 0)". In practice, any HH with kwh = 0 immediately before an off-period would be absorbed into the off-period by the scan, making the `prev.heating_kwh ≤ 0` branch unreachable from contiguous 0-kwh HH. The test instead exercises the equivalent `offStart === 0` branch (no preceding HH at all), which is the real anchor-failure path for the continuous-zero case. The `is_absence` anchor (T14b) was unaffected.

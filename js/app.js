@@ -171,6 +171,8 @@ const thermalCharResults    = document.getElementById('thermal-char-results');
 const thermalCharStatus     = document.getElementById('thermal-char-status');
 const thermalCharSummary    = document.getElementById('thermal-char-summary');
 const wallConstructionInput = document.getElementById('wall-construction');
+const tAtRestartInput       = document.getElementById('t-at-restart');
+const tauBucketSelect       = document.getElementById('tau-bucket');
 const btnRecalcThermalChar  = document.getElementById('btn-recalculate-thermal-char');
 
 // Heat pump model DOM references
@@ -1173,6 +1175,13 @@ function displayThermalCharacterResults(result) {
   if (result.thermal_mass_kj_per_k !== null) {
     rows.push(['Thermal mass', `${Math.round(result.thermal_mass_kj_per_k).toLocaleString()} kJ/K`]);
   }
+  if (result.thermal_mass_source !== null) {
+    const sourceLabel = ({
+      measured_cold_soak: 'Measured from your heating data',
+      user_tau:           'Estimated from your description',
+    })[result.thermal_mass_source];
+    rows.push(['Thermal mass source', sourceLabel]);
+  }
   if (result.time_constant_hours !== null) {
     rows.push(['Thermal time constant', `${fmt(result.time_constant_hours, 1)} hours`]);
   }
@@ -1204,6 +1213,15 @@ async function runThermalCharacter(showProgressFn, showStatusFn) {
 
   const wallConstruction = wallConstructionInput.value || null;
 
+  const tAtRestartRaw = tAtRestartInput.value.trim();
+  let tAtRestart = null;
+  if (tAtRestartRaw !== '') {
+    const parsed = parseFloat(tAtRestartRaw);
+    tAtRestart = isNaN(parsed) ? null : parsed;
+  }
+
+  const tauBucket = tauBucketSelect.value || null;
+
   let result;
   try {
     result = estimateThermalCharacter(
@@ -1212,6 +1230,8 @@ async function runThermalCharacter(showProgressFn, showStatusFn) {
       heatLossResult,
       baseloadResult.baseload_metadata.method,
       wallConstruction,
+      tAtRestart,
+      tauBucket,
     );
   } catch (err) {
     showStatusFn('Thermal character estimation failed: ' + err.message, 'error');
@@ -1229,15 +1249,20 @@ btnRecalcThermalChar.addEventListener('click', async () => {
   thermalCharStatus.innerHTML  = '';
   thermalCharSummary.innerHTML = '';
   thermalCharResults.classList.add('hidden');
-  await runThermalCharacter(
-    () => {},
-    (msg, type) => {
-      const div = document.createElement('div');
-      div.className = `status-msg ${type}`;
-      div.textContent = msg;
-      thermalCharStatus.appendChild(div);
-    }
-  );
+
+  const showStatus = (msg, type) => {
+    const div = document.createElement('div');
+    div.className = `status-msg ${type}`;
+    div.textContent = msg;
+    thermalCharStatus.appendChild(div);
+  };
+
+  await runThermalCharacter(() => {}, showStatus);
+  // Thermal-mass change flips smart scenarios from null ↔ values; chain downstream
+  await runScenarioConsumption(() => {}, () => {});
+  await runPricingEngine(() => {}, () => {});
+  await runFinancialAnalysis(() => {}, () => {});
+
   btnRecalcThermalChar.disabled = false;
 });
 
