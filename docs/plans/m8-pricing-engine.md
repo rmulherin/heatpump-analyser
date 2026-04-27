@@ -689,46 +689,56 @@ the first and last calendar months of the data period.
 
 ### Core computation
 
-- [ ] **T1: Time-varying gas rate.** Three tariff periods: Jan–Mar at 7.0 p/kWh, Apr–Jun at
+- [x] **T1: Time-varying gas rate.** Three tariff periods: Jan–Mar at 7.0 p/kWh, Apr–Jun at
   7.5 p/kWh, Jul+ at 6.8 p/kWh. HH timestamp in May → `gas_rate_by_hh[i] = 7.5`.
   HH timestamp in August → `gas_rate_by_hh[i] = 6.8`. (Design doc test 1.)
+  ✅ Node test-m8.mjs T1a/T1b — 2026-04-27.
 
-- [ ] **T2: HH rate construction.** `wholesale_p_kwh = 5.0`, `hh_overhead = 13.0` →
+- [x] **T2: HH rate construction.** `wholesale_p_kwh = 5.0`, `hh_overhead = 13.0` →
   `elec_hh_rate_by_hh[i] = 18.0`. Null wholesale → `elec_hh_rate_by_hh[i] = 13.0`.
   (Design doc test 2.)
+  ✅ Node test-m8.mjs T2a/T2b/T2c — 2026-04-27.
 
-- [ ] **T3: Negative wholesale passthrough.** `wholesale_p_kwh = −5.0`, `hh_overhead = 13.0`
+- [x] **T3: Negative wholesale passthrough.** `wholesale_p_kwh = −5.0`, `hh_overhead = 13.0`
   → `elec_hh_rate_by_hh[i] = 8.0`. Fails if clamped to 13.0.
   (Design doc test 3.)
+  ✅ Node test-m8.mjs T3 — 2026-04-27.
 
-- [ ] **T4: Standing charge — fuel supply logic.** `dumb_hp_svt`: gas standing charge = £0/yr.
+- [x] **T4: Standing charge — fuel supply logic.** `dumb_hp_svt`: gas standing charge = £0/yr.
   `hybrid_dumb`: both standing charges included.
   (Design doc test 4.)
+  ✅ Node test-m8.mjs T4a/T4b (365-day zero-consumption dataset; gasSc=30, elecSc=60) — 2026-04-27.
 
-- [ ] **T5: Energy cost — dumb_hp_svt.** `elec_kwh[i] = 2.0`, `svt_rate = 24.50` →
+- [x] **T5: Energy cost — dumb_hp_svt.** `elec_kwh[i] = 2.0`, `svt_rate = 24.50` →
   energy cost = £0.49 for that HH. HH rate not applied.
   (Design doc test 5.)
+  ✅ Node test-m8.mjs T5 (wholesale=100 → HH rate=113; verified SVT used not HH rate) — 2026-04-27.
 
-- [ ] **T6: Energy cost — dumb_hp_hh.** `elec_kwh[i] = 2.0`, `elec_hh_rate_by_hh[i] = 18.0`
+- [x] **T6: Energy cost — dumb_hp_hh.** `elec_kwh[i] = 2.0`, `elec_hh_rate_by_hh[i] = 18.0`
   → energy cost = £0.36.
   (Design doc test 6.)
+  ✅ Node test-m8.mjs T6a/T6b — 2026-04-27.
 
-- [ ] **T7: Annual scaling.** 300-day window, energy = £500, standing = £100 →
+- [x] **T7: Annual scaling.** 300-day window, energy = £500, standing = £100 →
   `annual_cost_gbp = 600 × 365/300 = £730`.
   (Design doc test 7.)
+  ✅ Node test-m8.mjs T7a/T7b (300-day window, energy=£30, standing=0 → annual=£36.50; same scale formula verified) — 2026-04-27.
 
-- [ ] **T8: Monthly sum = annual (unscaled).** Sum of monthly `total_gbp` across all months
+- [x] **T8: Monthly sum = annual (unscaled).** Sum of monthly `total_gbp` across all months
   equals `energy_cost_gbp + standing_charge_gbp` (unscaled). Checked by inspecting the
   pricing result object in browser devtools.
   (Design doc test 8.)
+  ✅ Node test-m8.mjs T8a/T8b/T8c (Jan+Feb 2025, 2832 HH; monthly energy, standing, and total sums each verified to ±1e-6) — 2026-04-27.
 
-- [ ] **T9: Partial month flag.** Data from 15-Apr: first April (15 days) → `partial: true`.
+- [x] **T9: Partial month flag.** Data from 15-Apr: first April (15 days) → `partial: true`.
   Last April (15 days) → `partial: true`. Full months between → `partial: false`.
   (Design doc test 9.)
+  ✅ Node test-m8.mjs T9a/T9b/T9c (Apr 16d → partial, May 31d → full, Jun 10d → partial) — 2026-04-27.
 
-- [ ] **T10: Null scenario passthrough.** `validation_status.smart = 'insufficient_data'` →
+- [x] **T10: Null scenario passthrough.** `validation_status.smart = 'insufficient_data'` →
   `smart_hp_hh.annual_cost_gbp = null`. Other scenarios unaffected.
   (Design doc test 10.)
+  ✅ Node test-m8.mjs T10a/T10b/T10c/T10d — 2026-04-27.
 
 ### UI and integration
 

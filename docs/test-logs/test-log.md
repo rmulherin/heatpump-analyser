@@ -319,6 +319,62 @@ Run 2026-04-27, `node test-m7.mjs` from repo root. 27 assertions covering plan t
 
 **Total: 26/27 ✅, 1 ❌ (real bug in M7 — see T9b)**
 
+### M7 — Scenario Consumption: browser tests
+
+| ID | Description | Result | Notes |
+|----|-------------|--------|-------|
+| T17 | Scenario summary table visible after Octopus flow; 4 rows (current, dumb HP ×2, hybrid) | ⏳ | Pending user browser test |
+| T18 | Pre-heat offset slider updates display; recalculate re-runs scenario engine | ⏳ | Pending user browser test |
+
+---
+
+### M8 — Pricing Engine: synthetic unit tests (`test-m8.mjs`)
+
+Ran via `node test-m8.mjs`. 24 assertions. All pass.
+
+**Environment:** Windows 11, Node v24. **Date:** 2026-04-27.
+
+| ID | Description | Result | Notes |
+|----|-------------|--------|-------|
+| CONFIG | PE_CONFIG.PARTIAL_MONTH_DAY_THRESHOLD === 20 | ✅ | Export smoke test |
+| T1a | May timestamp → gas rate 7.5 p/kWh (3-period tariff) | ✅ | |
+| T1b | August timestamp → gas rate 6.8 p/kWh (open-ended window) | ✅ | |
+| T2a | wholesale=5 + overhead=13 → elec_hh_rate=18 p/kWh | ✅ | |
+| T2b | null wholesale → overhead-only rate=13 p/kWh | ✅ | |
+| T2c | null wholesale triggers warning string | ✅ | |
+| T3 | wholesale=−5 + overhead=13 → rate=8 (not clamped to 13) | ✅ | Critical: smart scenarios exploit negative prices |
+| T4a | dumb_hp_svt standing = £219 (electricity only; gasSc=30, elecSc=60, 365 days) | ✅ | |
+| T4b | hybrid_dumb standing = £328.50 (gas + electricity; same rates) | ✅ | |
+| T5 | dumb_hp_svt 2.0 kWh × SVT 24.5 p/kWh = £0.49 (HH rate 113 p/kWh not used) | ✅ | Deliberate high HH rate verifies SVT isolation |
+| T6a | dumb_hp_hh 2.0 kWh × HH rate 18 p/kWh = £0.36 | ✅ | |
+| T6b | HH rate (18) < SVT (24.5) → dumb_hp_hh cost < dumb_hp_svt cost | ✅ | |
+| T7a | energy_cost_gbp = £30.00 (300 × 1 kWh × 10 p/kWh, 300-day window) | ✅ | |
+| T7b | annual_cost_gbp = £36.50 (30 × 365/300) | ✅ | Scaling formula verified |
+| T8a | Monthly energy sum = energy_cost_gbp (Jan+Feb 2025, 2832 HH) | ✅ | |
+| T8b | Monthly standing sum = standing_charge_gbp | ✅ | |
+| T8c | Monthly total sum = energy + standing (unscaled) | ✅ | Structural consistency confirmed computationally, not just by devtools |
+| T9a | April with 16 days → partial: true | ✅ | |
+| T9b | May with 31 days → partial: false | ✅ | |
+| T9c | June with 10 days → partial: true | ✅ | |
+| T10a | smart_hp_hh.annual_cost_gbp = null (smart=insufficient_data) | ✅ | |
+| T10b | hybrid_smart.annual_cost_gbp = null | ✅ | |
+| T10c | current unaffected by smart=insufficient_data | ✅ | |
+| T10d | dumb_hp_hh unaffected by smart=insufficient_data | ✅ | |
+
+**Total: 24/24 ✅**
+
+### M8 — Pricing Engine: browser tests
+
+| ID | Description | Result | Notes |
+|----|-------------|--------|-------|
+| T11 | Pricing card visible after M8 runs; 6-row scenario table with correct display names | ⏳ | Pending user browser test |
+| T12 | Change SVT rate + Recalculate → dumb_hp_svt total changes; HH-rate scenarios unchanged | ⏳ | Pending user browser test |
+| T13 | Edit gas standing charge + Recalculate → hybrid_dumb/hybrid_smart change; dumb_hp_svt unchanged | ⏳ | Pending user browser test |
+| T14 | Octopus path: standing charge inputs pre-populated from M1 tariff data (not hardcoded defaults) | ⏳ | Pending user browser test |
+| T15 | With Rhiannon's real data: dumb_hp_hh.annual_cost ≤ dumb_hp_svt.annual_cost (when mean HH rate < SVT) | ⏳ | Pending user browser test |
+
+---
+
 ### Deferred (blocked — cannot run without missing data or state)
 
 | ID | Module | Reason |
@@ -326,4 +382,3 @@ Run 2026-04-27, `node test-m7.mjs` from repo root. 27 assertions covering plan t
 | T10 | M1 data ingestion | Getter-before-load: cannot retest once data is loaded in session |
 | T8/T9 | M3a gas separation | Requires dataset without summer data — no such dataset available |
 | T15 | M6 heatpump model | CSV no-gas dataset unavailable |
-| T17/T18 | M7 scenario consumption | Browser tests pending — see test plan |
