@@ -1,7 +1,7 @@
 # Module 9 — Financial Analysis
 
 **Date:** 2026-04-27
-**Status:** Awaiting approval — review via claude.ai before implementation begins.
+**Status:** ✅ Approved — 2026-04-27
 **Depends on:**
 - `docs/plans/m8-pricing-engine.md` — must be ✅ Approved AND merged. M9 reads
   `getPricingResult().scenarios[name]` and `getRateMetadata()`.
@@ -378,10 +378,8 @@ let break_even = {
   break_even_interpretation: null,
 };
 
-if (currentM8?.energy_cost_gbp != null && dumbHpSvtM7 && currentM7) {
-  const gas_energy_dp_pence = currentM8.energy_cost_gbp * 100;
-    // Valid because "current" scenario has elec_kwh = 0; energy_cost_gbp = gas only.
-    // Note: once M8 adds gas_energy_cost_gbp, prefer currentM8.gas_energy_cost_gbp * 100.
+if (currentM8?.gas_energy_cost_gbp != null && dumbHpSvtM7 && currentM7) {
+  const gas_energy_dp_pence = currentM8.gas_energy_cost_gbp * 100;
 
   const gas_sc_dp_pence =
     rateMetadata.gas_standing_charge_p_per_day * rateMetadata.data_period_days;
@@ -595,13 +593,13 @@ btnRecalcFinancial.addEventListener('click', async () => {
 
 #### 2g. Pipeline wiring — forward declaration
 
-Immediately after the M8 forward-declaration comments (added in the M8 plan), add:
+Immediately after the `await runPricingEngine(...)` call, add:
 
 ```javascript
 // M9: await runFinancialAnalysis(showProgressFn, showStatusFn);
 ```
 
-in both the Octopus and CSV pipelines. This is uncommented when M8 is wired in.
+in both the Octopus and CSV pipelines. This is uncommented when M9 is wired into the pipeline.
 
 #### 2h. Debug export
 
@@ -669,10 +667,10 @@ inconsistent. This plan uses data-period standing charges (`standing_p_day ×
 data_period_days`) throughout, with elec SC cancelling correctly. The result is
 equivalent to the design doc's formula in the limit where `data_period_days ≈ 365`.
 
-**SD2 — `gas_energy_cost_gbp` from M8 as a proxy for `energy_cost_gbp` on "current"
-scenario.** The "current" scenario has `elec_kwh = 0` for heating (verified in M7 plan
-Step 1g), so `energy_cost_gbp` = gas energy cost. Once M8 adds `gas_energy_cost_gbp`
-separately, prefer that field; for now the single `energy_cost_gbp` is correct.
+**SD2 — `gas_energy_cost_gbp` used directly for "current" scenario gas energy.**
+The "current" scenario has `elec_kwh = 0` for heating (verified in M7 plan Step 1g),
+so `gas_energy_cost_gbp` equals `energy_cost_gbp`. M8 exposes `gas_energy_cost_gbp`
+as a separate field; Step D uses it directly.
 
 **SD3 — Sensitivity grid uses annualised cost components.** Grid payback values are
 on an annual basis (net_investment / annual_saving). Annualising M8's data-period
@@ -759,3 +757,62 @@ is correct regardless.
 ## Implementation Deviations
 
 *(To be completed after implementation.)*
+
+---
+
+## Design Review
+
+**Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Date:** 2026-04-27
+**Review type:** Plan review (pre-implementation)
+**Authoritative design:** `docs/design/financial-analysis.md`
+
+### Context
+
+M8 (Pricing Engine) was approved and implemented on 2026-04-27, including the cost
+decomposition (`gas_energy_cost_gbp`, `elec_energy_cost_gbp`) that M9 requires for its
+sensitivity grid. The M9 plan correctly identified a dimensional inconsistency in the
+design doc's break-even formula (design doc mixed data-period gas energy with annual
+standing charges and incorrectly subtracted elec SC). The plan derives the corrected
+formula from first principles — elec SC cancels because both scenarios pay it — and
+adjusts the test criteria accordingly. The design doc has been updated to match.
+
+### Required changes for implementation
+
+**1. Step D: use `gas_energy_cost_gbp` directly (LOW)**
+
+The plan guarded on `currentM8?.energy_cost_gbp` and used `energy_cost_gbp * 100`
+as a proxy, with a comment "once M8 adds `gas_energy_cost_gbp`, prefer that field."
+M8 already exposes `gas_energy_cost_gbp`. Guard updated to
+`currentM8?.gas_energy_cost_gbp != null`; internal reference updated to
+`currentM8.gas_energy_cost_gbp * 100`.
+
+**2. Step 2g: stale wording (LOW)**
+
+"Immediately after the M8 forward-declaration comments" updated to "immediately after
+the `await runPricingEngine(...)` call" (M8 is already wired as live calls).
+"Uncommented when M8 is wired in" updated to "when M9 is wired into the pipeline."
+
+### Resolution of review changes
+
+1. **`gas_energy_cost_gbp` direct reference** — guard and reference in Step D updated; SD2 commentary updated to match.
+2. **Step 2g wording** — updated to reference the live M8 pipeline call and "M9 wired in."
+
+## Review Summary
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| CRITICAL | 0     | ✓ pass |
+| HIGH     | 0     | ✓ pass |
+| MEDIUM   | 0     | ✓ pass |
+| LOW      | 2     | ✅ resolved |
+
+Verdict: APPROVE — clean plan; correctly fixes design doc break-even formula; two LOW stale-reference fixes applied inline.
+
+---
+
+## Approval
+
+**Status:** ✅ Approved — 2026-04-27
+**Approved by:** Rhiannon (via Opus review)
+**Clarifications confirmed:** Design doc break-even formula corrected (elec SC cancels; revised T8 expected value ≈29.2p); `gas_energy_cost_gbp` used directly in Step D.
