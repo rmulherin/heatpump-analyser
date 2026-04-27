@@ -758,9 +758,12 @@ is correct regardless.
 - [ ] **T12: Recalculate on capital change** — changing installation cost and clicking
   Recalculate produces updated payback values for all scenarios.
 
-- [ ] **T13: Break-even string** — interpretation string renders with correct numeric values
+- [x] **T13: Break-even string** — interpretation string renders with correct numeric values
   from Rhiannon's real data; passes directional sense check (HP saves if currently
   `current_svt_p < svt_be_p`).
+  ✅ Browser 2026-04-27. svt_be_p=26.9p, current SVT=24.5p (< 26.9p → HP saves). Gas break-even
+  5.5p, current gas 6.2p (> 5.5p → HP saves from gas angle). Interpretation string present with
+  correct numeric values and directional sense confirmed.
 
 ---
 

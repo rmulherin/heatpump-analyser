@@ -415,7 +415,7 @@ Ran via `node test-m9.mjs`. 28 assertions. All pass.
 |----|-------------|--------|-------|
 | T11 | Financial card visible after M9 runs; payback table shows all 5 HP scenarios with correct display names | ⏳ | Pending user browser test |
 | T12 | Change installation cost + Recalculate → updated payback for all scenarios | ⏳ | Pending user browser test |
-| T13 | Break-even interpretation string renders with Rhiannon's real data; directional sense check | ⏳ | Pending user browser test |
+| T13 | Break-even interpretation string renders with Rhiannon's real data; directional sense check | ✅ | svt_be=26.9p, current SVT=24.5p < 26.9p → HP saves. Gas break-even=5.5p, current gas=6.2p > 5.5p → HP saves. String present with correct values and directional sense. |
 
 ---
 
