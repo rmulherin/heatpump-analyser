@@ -1,7 +1,7 @@
 # Module 7 — Scenario Consumption
 
 **Date:** 2026-04-26
-**Status:** ⚠ Approved with edits — 2026-04-27
+**Status:** ✅ Approved — 2026-04-27
 **Depends on:**
 - `docs/plans/m5-thermal-character.md` — must be ✅ Approved AND merged. M7 reads
   `setpoint_c`, `thermal_mass_kj_per_k`, `occupancy_weights`.
@@ -159,7 +159,7 @@ per-transition).
 
 ```
 heatLossKwh  = htc × (tCur − tempC) × 0.5 / 1000
-solarGainKwh = R × solarWm2 × 0.5 / 1000        // 0 if R = 0 or solarWm2 null
+solarGainKwh = R * (solarWm2 ?? 0) * 0.5 / 1000  // null solar data → 0 gain (conservative)
 ```
 
 #### 1f. Helper — `requiredQDelivered(tCur, tNext, C, heatLossKwh, solarGainKwh)`
@@ -278,7 +278,14 @@ for each reachable s in 0..N_STATES-1:
   T_cur = T_states[s]
   i = dayIndices[t]
   tempC = external[i].temp_c
-  if tempC === null: skip this HH — carry state unchanged (handled below)
+  if tempC === null:
+    // No RC step possible — carry this state forward at zero cost
+    if dpCost[t][s] < dpCost[t+1][s]:
+      dpCost[t+1][s] = dpCost[t][s]
+      dpPrev[t+1][s] = s
+      // For hybrid_smart, carry previous fuel choice; for smart_hp_hh, 'hp' default
+      if (dpFuel[t+1] exists) dpFuel[t+1][s] = dpFuel[t][s] ?? 'hp'
+    continue  // skip s_next loop for this HH period
 
   // Compute once per (t, s)
   { heatLossKwh, solarGainKwh } = computeStepEnergetics(T_cur, tempC, htc, C, R, external[i].solar_w_m2)
@@ -309,10 +316,6 @@ for each reachable s in 0..N_STATES-1:
       dpPrev[t+1][s_next] = s
       dpFuel[t+1][s_next] = fuel
 ```
-
-**`temp_c === null` HH handling:** force a no-cost identity transition `s_next = s`
-(state carries forward, Q = 0, fuel = previous-step fuel or 'hp' default). This avoids
-breaking the chain.
 
 **Feasibility check + relaxation:** after the forward pass, find `s_final = argmin
 dpCost[48][s]`. If `dpCost[48][s_final] === Infinity`, the day is infeasible. Re-run the
@@ -831,7 +834,7 @@ correct. Formally accepted:
 **MEDIUM — §1e: `solarGainKwh` null guard missing**
 
 ```
-solarGainKwh = R × solarWm2 × 0.5 / 1000        // 0 if R = 0 or solarWm2 null
+solarGainKwh = R * (solarWm2 ?? 0) * 0.5 / 1000  // null solar data → 0 gain (conservative)
 ```
 
 When `R > 0` (solar correction is applied) and `solarWm2 = null` (sparse solar data gaps),
@@ -904,7 +907,7 @@ Remove the "handled below" text block and the italic "temp_c === null HH handlin
 
 ## Approval
 
-**Status:** ⚠ Approved with edits — 2026-04-27
+**Status:** ✅ Approved — 2026-04-27
 **Approved by:** Rhiannon (via Opus review)
 
 Two MEDIUM required changes must be actioned before implementation begins:
