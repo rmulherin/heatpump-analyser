@@ -768,24 +768,150 @@ Costs are deliberately NOT shown here — that is M8's job.
 
 ---
 
-## Claude.ai Review — yyyy-mm-dd
+## Design Review — 2026-04-27
 
 **Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Review date:** 2026-04-27
+**Design doc reviewed:** `scenario-consumption.md` (praxis-claude-hub)
+
+---
+
+### Scope decisions — accepted as stated
+
+All six pre-emptive interpretations in "Scope decisions / clarifications flagged for review" are
+correct. Formally accepted:
+
+1. **Wholesale overhead:** use `external[i].wholesale_p_kwh` directly; M8 owns retail markup. ✓
+2. **"partial" trigger:** ≥ 5% of heating HH fell back to gas due to null COP. ✓
+3. **Infeasibility relaxation:** drop the comfort gate for the whole day; keep capacity and
+   T_max_preheat gates; warn. ✓
+4. **DST / non-48-HH days:** detect at grouping time, null-fill, T_init unchanged. ✓
+5. **T_init chaining across non-heating/skipped days:** pass through unchanged. ✓
+6. **DP temperature discretisation:** backtrack writes T_states grid values, not interpolated
+   values. Design doc accepts this. ✓
+
+---
 
 ### What is solid
-[To be completed by reviewer]
 
-### Clarifications required before implementation
-[To be completed by reviewer]
+- **The six scenarios are correctly specified end-to-end.** The `current` scenario mirrors M3
+  exactly. Dumb HP and hybrid dispatch have the right unit-cost comparison (`elec_rate / COP`
+  vs `gas_rate / η`), with η appearing exactly once in each fuel path. T1–T4 directly catch
+  the three known failure modes (η omitted, η doubled, η missing from gas cost).
+
+- **RC model is correctly inverted.** `requiredQDelivered` = `ΔT × C / 3600 + heatLoss −
+  solarGain` is the correct rearrangement of the forward RC equation. The `/ 3600` factor is
+  present and explained; T5/T6 verify it.
+
+- **`computeStepEnergetics` placed inside the `s` loop, outside the `s_next` loop.** This
+  is the right placement — `heatLossKwh` depends on `T_cur` (which varies by `s`), and
+  `solarGainKwh` depends on `solar_w_m2[i]` (constant across `s_next`). 15× speedup per
+  step correctly realised.
+
+- **`hp_capacity_kw ?? Infinity` in §1m.** When M6 could not size the HP, `Infinity` makes
+  the capacity gate `Q > Infinity × 0.5` always false — effectively no constraint. This is
+  the correct conservative fallback (don't penalise a scenario because sizing is unknown).
+
+- **DP infeasibility relaxation is well-structured.** Forward pass → check `s_final` cost →
+  re-run with comfort gate dropped if infeasible → warn. One re-run maximum. ✓
+
+- **Day chaining via `nearestStateIndex`.** T9 covers this. Correct: T_init for day d+1 is
+  the grid state nearest to day d's backtracked end-state. ✓
+
+- **`dumb_hp_svt` and `dumb_hp_hh` as a shared reference.** Correct per design doc. T13
+  verifies object identity. ✓
+
+- **Memory management.** Per-day DP tables allocated and discarded within `runDpForDay`.
+  No 365-day accumulation. ✓
+
+---
+
+### Required changes before implementation
+
+**MEDIUM — §1e: `solarGainKwh` null guard missing**
+
+```
+solarGainKwh = R × solarWm2 × 0.5 / 1000        // 0 if R = 0 or solarWm2 null
+```
+
+When `R > 0` (solar correction is applied) and `solarWm2 = null` (sparse solar data gaps),
+this produces `NaN`. NaN propagates silently: `requiredQDelivered` returns NaN → the comparison
+`NaN < dpCost[t+1][s_next]` is always false in JS → that transition is silently skipped
+with no warning or fallback. In the backtrack, re-computing Q for the path also produces NaN,
+corrupting `elec_kwh` / `gas_kwh` for that HH period.
+
+The comment "// 0 if R = 0 or solarWm2 null" states the intended behaviour but is not
+implemented. Replace with:
+
+```javascript
+solarGainKwh = R * (solarWm2 ?? 0) * 0.5 / 1000  // null solar data → 0 gain (conservative)
+```
+
+**MEDIUM — §1j: null `tempC` identity transition absent from DP pseudo-code**
+
+The forward pass reads:
+```
+if tempC === null: skip this HH — carry state unchanged (handled below)
+```
+
+A bare `continue` on the outer `s` loop writes nothing to `dpCost[t+1]`. Every `dpCost[t+1][s]`
+remains `+Infinity`. All states become unreachable for t+1 and every subsequent step — the
+remainder of the day is infeasible. The relaxation re-run drops the comfort gate but does
+not fix the null-tempC root cause, so relaxation also fails. The text block below the
+pseudo-code correctly describes the fix (identity write-back), but Sonnet implements the
+pseudo-code. Expand it as follows:
+
+```
+if tempC === null:
+  // No RC step possible — carry this state forward at zero cost
+  if dpCost[t][s] < dpCost[t+1][s]:
+    dpCost[t+1][s] = dpCost[t][s]
+    dpPrev[t+1][s] = s
+    // For hybrid_smart, carry previous fuel choice; for smart_hp_hh, 'hp' default
+    if (dpFuel[t+1] exists) dpFuel[t+1][s] = dpFuel[t][s] ?? 'hp'
+  continue  // skip s_next loop for this HH period
+```
+
+Remove the "handled below" text block and the italic "temp_c === null HH handling" paragraph
+— the pseudo-code now shows it inline.
+
+---
 
 ### Minor observations (not blockers)
-[To be completed by reviewer]
+
+1. **LOW — `COLD_HOURS_WARN_FRACTION` declared but unused.** The constant (0.05) is in
+   `SC_CONFIG` but does not appear in any warning logic in the plan. The corresponding design
+   doc edge case ("Warn if >5% of heating hours below −10°C") is already handled by M6's
+   `fraction_below_design_temp` warning. Either emit the warning in §1k (unlikely to be
+   useful given M6 already covers it) or remove the constant to avoid dead code.
+
+2. **LOW — `elecHhRateByHh[i] === null` in smart_hp_hh step cost produces NaN.** The solar
+   NaN guard above does not cover this case. If wholesale data is missing for an individual
+   HH (rare — M2 confirmed 17,300 periods), `(Q / cop) * null = NaN` silently skips the
+   transition. Add an explicit guard: `if (elecHhRateByHh[i] === null) continue;` before
+   computing `stepCost` in the `smart_hp_hh` branch.
+
+3. **LOW — Degree-hours null guard in §1k.** `Math.max(0, T_setpoint − null) = NaN`, so a
+   summer day with patchy null temp_c values produces `daily_degree_hours = NaN`. `NaN < 0.5`
+   is false — the day is not filtered. The DP runs but produces no valid transitions. Fix:
+   `(temp_c !== null ? Math.max(0, T_setpoint - temp_c) * 0.5 : 0)` per-HH term.
+
+4. **LOW — Hybrid backtrack fuel indexing not explicit.** `dp_fuel[t+1][s_final_at_this_step]`
+   in the design doc backtrack section is ambiguous. Clarify in the plan as
+   `dpFuel[t+1][path[t+1]]` — the fuel stored for the next state in the backtracked path.
 
 ---
 
 ## Approval
 
-**Status:** Awaiting approval.
+**Status:** ⚠ Approved with edits — 2026-04-27
+**Approved by:** Rhiannon (via Opus review)
+
+Two MEDIUM required changes must be actioned before implementation begins:
+1. **§1e** — Add `?? 0` null guard to `solarGainKwh` computation.
+2. **§1j** — Expand null tempC pseudo-code to show explicit identity write-back inline.
+
+Four LOW observations are recommended but not conditions of approval.
 
 ---
 
