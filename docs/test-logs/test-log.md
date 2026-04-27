@@ -195,3 +195,95 @@ Run 2026-04-26, console script batch.
 | Elexon SP count warnings shown in UI (e.g. "Unexpected SP count 47 for 2025-06-13") — 13 dates with partial data; 2026-04-25 has only 3 SPs (yesterday, not yet complete) | Expected Elexon behaviour — genuine data gaps, not a code bug |
 | M3a gas separation plan T13/T15 criteria pre-date Step F patch — show old "not flagged" expectation | Superseded by `module-3-step-f-patch.md` T13/T15 inverted criteria |
 | T7 "ground truth" 8,600 kWh was an inaccurate conversational estimate — retracted | Removed from session memory 2026-04-26 |
+
+---
+
+## Outstanding tests — 2026-04-27
+
+All tests below are ⏳ Not yet run unless noted. Tests requiring a Node script are grouped separately — scripts need to be written before those can run. Browser tests require real data loaded via the Octopus flow (or CSV for no-gas variants).
+
+**Legend:** ✅ Pass | ❌ Fail | ⏭ Validated by other means | ⏳ Not yet run | 🚫 Deferred
+
+---
+
+### Feature plan — M3 labelling + energy summary (`feature-m3-labelling-and-energy-summary`)
+
+All browser / code inspection. Run against Octopus real-data flow.
+
+| ID | Description | Result | Notes |
+|----|-------------|--------|-------|
+| FC1 | No "air conditioning" or "AC" in any user-visible string in `app.js` | ⏳ | Grep `app.js` + confirm in browser |
+| FC2 | Energy summary table renders in M3 card; row order and values match `__getBaseloadResult()` diagnostic | ⏳ | |
+| FC3 | Table % column sums to 100% | ⏳ | |
+| FC4 | Table hidden when M3 has not yet run | ⏳ | |
+| FC5 | M4 4D warning uses "cold-weather electricity uplift" framing (neutral, no "electric heating") | ⏳ | |
+| FC6 | `STEP_H_LIMITATIONS` array includes occupancy-correlation note | ⏳ | Inspect via `__getBaseloadResult()` or code review |
+| FC7 | All existing M3 and M4 tests still pass (regression) | ⏳ | Re-run real-data console assertions from 2026-04-26 |
+| FC8 (B1) | No "page unresponsive" browser warning during Elexon fetch; progress percentage visible in UI throughout | ⏳ | |
+| FC9 (B2) | SP count warnings collapsed to a single summary line in status panel; individual per-date lines suppressed to console only | ⏳ | |
+
+---
+
+### M5 — Thermal Character: synthetic unit tests (Node script required)
+
+Write `test-m5.mjs` modelled on `test-m4.mjs`. Import `thermal-character.js` directly.
+
+| ID | Description | Result | Notes |
+|----|-------------|--------|-------|
+| T1 | Setpoint recovery. 90 days, HTC=280, η=0.9, T_set=19°C, 8-HH blocks. Expected: `setpoint_c` within ±0.5°C of 19 | ⏳ | |
+| T2 | Setpoint clip. Same setup + 15 HH at 2× SS. Expected: setpoint ≈ 19°C; inflated estimates discarded | ⏳ | |
+| T3 | Occupancy weights structure. Weekday heating 06:00–09:00 + 17:00–22:00. `occ[12]` ∈ [0.4,0.8], `occ[34]` ∈ [0.6,0.85], `occ[4]` < 0.05 | ⏳ | |
+| T4 | Thermal mass recovery. HTC=250, η=0.9, T_set=20°C, C_true=9,000 kJ/K. 15 events with derived warm-up kWh=6.80. Expected: C ≈ 7,990 ± 15% | ⏳ | Full derivation in plan §T4 |
+| T5 | Time constant. `thermal_mass=12,000`, `htc=300`. Expected: `time_constant_hours = 11.11` ± 0.05 h | ⏳ | |
+| T6 | Null-HTC passthrough. `htc=null`. Expected: all numeric outputs null, `validation_status="no_htc"`, no warnings | ⏳ | |
+| T7 | Insufficient events. 3 valid warm-up events. Expected: `thermal_mass=null`, `events_used=3`, warning surfaced | ⏳ | |
+| T8 | Constant overnight heating. All HH `heating_kwh ≥ 0.05`. Expected: 0 events, `thermal_mass=null`, "continuously overnight" warning | ⏳ | |
+| T9 | Rating boundaries. C = 5999→"low", 6000→"medium", 14999→"medium", 15000→"high", 29999→"high", 30000→"very_high" | ⏳ | |
+| T10 | Wall construction mismatch. C=3,500 with `"solid_masonry"` → warning. `"timber_frame"` → no warning | ⏳ | |
+
+### M5 — Thermal Character: browser tests
+
+| ID | Description | Result | Notes |
+|----|-------------|--------|-------|
+| T11 | Results card visible after full Octopus flow. No JS console errors. British English throughout | ⏳ | |
+| T12 | Changing wall construction dropdown and clicking Recalculate updates mismatch warning without re-running M1–M4 | ⏳ | |
+| T13 | CSV with no gas data: `validation_status="no_gas"`, card visible with appropriate message | ⏳ | |
+
+---
+
+### M6 — Heat Pump Model: synthetic unit tests (Node script required)
+
+Write `test-m6.mjs`. Import `heatpump-model.js` directly.
+
+| ID | Description | Result | Notes |
+|----|-------------|--------|-------|
+| T1 | COP interpolation. `temp=3.5°C`, scalar=1.0. Expected: 2.87 (interpolated) | ⏳ | |
+| T2 | COP clamp cold. `temp=−20°C`. Expected: 1.44 (clamped at −15 anchor, not extrapolated) | ⏳ | |
+| T3 | COP clamp warm. `temp=25°C`. Expected: 4.14 (clamped at 20 anchor) | ⏳ | |
+| T4 | Scalar multiplicative. `temp=10°C`, scalar=1.2 → 4.044; scalar=0.8 → 2.696. Fails if additive | ⏳ | |
+| T5 | Clamp after scaling. `temp=−15°C`, scalar=0.5 → 0.72 → clamped to 1.0 | ⏳ | |
+| T6 | HP capacity units. `htc=250`, `setpoint=20`, scalar=1.0. Expected: `hp_capacity_kw=5.75`, `cop_at_design=2.37`, `hp_capacity_kw_elec=2.426` (±0.01) | ⏳ | |
+| T7 | HP capacity null inputs. `htc=null`. Expected: `hp_capacity_kw=null`, `hp_capacity_kw_elec=null`; `cop_by_hh` still populated; `validation_status="no_htc"` | ⏳ | |
+| T8 | Demand-weighted mean COP. HH0: temp=−3, kwh=2.0 → COP=2.37; HH1: temp=10, kwh=0.5 → COP=3.37; HH2: kwh=0 excluded. Expected: `annual_mean_cop = 2.57` | ⏳ | |
+| T9 | `cop_by_hh` null passthrough. One HH `temp=null` → `cop_by_hh[i]=null`; others unaffected | ⏳ | |
+| T10 | Design temperature constant. `design_temp_c === −3.0` in output and used in capacity formula | ⏳ | |
+| T11 | Setpoint below design temp. `setpoint_c=−5°C`. Expected: `hp_capacity_kw=null` + warning | ⏳ | |
+| T12 | EoH anchor exactness. `interpolate(−3, 1.0) === 2.37` and `interpolate(10, 1.0) === 3.37` exactly (no float drift) | ⏳ | |
+
+### M6 — Heat Pump Model: browser tests
+
+| ID | Description | Result | Notes |
+|----|-------------|--------|-------|
+| T13 | Slider live display: dragging COP scalar updates `<output>` text immediately; recompute only on button click | ⏳ | |
+| T14 | Card visible after Octopus flow. No JS console errors. British English throughout | ⏳ | |
+| T15 | CSV no-gas: `validation_status="no_gas"`, `cop_by_hh` populated, `hp_capacity_kw=null`, `annual_mean_cop=null` | ⏳ | |
+| T16 | Warning thresholds: `fraction_below_design_temp=0.07` → warning surfaced with "7.0% of heating hours" | ⏳ | Needs synthetic data in browser console |
+
+---
+
+### Deferred (blocked — cannot run without missing data or state)
+
+| ID | Module | Reason |
+|----|--------|--------|
+| T10 | M1 data ingestion | Getter-before-load: cannot retest once data is loaded in session |
+| T8/T9 | M3a gas separation | Requires dataset without summer data — no such dataset available |
