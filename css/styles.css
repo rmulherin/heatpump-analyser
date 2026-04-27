@@ -353,6 +353,17 @@ input:focus {
   margin-left: 0.25rem;
 }
 
+/* ===== Break-even Interpretation Text ===== */
+.break-even-text {
+  font-size: 0.9rem;
+  color: var(--colour-dark);
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--colour-light-grey);
+  border-left: 3px solid var(--colour-teal);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
 /* ===== Energy Summary Table ===== */
 .energy-summary-table {
   width: 100%;

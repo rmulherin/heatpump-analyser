@@ -756,7 +756,26 @@ is correct regardless.
 
 ## Implementation Deviations
 
-*(To be completed after implementation.)*
+**D1 — `btn-secondary` replaced with `btn btn-primary`.**
+Same as M8 D1 — no `.btn-secondary` CSS rule exists. Used `class="btn btn-primary hidden"`.
+
+**D2 — `parseGbp` reuses `parseRate` from M8.**
+Plan specifies a separate `parseGbp` helper in `app.js`. Since `parseRate` (added in M8) is
+identical in logic and is already in scope, `readCapitalParams` calls `parseRate` directly.
+No duplicate function added.
+
+**D3 — Pipeline wiring is live, not a comment.**
+Plan §2g specifies a commented-out placeholder for M9, to be uncommented when M9 is
+implemented. Since M9 was implemented immediately after M8 in the same session, the call
+was wired live from the start (`await runFinancialAnalysis(...)` in both pipelines).
+
+**D4 — `break-even-text` CSS added to `styles.css`.**
+Plan uses `<p class="break-even-text">` but included no CSS definition. Added a styled
+block with teal left-border to `styles.css`. No existing rules affected.
+
+**D5 — Financial cards appear after pricing cards (M8 order preserved).**
+Plan §3 says "Add after `pricing-card`." The page order is: pricing-params-card →
+pricing-card → financial-params-card → financial-card, matching the data flow.
 
 ---
 

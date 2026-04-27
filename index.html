@@ -285,6 +285,40 @@
       <button class="btn btn-primary hidden" id="btn-recalculate-pricing">Recalculate costs</button>
     </section>
 
+    <!-- Module 9: Capital Cost Inputs -->
+    <section class="card hidden" id="financial-params-card">
+      <h2>Installation Costs</h2>
+      <p class="card-intro">Defaults reflect typical UK 2025–2026 market rates and the
+      current Boiler Upgrade Scheme grant. Adjust for your own quotes.</p>
+      <div class="params-grid">
+        <label for="install-full-hp">Full heat pump installation
+          <span class="unit">£</span></label>
+        <input id="install-full-hp" type="number" step="100" min="0" value="12500">
+
+        <label for="install-hybrid">Hybrid heat pump installation
+          <span class="unit">£</span></label>
+        <input id="install-hybrid" type="number" step="100" min="0" value="10000">
+
+        <label for="bus-grant">Boiler Upgrade Scheme grant
+          <span class="unit">£</span></label>
+        <input id="bus-grant" type="number" step="100" min="0" value="7500">
+
+        <label for="avoided-ac">Avoided air conditioning cost (if any)
+          <span class="unit">£</span></label>
+        <input id="avoided-ac" type="number" step="100" min="0" value="0">
+      </div>
+    </section>
+
+    <!-- Module 9: Financial Summary -->
+    <section class="card hidden" id="financial-card">
+      <h2>Financial Summary</h2>
+      <div class="status-area" id="financial-status"></div>
+      <div id="financial-results" class="hidden">
+        <div id="financial-summary"></div>
+      </div>
+      <button class="btn btn-primary hidden" id="btn-recalculate-financial">Recalculate</button>
+    </section>
+
   </div>
 
   <script type="module" src="js/app.js"></script>

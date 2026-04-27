@@ -66,6 +66,13 @@ import {
   PE_CONFIG,
 } from './pricing-engine.js';
 
+import {
+  analyseFinancials,
+  setFinancialResult,
+  getFinancialResult,
+  FA_CONFIG,
+} from './financial.js';
+
 // ===== Module 3 — Label maps =====
 
 const BASELOAD_METHOD_LABELS = {
@@ -187,6 +194,18 @@ const occupancyThresholdInput = document.getElementById('occupancy-threshold');
 const occupancyThresholdValue = document.getElementById('occupancy-threshold-value');
 const btnRecalcScenario       = document.getElementById('btn-recalculate-scenario');
 
+// Financial analysis DOM references
+const financialParamsCard  = document.getElementById('financial-params-card');
+const financialCard        = document.getElementById('financial-card');
+const financialResults     = document.getElementById('financial-results');
+const financialStatus      = document.getElementById('financial-status');
+const financialSummary     = document.getElementById('financial-summary');
+const installFullHpInput   = document.getElementById('install-full-hp');
+const installHybridInput   = document.getElementById('install-hybrid');
+const busGrantInput        = document.getElementById('bus-grant');
+const avoidedAcInput       = document.getElementById('avoided-ac');
+const btnRecalcFinancial   = document.getElementById('btn-recalculate-financial');
+
 // Pricing engine DOM references
 const pricingParamsCard  = document.getElementById('pricing-params-card');
 const pricingCard        = document.getElementById('pricing-card');
@@ -227,6 +246,15 @@ function readRateParams() {
     svt_standing_charge_p: parseRate(elecStandingInput, PE_CONFIG.ELEC_STANDING_DEFAULT_P_DAY),
     gas_standing_charge_p: parseRate(gasStandingInput,  PE_CONFIG.GAS_STANDING_DEFAULT_P_DAY),
     hh_overhead_p_per_kwh: parseRate(hhOverheadInput,   PE_CONFIG.HH_OVERHEAD_DEFAULT_P),
+  };
+}
+
+function readCapitalParams() {
+  return {
+    installation_cost_full_hp_gbp: parseRate(installFullHpInput, FA_CONFIG.INSTALLATION_FULL_HP_DEFAULT_GBP),
+    installation_cost_hybrid_gbp:  parseRate(installHybridInput,  FA_CONFIG.INSTALLATION_HYBRID_DEFAULT_GBP),
+    bus_grant_gbp:                 parseRate(busGrantInput,        FA_CONFIG.BUS_GRANT_DEFAULT_GBP),
+    avoided_ac_cost_gbp:           parseRate(avoidedAcInput,       FA_CONFIG.AVOIDED_AC_DEFAULT_GBP),
   };
 }
 
@@ -620,6 +648,12 @@ async function continueWithProperty(apiKey) {
 
   // Step 15: Trigger Module 8 — Pricing Engine
   await runPricingEngine(
+    (text) => showProgress(text, undefined),
+    (msg, type) => showStatus(msg, type)
+  );
+
+  // Step 16: Trigger Module 9 — Financial Analysis
+  await runFinancialAnalysis(
     (text) => showProgress(text, undefined),
     (msg, type) => showStatus(msg, type)
   );
@@ -1608,6 +1642,130 @@ btnRecalcPricing.addEventListener('click', async () => {
   btnRecalcPricing.disabled = false;
 });
 
+// ===== Module 9: Financial Analysis =====
+
+const FINANCIAL_DISPLAY_NAMES = {
+  current:      'Current (gas boiler)',
+  dumb_hp_svt:  'Heat pump — flat rate',
+  dumb_hp_hh:   'Heat pump — HH rate',
+  hybrid_dumb:  'Hybrid — HH rate',
+  smart_hp_hh:  'Smart heat pump — HH rate',
+  hybrid_smart: 'Smart hybrid — HH rate',
+};
+
+const FINANCIAL_DISPLAY_ORDER = ['current', 'dumb_hp_svt', 'dumb_hp_hh', 'hybrid_dumb', 'smart_hp_hh', 'hybrid_smart'];
+
+function fmtGbpSaving(v) {
+  if (v === null || v === undefined) return '—';
+  const abs = Math.abs(v).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (v > 0) return `+£${abs}`;
+  if (v < 0) return `−£${abs}`;
+  return '£0.00';
+}
+
+function fmtPayback(status, years) {
+  if (status === 'no_data')   return '—';
+  if (status === 'no_saving') return 'No saving';
+  if (years === 0)            return 'Immediate';
+  if (years > 40)             return '>40 years';
+  return `${years.toFixed(1)} years`;
+}
+
+function displayFinancialResults(result) {
+  financialSummary.innerHTML = '';
+  financialStatus.innerHTML  = '';
+
+  const fmtGbp = (v) => {
+    if (v === null || v === undefined) return '—';
+    return '£' + v.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+
+  const rows = FINANCIAL_DISPLAY_ORDER.map(key => {
+    const sc = result.scenarios[key];
+    const isBaseline = key === 'current';
+    return `<tr>
+      <td>${escapeHtml(FINANCIAL_DISPLAY_NAMES[key])}</td>
+      <td>${fmtGbp(sc.annual_cost_gbp)}</td>
+      <td>${isBaseline ? '—' : fmtGbpSaving(sc.annual_saving_gbp)}</td>
+      <td>${isBaseline ? '—' : fmtGbp(sc.net_investment_gbp)}</td>
+      <td>${isBaseline ? '—' : fmtPayback(sc.payback_status, sc.payback_years)}</td>
+    </tr>`;
+  }).join('');
+
+  const breakEvenHtml = result.break_even.break_even_interpretation
+    ? `<p class="break-even-text">${escapeHtml(result.break_even.break_even_interpretation)}</p>`
+    : '';
+
+  financialSummary.innerHTML = `
+    <table class="energy-summary-table">
+      <thead>
+        <tr>
+          <th>Scenario</th>
+          <th>Annual cost</th>
+          <th>Annual saving vs boiler</th>
+          <th>Net investment</th>
+          <th>Payback</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+    ${breakEvenHtml}
+  `;
+
+  for (const w of result.warnings) {
+    const div = document.createElement('div');
+    div.className = 'status-msg warning';
+    div.textContent = w;
+    financialStatus.appendChild(div);
+  }
+
+  financialResults.classList.remove('hidden');
+  financialCard.classList.remove('hidden');
+  financialParamsCard.classList.remove('hidden');
+  btnRecalcFinancial.classList.remove('hidden');
+}
+
+async function runFinancialAnalysis(showProgressFn, showStatusFn) {
+  const pricingResult  = getPricingResult();
+  const rateMetadata   = getRateMetadata();
+  const scenarioResult = getScenarioConsumptionResult();
+
+  if (!pricingResult || !rateMetadata) {
+    showStatusFn('Pricing data not yet computed.', 'error');
+    return;
+  }
+  if (!scenarioResult) {
+    showStatusFn('Scenario consumption not available.', 'error');
+    return;
+  }
+
+  showProgressFn('Computing financial analysis…');
+  const params = readCapitalParams();
+  const result = analyseFinancials(pricingResult, rateMetadata, scenarioResult, params);
+  setFinancialResult(result);
+
+  displayFinancialResults(result);
+
+  for (const w of result.warnings) showStatusFn(w, 'warning');
+}
+
+btnRecalcFinancial.addEventListener('click', async () => {
+  btnRecalcFinancial.disabled = true;
+  financialStatus.innerHTML   = '';
+  financialSummary.innerHTML  = '';
+  financialResults.classList.add('hidden');
+  await runFinancialAnalysis(
+    () => {},
+    (msg, type) => {
+      const div = document.createElement('div');
+      div.className = `status-msg ${type}`;
+      div.textContent = msg;
+      financialStatus.appendChild(div);
+    }
+  );
+  btnRecalcFinancial.disabled = false;
+});
+
 // ===== CSV Helpers =====
 
 function showCsvProgress(text) {
@@ -1836,6 +1994,12 @@ btnCsvAnalyse.addEventListener('click', async () => {
       (msg, type) => showCsvStatus(msg, type)
     );
 
+    // Step 16: Trigger Module 9 — Financial Analysis
+    await runFinancialAnalysis(
+      (text) => showCsvProgress(text),
+      (msg, type) => showCsvStatus(msg, type)
+    );
+
     hideCsvProgress();
 
   } catch (err) {
@@ -1866,3 +2030,4 @@ window.__getScenarioConsumptionResult = () => getScenarioConsumptionResult();
 window.__buildRateArrays              = (cs, ex, tr) => buildRateArrays(cs, ex, tr);
 window.__getRateMetadata              = () => getRateMetadata();
 window.__getPricingResult             = () => getPricingResult();
+window.__getFinancialResult           = () => getFinancialResult();
