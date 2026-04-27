@@ -178,7 +178,7 @@ function runDpForDay({ dayIndices, params, scenario, T_init }) {
           const Q = requiredQDelivered(T_cur, T_next, C, heatLossKwh, solarGainKwh);
           if (Q < 0) continue;                                // can't actively cool
           if (Q > hp_capacity_kw * 0.5) continue;            // capacity gate
-          if (!relaxComfort && occupied[t] && T_next < T_setpoint) continue; // comfort gate
+          if (!relaxComfort && occupied[i] && T_next < T_setpoint) continue; // comfort gate
           if (T_next > T_max_preheat) continue;              // upper thermal gate
 
           let stepCost, fuel;

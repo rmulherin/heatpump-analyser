@@ -707,61 +707,78 @@ Costs are deliberately NOT shown here — that is M8's job.
 
 ## Success criteria
 
-- [ ] **T1 — Dumb HP unit conversion.** `heating_kwh=1.0, η=0.9, cop=3.0`.
+- [x] **T1 — Dumb HP unit conversion.** `heating_kwh=1.0, η=0.9, cop=3.0`.
   Expected: `elec_kwh = 0.30`. Verify T8 fail modes (`0.333` if η missing; `0.27` if η doubled).
+  ✅ Node test-m7.mjs T1 — 2026-04-27.
 
-- [ ] **T2 — Dumb HP null COP fallback.** `heating_kwh=1.5, cop=null`.
+- [x] **T2 — Dumb HP null COP fallback.** `heating_kwh=1.5, cop=null`.
   Expected: `gas_kwh=1.5, elec_kwh=0`.
+  ✅ Node test-m7.mjs T2 — 2026-04-27.
 
-- [ ] **T3 — Hybrid dispatch HP wins.** `h=1.0, η=0.9, cop=3.5, elec_rate=10, gas_rate=7`.
+- [x] **T3 — Hybrid dispatch HP wins.** `h=1.0, η=0.9, cop=3.5, elec_rate=10, gas_rate=7`.
   Expected: HP selected, `elec_kwh=0.257, gas_kwh=0`. Without η in gas cost the boundary
   shifts.
+  ✅ Node test-m7.mjs T3 — 2026-04-27.
 
-- [ ] **T4 — Hybrid dispatch gas wins.** Same parameters, `elec_rate=30`.
+- [x] **T4 — Hybrid dispatch gas wins.** Same parameters, `elec_rate=30`.
   Expected: gas selected, `gas_kwh=1.0, elec_kwh=0`.
+  ✅ Node test-m7.mjs T4 — 2026-04-27.
 
-- [ ] **T5 — RC steady state.** T=19, temp=5, HTC=200, C=10000, R=0, Q=1.4.
+- [x] **T5 — RC steady state.** T=19, temp=5, HTC=200, C=10000, R=0, Q=1.4.
   Expected: T_next = 19.0 °C exactly.
+  ✅ Node test-m7.mjs T5 (spec verification via formula re-derivation) — 2026-04-27.
 
-- [ ] **T6 — RC non-trivial delta_T.** T=17, temp=5, HTC=200, C=10000, Q=2.0.
+- [x] **T6 — RC non-trivial delta_T.** T=17, temp=5, HTC=200, C=10000, Q=2.0.
   Expected: T_next = 17.288 °C. Missing × 3600 fails this catastrophically.
+  ✅ Node test-m7.mjs T6 (spec verification) — 2026-04-27.
 
-- [ ] **T7 — DP comfort gate.** Free electricity, all HH occupied. Expected: every
+- [x] **T7 — DP comfort gate.** Free electricity, all HH occupied. Expected: every
   backtracked HH has `T_indoor ≥ T_setpoint`.
+  ✅ Node test-m7.mjs T7 — 2026-04-27.
 
-- [ ] **T8 — DP pre-heating cost reduction.** 1-day setup with 02:00–06:00 cheap rate
+- [x] **T8 — DP pre-heating cost reduction.** 1-day setup with 02:00–06:00 cheap rate
   (2 p) and 06:00–22:00 expensive (30 p), occupied from 07:00. Expected:
   `smart_hp_hh` total cost (elec_kwh × elec_rate per HH) is strictly less than
   `dumb_hp_hh` priced under the same rate schedule.
+  ✅ Node test-m7.mjs T8 — 2026-04-27.
 
-- [ ] **T9 — Day chaining.** 2 consecutive days, day 1 forced to end at T = 17.5 °C.
+- [x] **T9 — Day chaining.** 2 consecutive days, day 1 forced to end at T = 17.5 °C.
   Expected: day 2's `dpCost[0][s]` equals 0 only at the state nearest 17.5 °C, not at
   the state nearest T_setpoint.
+  ✅ Node test-m7.mjs T9a/T9b — 2026-04-27. **Bug found via T9b** (`occupied[t]`→`occupied[i]`);
+  fixed (D3); test now 27/27.
 
-- [ ] **T10 — Non-heating day skipped.** Day with all `temp_c = 22 °C`. Expected:
+- [x] **T10 — Non-heating day skipped.** Day with all `temp_c = 22 °C`. Expected:
   all 48 HH `gas_kwh = elec_kwh = 0`, `indoor_temp_c = null`, no DP run, T_init carries.
+  ✅ Node test-m7.mjs T10 — 2026-04-27.
 
-- [ ] **T11 — Null-upstream passthrough.** `thermal_mass_kj_per_k = null`. Expected:
+- [x] **T11 — Null-upstream passthrough.** `thermal_mass_kj_per_k = null`. Expected:
   `validation_status.smart = "no_thermal_mass"`; smart arrays all null; dumb scenarios
   computed normally.
+  ✅ Node test-m7.mjs T11 — 2026-04-27.
 
-- [ ] **T12 — Current scenario unchanged.** `current.gas_kwh[i] === heating_kwh[i]` for
+- [x] **T12 — Current scenario unchanged.** `current.gas_kwh[i] === heating_kwh[i]` for
   all i; `current.elec_kwh[i] === 0` (or null if heating_kwh null).
+  ✅ Node test-m7.mjs T12a/T12b — 2026-04-27.
 
-- [ ] **T13 — dumb_hp_svt and dumb_hp_hh shared reference.**
+- [x] **T13 — dumb_hp_svt and dumb_hp_hh shared reference.**
   `result.scenarios.dumb_hp_svt === result.scenarios.dumb_hp_hh` (object identity).
+  ✅ Node test-m7.mjs T13 — 2026-04-27.
 
-- [ ] **T14 — DST / non-48-HH day.** Inject a 47-HH day (spring-forward) and a 49-HH
+- [x] **T14 — DST / non-48-HH day.** Inject a 47-HH day (spring-forward) and a 49-HH
   day (autumn back). Expected: smart arrays are null for those days' HH; T_init
   unchanged across them.
+  ✅ Node test-m7.mjs T14a/T14b/T14c — 2026-04-27.
 
-- [ ] **T15 — Validation `partial`.** Construct dumb_hp where 8% of heating HH have
+- [x] **T15 — Validation `partial`.** Construct dumb_hp where 8% of heating HH have
   null COP. Expected: `validation_status.dumb = "partial"`.
+  ✅ Node test-m7.mjs T15 — 2026-04-27.
 
-- [ ] **T16 — DP infeasible day relaxation.** Construct a day where comfort cannot be
+- [x] **T16 — DP infeasible day relaxation.** Construct a day where comfort cannot be
   maintained (e.g. very low T_init, low HP capacity, all HH occupied). Expected:
   forward DP first pass is infeasible; relaxation drops comfort gate; result returned;
   warning surfaced.
+  ✅ Node test-m7.mjs T16a/T16b — 2026-04-27.
 
 - [ ] **T17 — UI controls live.** Dragging either slider updates its `<output>` text.
   Recompute fires only on button click.
@@ -936,3 +953,11 @@ Plan implied late reveal (only at end of function), which would leave status mes
 invisible when the early-return `no_data` path fires (the status div is inside the
 hidden container). Moved to mirror M6's `displayHeatPumpModelResults` pattern: reveal
 the results container immediately, populate status and table inside it.
+
+**D3 — Bug fix: `occupied[t]` → `occupied[i]` (scenario-consumption.js:181)**
+
+Comfort gate in DP forward pass used day-local index `t` (range 0–47) to index the
+full-year `occupied[]` array (17,520 entries). For every day after day 1, this silently
+read day 1's occupancy pattern. Fixed to use `i` (global HH index). Caught by test T9b:
+day 2 of a 2-day run with day 2 occupied never enforced comfort, leaving T at 18.0 °C
+below setpoint. Fix: single character `occupied[t]` → `occupied[i]`. Committed 2026-04-27.

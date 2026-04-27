@@ -308,7 +308,7 @@ Run 2026-04-27, `node test-m7.mjs` from repo root. 27 assertions covering plan t
 | T7 | DP comfort gate. All occupied → all `indoor_temp_c ≥ 19` (min=19.071) | ✅ | |
 | T8 | DP pre-heating cost reduction. Cheap 0–15, expensive 16–47, occ 16–47, offset=4 → `smart=386.63p < dumb=446.40p` | ✅ | |
 | T9a | Day chaining: day 1 unoccupied → T drifts to 18.0 | ✅ | |
-| **T9b** | **Day 2 occupied: comfort gate active → day2Start ≥ 19** | **❌** | **Real M7 bug found: scenario-consumption.js:181 reads `occupied[t]` (day-local index) instead of `occupied[i]` (global). For day 2+ this reads day 1's occupancy pattern, breaking comfort enforcement. Affects every multi-day run including Rhiannon's full-year data.** |
+| T9b | Day 2 occupied: comfort gate active → day2Start ≥ 19 | 🔧✅ | **Bug found then fixed.** `occupied[t]` (day-local) → `occupied[i]` (global) at scenario-consumption.js:181. Day 2+ was reading day 1's occupancy, breaking comfort enforcement. Fixed 2026-04-27 (D3). |
 | T10 | Non-heating day skipped. All `temp=22°C` → smart gas/elec all 0; indoor null | ✅ | |
 | T11 | `thermal_mass=null` → `validation.smart='no_thermal_mass'`, smart null, dumb computed | ✅ | Critical: this is the path Rhiannon's data takes |
 | T12 | `current.gas_kwh[i] === heating_kwh[i]`; `elec=0` (or null) | ✅ | |
@@ -317,7 +317,7 @@ Run 2026-04-27, `node test-m7.mjs` from repo root. 27 assertions covering plan t
 | T15 | `partial` validation at 8% null COP | ✅ | |
 | T16 | DP infeasible day → "undersized" warning + array still produced | ✅ | |
 
-**Total: 26/27 ✅, 1 ❌ (real bug in M7 — see T9b)**
+**Total: 27/27 ✅** (T9b was ❌; bug found, fixed, re-run passes — see D3 in m7-scenario-consumption.md)
 
 ### M7 — Scenario Consumption: browser tests
 
