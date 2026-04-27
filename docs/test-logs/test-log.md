@@ -293,9 +293,37 @@ Run 2026-04-27, Rhiannon's Octopus data. Real-data result: validation_status=ok,
 
 ---
 
+### M7 — Scenario Consumption: Node synthetic suite (test-m7.mjs)
+
+Run 2026-04-27, `node test-m7.mjs` from repo root. 27 assertions covering plan tests T1–T16.
+
+| ID | Description | Result | Notes |
+|----|-------------|--------|-------|
+| T1 | Dumb HP unit conversion. `h=1.0, η=0.9, cop=3.0` → `elec=0.30` | ✅ | |
+| T2 | Dumb HP null COP fallback. `h=1.5, cop=null` → `gas=1.5, elec=0` | ✅ | |
+| T3 | Hybrid dispatch HP wins. `cop=3.5, elec=10p, gas=7p` → HP, `elec=0.2571` | ✅ | hpCost 2.86 < gasCost 7.78 |
+| T4 | Hybrid dispatch gas wins. Same setup, `elec=30p` → gas, `gas=1.0` | ✅ | hpCost 8.57 > gasCost 7.78 |
+| T5 | RC steady state. `T=19, temp=5, htc=200` → `Q=1.4` | ✅ | Spec verification — formula re-derived from scenario-consumption.js:45–55. Implementation verified by code inspection + integration via T7–T16. |
+| T6 | RC non-trivial ΔT. `T=17, T_next=17.288, C=10000` → `Q=2.0` | ✅ | Same approach as T5. Confirms × C/3600 factor. |
+| T7 | DP comfort gate. All occupied → all `indoor_temp_c ≥ 19` (min=19.071) | ✅ | |
+| T8 | DP pre-heating cost reduction. Cheap 0–15, expensive 16–47, occ 16–47, offset=4 → `smart=386.63p < dumb=446.40p` | ✅ | |
+| T9a | Day chaining: day 1 unoccupied → T drifts to 18.0 | ✅ | |
+| **T9b** | **Day 2 occupied: comfort gate active → day2Start ≥ 19** | **❌** | **Real M7 bug found: scenario-consumption.js:181 reads `occupied[t]` (day-local index) instead of `occupied[i]` (global). For day 2+ this reads day 1's occupancy pattern, breaking comfort enforcement. Affects every multi-day run including Rhiannon's full-year data.** |
+| T10 | Non-heating day skipped. All `temp=22°C` → smart gas/elec all 0; indoor null | ✅ | |
+| T11 | `thermal_mass=null` → `validation.smart='no_thermal_mass'`, smart null, dumb computed | ✅ | Critical: this is the path Rhiannon's data takes |
+| T12 | `current.gas_kwh[i] === heating_kwh[i]`; `elec=0` (or null) | ✅ | |
+| T13 | `dumb_hp_svt === dumb_hp_hh` (object identity) | ✅ | |
+| T14 | DST 47-HH day → smart arrays null; days 0/2 (48-HH) populated | ✅ | |
+| T15 | `partial` validation at 8% null COP | ✅ | |
+| T16 | DP infeasible day → "undersized" warning + array still produced | ✅ | |
+
+**Total: 26/27 ✅, 1 ❌ (real bug in M7 — see T9b)**
+
 ### Deferred (blocked — cannot run without missing data or state)
 
 | ID | Module | Reason |
 |----|--------|--------|
 | T10 | M1 data ingestion | Getter-before-load: cannot retest once data is loaded in session |
 | T8/T9 | M3a gas separation | Requires dataset without summer data — no such dataset available |
+| T15 | M6 heatpump model | CSV no-gas dataset unavailable |
+| T17/T18 | M7 scenario consumption | Browser tests pending — see test plan |
