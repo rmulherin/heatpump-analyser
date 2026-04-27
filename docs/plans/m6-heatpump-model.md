@@ -477,61 +477,77 @@ window.__getHeatPumpModelResult = () => getHeatPumpModelResult();
 
 ## Success criteria
 
-- [ ] **T1 — COP interpolation within range.** `temp_c = 3.5°C`, scalar = 1.0.
+- [x] **T1 — COP interpolation within range.** `temp_c = 3.5°C`, scalar = 1.0.
   Expected: `COP = 2.37 + (3.5 − (−3)) / 13 × (3.37 − 2.37) = 2.37 + 0.5 = 2.87`.
+  Tested via `test-m6.mjs` — passed ✅
 
-- [ ] **T2 — COP clamp cold.** `temp_c = −20°C`, scalar = 1.0.
+- [x] **T2 — COP clamp cold.** `temp_c = −20°C`, scalar = 1.0.
   Expected: COP = 1.44 (clamped to −15 anchor, NOT extrapolated).
+  Tested via `test-m6.mjs` — passed ✅
 
-- [ ] **T3 — COP clamp warm.** `temp_c = 25°C`, scalar = 1.0.
+- [x] **T3 — COP clamp warm.** `temp_c = 25°C`, scalar = 1.0.
   Expected: COP = 4.14 (clamped to 20 anchor).
+  Tested via `test-m6.mjs` — passed ✅
 
-- [ ] **T4 — User scalar multiplicative.** `temp_c = 10°C`.
+- [x] **T4 — User scalar multiplicative.** `temp_c = 10°C`.
   scalar = 1.2 → COP = 3.37 × 1.2 = 4.044.
   scalar = 0.8 → COP = 3.37 × 0.8 = 2.696.
   Additive interpretation (3.37 + 0.2 = 3.57) is the failure case.
+  Tested via `test-m6.mjs` (T4a, T4b) — passed ✅
 
-- [ ] **T5 — Clamp after scaling.** `temp_c = −15°C`, scalar = 0.5.
+- [x] **T5 — Clamp after scaling.** `temp_c = −15°C`, scalar = 0.5.
   `cop_scaled = 1.44 × 0.5 = 0.72` → clamped to 1.0.
+  Tested via `test-m6.mjs` — passed ✅
 
-- [ ] **T6 — HP capacity units.** `htc = 250`, `setpoint = 20`, scalar = 1.0.
+- [x] **T6 — HP capacity units.** `htc = 250`, `setpoint = 20`, scalar = 1.0.
   Expected: `hp_capacity_kw = 5.75`, `cop_at_design_temp = 2.37`,
   `hp_capacity_kw_elec = 5.75 / 2.37 = 2.426` (within 0.01).
+  Tested via `test-m6.mjs` (T6a, T6b, T6c) — passed ✅
 
-- [ ] **T7 — HP capacity null inputs.** `htc = null`. Expected: `hp_capacity_kw = null`,
+- [x] **T7 — HP capacity null inputs.** `htc = null`. Expected: `hp_capacity_kw = null`,
   `hp_capacity_kw_elec = null`. `cop_by_hh` still populated. `validation_status = "no_htc"`.
+  Tested via `test-m6.mjs` (T7a–T7d) — passed ✅
 
-- [ ] **T8 — Annual mean COP demand-weighted.** 3 HH periods:
+- [x] **T8 — Annual mean COP demand-weighted.** 3 HH periods:
   - HH 0: `temp_c = −3`, `heating_kwh = 2.0` → COP = 2.37
   - HH 1: `temp_c = 10`, `heating_kwh = 0.5` → COP = 3.37
   - HH 2: `temp_c = 10`, `heating_kwh = 0` → excluded
 
   Expected: `annual_mean_cop = (2.0 × 2.37 + 0.5 × 3.37) / 2.5 = 2.57`.
+  Tested via `test-m6.mjs` — passed ✅
 
-- [ ] **T9 — `cop_by_hh` null passthrough.** One HH `temp_c = null`. Expected:
+- [x] **T9 — `cop_by_hh` null passthrough.** One HH `temp_c = null`. Expected:
   `cop_by_hh[i] = null` for that HH; others unaffected.
+  Tested via `test-m6.mjs` (T9a–T9c) — passed ✅
 
-- [ ] **T10 — Design temperature constant.** Output `design_temp_c === −3.0`.
+- [x] **T10 — Design temperature constant.** Output `design_temp_c === −3.0`.
   Verify same constant is used in HP-capacity formula and `cop_at_design_temp`.
+  Tested via `test-m6.mjs` (T10a, T10b) — passed ✅
 
-- [ ] **T11 — Setpoint below design temp.** `setpoint_c = −5°C`. Expected:
+- [x] **T11 — Setpoint below design temp.** `setpoint_c = −5°C`. Expected:
   `hp_capacity_kw = null` AND warning surfaced about implausible setpoint.
+  Tested via `test-m6.mjs` (T11a–T11c) — passed ✅
 
-- [ ] **T12 — EoH anchor regression.** Assert `interpolate(−3, 1.0) === 2.37` and
+- [x] **T12 — EoH anchor regression.** Assert `interpolate(−3, 1.0) === 2.37` and
   `interpolate(10, 1.0) === 3.37` exactly (no floating-point drift at exact anchors).
+  Tested via `test-m6.mjs` (T12a, T12b) — passed ✅. f=0 at both lower segment boundaries ensures exact anchor values without float accumulation.
 
-- [ ] **T13 — Slider live display.** Dragging the slider updates the `<output>` text
+- [x] **T13 — Slider live display.** Dragging the slider updates the `<output>` text
   immediately. Recompute only fires on button click.
+  Tested in browser with Octopus data — passed ✅
 
-- [ ] **T14 — Card visibility / British English.** After running full Octopus flow,
+- [x] **T14 — Card visibility / British English.** After running full Octopus flow,
   hp-model-card appears. No JS console errors. All user-facing text British English.
+  Tested in browser with Octopus data — passed ✅
 
 - [ ] **T15 — No-gas branch.** CSV with no gas data. Expected: `validation_status = "no_gas"`,
   `cop_by_hh` populated, `hp_capacity_kw = null`, `annual_mean_cop = null` (no heating
   demand to weight by).
+  ⏭ Deferred — no suitable no-gas CSV available for testing.
 
-- [ ] **T16 — Warning thresholds.** Construct synthetic data such that
+- [x] **T16 — Warning thresholds.** Construct synthetic data such that
   `fraction_below_design_temp = 0.07`. Expected: warning surfaced with "7.0% of heating hours".
+  Tested in browser via console — passed ✅
 
 ---
 
