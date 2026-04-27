@@ -1,7 +1,7 @@
 # Module 6 — Heat Pump Model
 
 **Date:** 2026-04-26
-**Status:** Awaiting approval — review via claude.ai before implementation begins.
+**Status:** ✅ Approved — 2026-04-27
 **Depends on:** `docs/plans/m5-thermal-character.md` — must be ✅ Approved AND implemented (committed to main) before M6 implementation begins. M6 consumes `setpoint_c` from `getThermalCharacterResult()` for HP sizing. M6 can be planned now, but coding starts only once M5 is merged.
 
 ---

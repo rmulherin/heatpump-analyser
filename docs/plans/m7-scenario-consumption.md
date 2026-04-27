@@ -1,7 +1,7 @@
 # Module 7 — Scenario Consumption
 
 **Date:** 2026-04-26
-**Status:** Awaiting approval — review via claude.ai before implementation begins.
+**Status:** ⚠ Approved with edits — 2026-04-27
 **Depends on:**
 - `docs/plans/m5-thermal-character.md` — must be ✅ Approved AND merged. M7 reads
   `setpoint_c`, `thermal_mass_kj_per_k`, `occupancy_weights`.
