@@ -323,11 +323,13 @@ For each scenario name in `['current', 'dumb_hp_svt', 'dumb_hp_hh', 'hybrid_dumb
 If `validation_status.smart !== 'ok'` AND scenario is `smart_hp_hh` or `hybrid_smart`:
 ```javascript
 scenarioCosts[name] = {
-  annual_cost_gbp:   null,
-  energy_cost_gbp:   null,
-  standing_charge_gbp: null,
-  monthly_breakdown: null,
-  fuels_supplied:       SCENARIO_FUELS[name],
+  annual_cost_gbp:      null,
+  energy_cost_gbp:      null,
+  gas_energy_cost_gbp:  null,
+  elec_energy_cost_gbp: null,
+  standing_charge_gbp:  null,
+  monthly_breakdown:    null,
+  fuels_supplied:        SCENARIO_FUELS[name],
   electricity_rate_type: SCENARIO_ELEC_RATE_TYPE[name],
 };
 continue;
@@ -335,15 +337,18 @@ continue;
 
 **Energy cost — HH loop:**
 ```javascript
-let energy_pence = 0;
+let gas_pence  = 0;
+let elec_pence = 0;
 const { gas_kwh, elec_kwh } = scenarios[name];
 for (let i = 0; i < gas_kwh.length; i++) {
   const g = gas_kwh[i]  ?? 0;
   const e = elec_kwh[i] ?? 0;
-  energy_pence += g * rateMetadata.gas_rate_by_hh[i];
-  energy_pence += e * electricityRateForHH(name, i, rateMetadata, svtRate);
+  gas_pence  += g * rateMetadata.gas_rate_by_hh[i];
+  elec_pence += e * electricityRateForHH(name, i, rateMetadata, svtRate);
 }
-const energy_cost_gbp = energy_pence / 100;
+const gas_energy_cost_gbp  = gas_pence  / 100;
+const elec_energy_cost_gbp = elec_pence / 100;
+const energy_cost_gbp      = gas_energy_cost_gbp + elec_energy_cost_gbp;
 ```
 
 `electricityRateForHH(scenario, i, rateMetadata, svtRate)`:
@@ -368,15 +373,31 @@ const annual_cost_gbp = (energy_cost_gbp + standing_charge_gbp) * scale;
 
 **Monthly breakdown:**
 For each `[month, group]` in `monthGroups`:
-- Sum `energy_pence` for HH periods in `group.indices` (same rate lookup as above)
+- Sum `monthly_energy_pence` for HH periods in `group.indices` using the same gas/elec rate
+  lookup as the annual loop (`gas_pence_m + elec_pence_m`). The monthly loop uses a local
+  `monthly_energy_pence` variable (not the outer `gas_pence`/`elec_pence`) to avoid confusion.
 - `monthly_sc_gbp = sc_pence_per_day * group.distinctDates / 100`
-- `{ month, energy_cost_gbp: pence/100, standing_charge_gbp: monthly_sc_gbp, total_gbp: sum, partial: group.partial }`
+- `{ month, energy_cost_gbp: monthly_energy_pence/100, standing_charge_gbp: monthly_sc_gbp, total_gbp: sum, partial: group.partial }`
 
 **Consistency check (Test 8):**
 The sum of monthly `energy_cost_gbp` across all months must equal the total `energy_cost_gbp`
 (before scaling). Both paths use the same `electricityRateForHH` helper and the same
 `rateMetadata.gas_rate_by_hh` — the monthly loop iterates the same HH indices as the annual
 loop, so consistency is structural. No explicit reconciliation needed.
+
+**Assemble `scenarioCosts[name]` (non-null case):**
+```javascript
+scenarioCosts[name] = {
+  annual_cost_gbp:      annual_cost_gbp,
+  energy_cost_gbp:      energy_cost_gbp,
+  gas_energy_cost_gbp:  gas_energy_cost_gbp,
+  elec_energy_cost_gbp: elec_energy_cost_gbp,
+  standing_charge_gbp:  standing_charge_gbp,
+  monthly_breakdown:    monthly_breakdown,
+  fuels_supplied:        SCENARIO_FUELS[name],
+  electricity_rate_type: SCENARIO_ELEC_RATE_TYPE[name],
+};
+```
 
 **Return:**
 ```javascript
