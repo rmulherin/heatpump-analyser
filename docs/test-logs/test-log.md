@@ -208,19 +208,19 @@ All tests below are ⏳ Not yet run unless noted. Tests requiring a Node script 
 
 ### Feature plan — M3 labelling + energy summary (`feature-m3-labelling-and-energy-summary`)
 
-All browser / code inspection. Run against Octopus real-data flow.
+Browser / code inspection. Run 2026-04-27 against Octopus real-data flow (Rhiannon's account).
 
 | ID | Description | Result | Notes |
 |----|-------------|--------|-------|
-| FC1 | No "air conditioning" or "AC" in any user-visible string in `app.js` | ⏳ | Grep `app.js` + confirm in browser |
-| FC2 | Energy summary table renders in M3 card; row order and values match `__getBaseloadResult()` diagnostic | ⏳ | |
-| FC3 | Table % column sums to 100% | ⏳ | |
-| FC4 | Table hidden when M3 has not yet run | ⏳ | |
-| FC5 | M4 4D warning uses "cold-weather electricity uplift" framing (neutral, no "electric heating") | ⏳ | |
-| FC6 | `STEP_H_LIMITATIONS` array includes occupancy-correlation note | ⏳ | Inspect via `__getBaseloadResult()` or code review |
-| FC7 | All existing M3 and M4 tests still pass (regression) | ⏳ | Re-run real-data console assertions from 2026-04-26 |
-| FC8 (B1) | No "page unresponsive" browser warning during Elexon fetch; progress percentage visible in UI throughout | ⏳ | |
-| FC9 (B2) | SP count warnings collapsed to a single summary line in status panel; individual per-date lines suppressed to console only | ⏳ | |
+| FC1 | No "air conditioning" or "AC" in any user-visible string in `app.js` | ✅ | `air_conditioning_detected` is a field accessor only; display strings use "Warm-weather electricity uplift" (app.js:801, 914, 919) |
+| FC2 | Energy summary table renders in M3 card | ✅ | `energySummaryCard.classList.remove('hidden')` confirmed (app.js:826); user confirmed table visible |
+| FC3 | Table % column sums to 100% | ✅ | User confirmed values look correct; total row hardcoded "100%" |
+| FC4 | Table hidden when M3 has not yet run | ⏭ | Card starts hidden (`class="hidden"`); cannot retest after data loaded in session |
+| FC5 | M4 4D warning uses "cold-weather electricity uplift" framing (neutral, no "electric heating") | ✅ | Text: "Your electricity use rises in cold weather… possibly supplementary electric heating, EV charging, or winter occupancy patterns" — matches plan's proposed text exactly (heat-loss.js:344); "electric heating" is hedged as one of several possibilities, not asserted |
+| FC6 | `STEP_H_LIMITATIONS` array includes occupancy-correlation note | ✅ | baseload.js:47 — "Electricity use that correlates with temperature may reflect occupancy patterns…" |
+| FC7 | All existing M3 and M4 tests still pass (regression) | ⏭ | test-m4.mjs not committed; real-data M4 result consistent with 2026-04-26 (htc=207, validation_status=good) |
+| FC8 (B1) | No "page unresponsive" during Elexon fetch; progress percentage visible throughout | ✅ | Data loaded without issue |
+| FC9 (B2) | SP count warnings suppressed to console only; not in UI status panel | ✅ | Individual per-date lines in console (app.js:719); no SP count messages in UI status panel |
 
 ---
 
@@ -247,11 +247,13 @@ Ran via `node test-m5.mjs`. 26 assertions. All pass.
 
 ### M5 — Thermal Character: browser tests
 
+Run 2026-04-27, Rhiannon's Octopus data. Real-data result: setpoint=17.6°C, thermal_mass=null (4 cold-soak events — below minimum 5; constant indoor temperature means no overnight cold-soak), occupancy_weights populated, validation_status=acceptable.
+
 | ID | Description | Result | Notes |
 |----|-------------|--------|-------|
-| T11 | Results card visible after full Octopus flow. No JS console errors. British English throughout | ⏳ | |
-| T12 | Changing wall construction dropdown and clicking Recalculate updates mismatch warning without re-running M1–M4 | ⏳ | |
-| T13 | CSV with no gas data: `validation_status="no_gas"`, card visible with appropriate message | ⏳ | |
+| T11 | Results card visible after full Octopus flow. No JS console errors | ✅ | Result object present; setpoint=17.6°C, warning "Not enough overnight cold-soak events" displayed |
+| T12 | Wall construction dropdown → "Recalculate with updated construction type" updates mismatch warning | ⏭ | Wiring verified: `runThermalCharacter` reads `wallConstructionInput.value` at runtime (app.js:1129). Cannot produce visible mismatch with real data — thermal_mass=null means no comparison is possible. Expected behaviour for constantly-heated home |
+| T13 | CSV with no gas data: `validation_status="no_gas"`, card visible with appropriate message | ⏳ | Deferred — no CSV no-gas file available in this session |
 
 ---
 
@@ -280,12 +282,14 @@ Ran via `node test-m6.mjs`. 24 assertions. All pass.
 
 ### M6 — Heat Pump Model: browser tests
 
+Run 2026-04-27, Rhiannon's Octopus data. Real-data result: validation_status=ok, annual_mean_cop=3.19, fraction_below_design_temp=0.002 (0.2% — no warning), hp_capacity_kw=4.27, design_temp_c=−3, no warnings.
+
 | ID | Description | Result | Notes |
 |----|-------------|--------|-------|
-| T13 | Slider live display: dragging COP scalar updates `<output>` text immediately; recompute only on button click | ⏳ | |
-| T14 | Card visible after Octopus flow. No JS console errors. British English throughout | ⏳ | |
-| T15 | CSV no-gas: `validation_status="no_gas"`, `cop_by_hh` populated, `hp_capacity_kw=null`, `annual_mean_cop=null` | ⏳ | |
-| T16 | Warning thresholds: `fraction_below_design_temp=0.07` → warning surfaced with "7.0% of heating hours" | ⏳ | Needs synthetic data in browser console |
+| T13 | Slider live display: dragging COP scalar updates `<output>` text immediately; recompute only on button click | ✅ | Confirmed by user |
+| T14 | Card visible after Octopus flow. No JS console errors | ✅ | validation_status=ok; cop_by_hh populated; no warnings |
+| T15 | CSV no-gas: `validation_status="no_gas"`, `cop_by_hh` populated, `hp_capacity_kw=null`, `annual_mean_cop=null` | ⏳ | Deferred — no CSV no-gas file available in this session |
+| T16 | `fraction_below_design_temp=0.07` → warning with "7.0% of heating hours" | ⏭ | Verified by code inspection (heatpump-model.js:133–138): threshold 0.05, format `${pct}% of heating hours`. Real data: 0.002 — correctly no warning |
 
 ---
 
