@@ -1786,9 +1786,9 @@ function buildAndDisplayVerdict(financialResult, heatLossResult, rateMetadata) {
     verdictType = 'insufficient';
   } else {
     const ps = sc(primaryKey);
-    if (ps.payback_status === 'ok' && ps.annual_saving_gbp > 50) {
+    if (ps.payback_status === 'positive' && ps.annual_saving_gbp > 50) {
       verdictType = 'positive';
-    } else if (ps.payback_status === 'ok' && ps.annual_saving_gbp > 0) {
+    } else if (ps.payback_status === 'positive' && ps.annual_saving_gbp > 0) {
       verdictType = 'marginal';
     } else {
       verdictType = 'negative';
@@ -1883,7 +1883,7 @@ methodology section below. The figures in the tables are rough estimates only.`;
   const n       = rateMetadata.data_period_days;
   let qualityText;
 
-  if (r2 === null || r2 === undefined || vstatus !== 'ok') {
+  if (r2 === null || r2 === undefined || !['good', 'acceptable'].includes(vstatus)) {
     qualityText = 'Heat-loss estimation was not possible from your data — running cost figures are rough estimates only.';
   } else if (r2 >= 0.80) {
     qualityText = `Analysis based on ${n} days of smart meter data. Fit quality: good (R²=${r2.toFixed(2)}) — accuracy is typically ±15–20% on the heat-loss estimate.`;
