@@ -1496,14 +1496,11 @@ async function runScenarioConsumption(showProgressFn, showStatusFn) {
 
   showProgressFn('Computing scenarios (this is the longest step)…');
 
-  // Yield to the browser before the DP-heavy step so the progress message paints
+  // Yield to the browser so the progress message paints before the greedy LP runs
   await new Promise(r => setTimeout(r, 0));
 
   const { gasRateByHh, elecHhRateByHh } = buildRateArrays(
     ingestion.consumption, externalResult.external, ingestion.tariff_rates);
-
-  const tMaxPreheatOffsetC = parseFloat(preheatOffsetInput.value) || 2.0;
-  const occupancyThreshold = parseFloat(occupancyThresholdInput.value) || 0.5;
 
   let result;
   try {
@@ -1515,7 +1512,6 @@ async function runScenarioConsumption(showProgressFn, showStatusFn) {
       heatPumpModel:   hpModel,
       baseloadMethod:  baseloadResult.baseload_metadata.method,
       gasRateByHh, elecHhRateByHh,
-      tMaxPreheatOffsetC, occupancyThreshold,
     });
   } catch (err) {
     showStatusFn('Scenario computation failed: ' + err.message, 'error');

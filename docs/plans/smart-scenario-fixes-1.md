@@ -1,7 +1,7 @@
 # Smart Scenario Fixes 1 — implementation plan
 
 **Date:** 2026-04-28
-**Status:** Awaiting approval — review via Opus architect window before implementation begins.
+**Status:** ⚠ Approved with edits — 2026-04-28
 **Parent design:** `~/Documents/git-repos/praxis-claude-hub/projects/tools/heatpump-analyser/design/smart-scenario-fixes-1.md` (DRAFT — pending Rhiannon approval)
 **Related designs:** `design/thermal-character.md` (M5), `design/scenario-consumption.md` (M7), `design/ui-design-m10a.md` (M10), `architecture.md`, `scope.md`
 
@@ -43,10 +43,10 @@ The design doc fully specifies the algorithm, formulas, edge cases, test inputs,
 | MODIFY | `css/styles.css` | Add traffic-light ratio styling and slider polish for new controls (Fix 3) |
 | MODIFY | `test-m5.mjs` | Add tests M5.X1–M5.X7 for new diagnostic outputs |
 | MODIFY | `test-m7.mjs` | Remove obsolete DP tests; rewrite tests 8/9/11; add tests 13–16 |
-| MODIFY | `~/Documents/git-repos/praxis-claude-hub/projects/tools/heatpump-analyser/architecture.md` | Update M5 and M7 module bullets per design § 4.1, 4.2 |
-| MODIFY | `~/Documents/git-repos/praxis-claude-hub/projects/tools/heatpump-analyser/scope.md` | Close Open Question 7; append new finding 7 (renumber subsequent) |
 | MODIFY | `CLAUDE.md` (heatpump-analyser) | Update Status line at end of implementation |
 | MODIFY | `~/Documents/git-repos/claude-coding-hub/context/heatpump-memory.md` | Update session memory after each phase commit |
+
+(Edits to praxis-claude-hub files — `architecture.md`, `scope.md`, the parent design doc's Status flip — are explicitly **out of scope** for this plan. Opus owns those and applies them post-launch as cleanup once code is verified on real data.)
 
 No new files are created. The plan deliberately avoids new modules — the diagnostic and the rewritten optimiser stay inside their existing module files.
 
@@ -98,9 +98,12 @@ function computeUnderheatStatus(modelledByHh, heating, eta) {
     0,
   );
 
-  if (!annualModelled || annualModelled === 0) {
+  // Insufficient_data covers: no modelled demand (null/0 — missing HTC/setpoint or no
+  // weather), AND no observed demand (null/0 — baseload separation found no heating
+  // signal). Either edge produces a degenerate ratio that should not surface narrative.
+  if (!annualModelled || annualModelled === 0 || !annualObserved || annualObserved === 0) {
     return {
-      annual_modelled_demand_kwh: null,
+      annual_modelled_demand_kwh: annualModelled || null,
       annual_observed_demand_kwh: annualObserved || null,
       underheat_ratio:  null,
       underheat_status: 'insufficient_data',
@@ -133,7 +136,7 @@ const modelledByHh = computeModelledHeatingByHh(heating, external, heatLoss, set
 const underheat    = computeUnderheatStatus(modelledByHh, heating, heatLoss?.boiler_efficiency_used ?? 0.9);
 const narrative    = buildUnderheatNarrative(underheat, setpoint_c);
 ```
-Append five fields to the returned `thermal_character` object: `modelled_heating_kwh_by_hh`, `annual_modelled_demand_kwh`, `annual_observed_demand_kwh`, `underheat_ratio`, `underheat_status`, `underheat_narrative`.
+Append six fields to the returned `thermal_character` object: `modelled_heating_kwh_by_hh`, `annual_modelled_demand_kwh`, `annual_observed_demand_kwh`, `underheat_ratio`, `underheat_status`, `underheat_narrative`.
 
 **Step 1.7 — Add tests M5.X1–M5.X7 to `test-m5.mjs`.** Synthetic inputs only; no real-data dependency. Use the existing test harness pattern (assertion helpers at top of the file).
 
@@ -162,10 +165,10 @@ Commit message: `feat(m5): add comfort-demand diagnostic outputs (smart-scenario
 The riskiest phase. Replaces a substantial block of code; each step is independently verifiable.
 
 **Step 2.1 — Delete obsolete code from `js/scenario-consumption.js`:**
-- `discretiseStates` (lines ~26–33)
-- `nearestStateIndex` (lines ~35–43)
-- The entirety of `runDpForDay` (lines ~126–271) — DP forward pass, dpCost/dpPrev/dpFuel matrices, runForwardPass closure, backtrack loop
-- The DP-related branches inside `buildSmartScenario` (lines ~273–348) — keep the function name and outer day-loop scaffolding for the next step
+- `discretiseStates`
+- `nearestStateIndex`
+- The entirety of `runDpForDay` — DP forward pass, dpCost/dpPrev/dpFuel matrices, runForwardPass closure, backtrack loop
+- The DP-related branches inside `buildSmartScenario` — keep the function name and outer day-loop scaffolding for the next step
 - `SC_CONFIG.N_STATES`, `T_RANGE_BELOW_SETPOINT`, `PREHEAT_OFFSET_HIGH_WARN_C`, `T_MAX_PREHEAT_OFFSET_DEFAULT`, `OCCUPANCY_THRESHOLD_DEFAULT` — no longer used after step 2.5
 
 `computeStepEnergetics`, `requiredQDelivered`, `buildDayHhIndices`, `buildCurrentScenario`, `buildDumbHpScenario`, `buildHybridDumbScenario` are retained verbatim.
@@ -307,7 +310,10 @@ function buildSmartScenario({
 
   for (const { indices, skipDp } of days) {
     if (skipDp) {
-      for (const i of indices) { gas_kwh[i] = null; elec_kwh[i] = null; }
+      // Non-heating day per design § 1.4: arrays remain at the 0 init value.
+      // Do NOT null these — M8 expects numeric arrays and design specifies zero.
+      // q_thermal also stays at 0 from the outer init (post-hoc sim still applies
+      // natural heat loss on top of zero delivery, which is physically correct).
       continue;
     }
     const day = allocateGreedyDay({
@@ -353,7 +359,7 @@ export function estimateScenarioConsumption({
         current: nullScenario, dumb_hp_svt: nullScenario, dumb_hp_hh: nullScenario,
         hybrid_dumb: nullScenario, smart_hp_hh: nullScenario, hybrid_smart: nullScenario,
       },
-      validation_status: { dumb: 'no_data', smart: computeValidationStatusSmart(heatLoss) },
+      validation_status: { dumb: 'no_data', smart: computeValidationStatusSmart(heatLoss, heatPumpModel) },
       warnings: ['No gas heating detected — heat pump scenarios cannot be modelled against an existing gas baseline.'],
     };
   }
@@ -365,11 +371,14 @@ export function estimateScenarioConsumption({
   const dumbDiagnostics = dumbHp._diagnostics; delete dumbHp._diagnostics;
 
   // Step 4: smart scenarios (greedy LP)
-  let smartStatus = computeValidationStatusSmart(heatLoss);
+  let smartStatus = computeValidationStatusSmart(heatLoss, heatPumpModel);
   let smartHpHh, hybridSmart;
 
   if (smartStatus === 'ok') {
-    const hpCap = heatPumpModel?.hp_capacity_kw ?? Infinity;
+    // hp_capacity_kw is guaranteed non-null here by computeValidationStatusSmart's
+    // guard above. Do not fall back to Infinity — that would silently disable the
+    // per-HH cap and let the greedy dump a day's heat into a single half-hour.
+    const hpCap = heatPumpModel.hp_capacity_kw;
 
     const sm = buildSmartScenario({
       scenario: 'smart_hp_hh', heating, external, copByHh, hpCapKw: hpCap,
@@ -398,11 +407,17 @@ export function estimateScenarioConsumption({
     smartHpHh   = { gas_kwh: sm.gas_kwh, elec_kwh: sm.elec_kwh, indoor_temp_c: smTinSim.indoor_temp_c };
     hybridSmart = { gas_kwh: hb.gas_kwh, elec_kwh: hb.elec_kwh, indoor_temp_c: hbTinSim.indoor_temp_c };
 
-    // Concentrated-heating note (design § 1.5): inspect post-hoc indoor for overshoot
-    const overshoot = smTinSim.indoor_temp_c.some(
-      v => v != null && thermalCharacter.setpoint_c != null
-        && v > thermalCharacter.setpoint_c + 3.0,
-    );
+    // Concentrated-heating note (design § 1.5): inspect post-hoc indoor for overshoot.
+    // Filter to HH where heat was actually delivered. Without this filter, summer days
+    // where the building naturally tracks 22–28°C outdoor temperatures would trigger
+    // the warning despite no smart-schedule activity, making the warning text
+    // ("schedule concentrates heating into low-cost periods") misleading.
+    const overshoot = sm.q_thermal.some((q, idx) => {
+      if (q == null || q <= 0) return false;
+      const t = smTinSim.indoor_temp_c[idx];
+      if (t == null || thermalCharacter.setpoint_c == null) return false;
+      return t > thermalCharacter.setpoint_c + 3.0;
+    });
     if (overshoot) {
       warnings.push('Smart-HP schedule concentrates heating into low-cost periods; in practice your thermostat would moderate this.');
     }
@@ -433,13 +448,14 @@ export function estimateScenarioConsumption({
 **Step 2.6 — Update `computeValidationStatusSmart`.**
 
 ```javascript
-function computeValidationStatusSmart(heatLoss) {
-  if (heatLoss?.htc_w_per_k == null) return 'no_htc';
+function computeValidationStatusSmart(heatLoss, heatPumpModel) {
+  if (heatLoss?.htc_w_per_k == null) return 'insufficient_data';
+  if (heatPumpModel?.hp_capacity_kw == null) return 'insufficient_data';
   return 'ok';
 }
 ```
 
-The new algorithm anchors smart demand to observed heating, so thermal mass, setpoint, and occupancy weights are no longer required for the cost arrays. They are only needed for the post-hoc T_indoor sim (which gracefully nulls `indoor_temp_c` if absent). The previous `'no_thermal_mass'`, `'no_setpoint'`, `'insufficient_data'` codes are removed; `'hp_undersized'` is the new code, set inside `estimateScenarioConsumption` after the greedy run, not by this guard. Consumers (app.js) must be updated in step 3.6.
+The new algorithm anchors smart demand to observed heating, so thermal mass, setpoint, and occupancy weights are no longer required for the cost arrays. They are only needed for the post-hoc T_indoor sim (which gracefully nulls `indoor_temp_c` if absent). Codes per design § 1.3: `'ok'`, `'insufficient_data'` (htc null OR hp_capacity null OR heating_kwh all-null), `'hp_undersized'` (set inside `estimateScenarioConsumption` after the greedy run, not by this guard). The previous `'no_htc'`, `'no_thermal_mass'`, `'no_setpoint'` codes are removed. Consumers (app.js) must be updated in step 3.9.
 
 **Step 2.7 — Update the orchestration call site in `js/app.js`.**
 
@@ -480,13 +496,13 @@ Find references to `preheatOffsetSlider`, `occupancyThresholdSlider`, `preheat-o
 
 **Step 3.3 — Add the underheating diagnostic sub-panel to Your Home.**
 
-Locate the Your Home section banner in `index.html`. The M10a layout (per design § 3.1) places this panel between "Building thermal character" and "Smart tariff potential". Insert:
+Locate the Your Home section banner in `index.html`. The M10a layout (per design § 3.1) places this panel between "Building thermal character" and "Smart tariff potential". Use the existing `.results-summary` wrapper class on the inner div so the existing CSS grid rule applies and we avoid new CSS coupling. Insert:
 
 ```html
 <section class="card hidden" id="underheat-card">
   <h2>Heating to comfort</h2>
-  <div id="underheat-content">
-    <dl class="results-summary-dl">
+  <div class="results-summary" id="underheat-content">
+    <dl>
       <dt>Annual heat consumption (observed)</dt>
       <dd><span id="underheat-observed">—</span> kWh thermal</dd>
       <dt>Modelled comfort demand at <span id="underheat-setpoint">—</span>°C</dt>
@@ -494,18 +510,6 @@ Locate the Your Home section banner in `index.html`. The M10a layout (per design
       <dt>Ratio</dt>
       <dd><span id="underheat-ratio-value">—</span><span class="underheat-light" id="underheat-light"></span></dd>
     </dl>
-    <p class="underheat-narrative" id="underheat-narrative"></p>
-  </div>
-</section>
-```
-
-Wrap the DL in a `.results-summary` div so the existing CSS grid rule applies — or add a new dedicated rule. Decision: use the existing `.results-summary` wrapper, since this matches the pattern of `#results-summary` and avoids new CSS coupling.
-
-```html
-<section class="card hidden" id="underheat-card">
-  <h2>Heating to comfort</h2>
-  <div class="results-summary" id="underheat-content">
-    <dl> ... </dl>
     <p class="underheat-narrative" id="underheat-narrative"></p>
   </div>
 </section>
@@ -579,11 +583,30 @@ In `index.html`, inside the What If banner, add:
 </div>
 ```
 
-The default value is set dynamically from `Math.min(150, Math.max(0, Math.round(thermalCharacter.underheat_ratio * 100)))` in JS at panel render time (the `value="100"` is just an HTML fallback).
+The default value and the slider's visibility are set dynamically at panel render time. **When `underheat_ratio` is null** (M5 returned `underheat_status === 'insufficient_data'`), the entire `#heat-to-comfort-group` is hidden and the M7 call uses no `comfort_demand_scale` (so smart scenarios reflect observed demand verbatim). Otherwise, default = `Math.min(150, Math.max(0, Math.round(underheat_ratio * 100)))` — i.e. the slider starts at "match your current usage". The `value="100"` in HTML is just a fallback for cases where the JS hook hasn't run.
 
 **Step 3.7 — Wire the slider in `js/app.js`.**
 
+Add a `setupHeatToComfortSlider(thermalCharacter)` helper that hides the slider group when `underheat_ratio` is null and otherwise sets the default value. Call it from the M5 display chain alongside `displayUnderheatPanel(thermalCharacter)`.
+
 ```javascript
+function setupHeatToComfortSlider(thermalCharacter) {
+  const group  = document.getElementById('heat-to-comfort-group');
+  const slider = document.getElementById('heat-to-comfort');
+  const output = document.getElementById('heat-to-comfort-value');
+  const ratio  = thermalCharacter?.underheat_ratio;
+
+  if (ratio == null) {
+    group.classList.add('hidden');
+    return;
+  }
+  group.classList.remove('hidden');
+
+  const defaultPct = Math.min(150, Math.max(0, Math.round(ratio * 100)));
+  slider.value = defaultPct;
+  output.value = defaultPct;
+}
+
 const heatToComfortSlider = document.getElementById('heat-to-comfort');
 const heatToComfortValue  = document.getElementById('heat-to-comfort-value');
 heatToComfortSlider.addEventListener('input', () => {
@@ -602,13 +625,16 @@ Modify `estimateScenarioConsumption` signature (Step 2.5) to accept an optional 
 
 ```javascript
 const ratio = thermalCharacter?.underheat_ratio;
-const scale = comfort_demand_scale != null
-  ? (comfort_demand_scale / 100) / Math.max(ratio ?? 1, 0.001)
+// Defensive: when ratio is null the slider is hidden in step 3.7 and the slider
+// group element carries the .hidden class, so comfort_demand_scale should not be
+// passed in. Belt-and-braces: if it is passed in by mistake, scale stays at 1.
+const scale = (comfort_demand_scale != null && ratio != null)
+  ? (comfort_demand_scale / 100) / Math.max(ratio, 0.001)
   : 1.0;
 ```
 Apply `scale` to `B_d` inside `allocateGreedyDay` — multiply observed `B_d` by `scale`. When the slider is at the default value (`underheat_ratio × 100`), `scale === 1` and behaviour is unchanged.
 
-Wire `runScenarioConsumption` in app.js to read the slider value and pass it through.
+Wire `runScenarioConsumption` in app.js to read the slider value and pass it through **only when** `underheat_ratio != null` (i.e. the slider group is visible). When ratio is null, omit the parameter entirely so M7 falls through to the default `1.0`.
 
 **Step 3.9 — Surface `hp_undersized` warning.**
 
@@ -627,20 +653,14 @@ Commit message: `feat(m10): underheating diagnostic + Heat to Comfort slider (sm
 
 ### Phase 4 — Documentation updates (Fix 4)
 
-**Step 4.1 — Update `architecture.md` (praxis-claude-hub).** Apply the substitutions in design § 4.1 and § 4.2 verbatim.
+This phase covers heatpump-analyser-side documentation only. Edits to praxis-claude-hub files (`architecture.md`, `scope.md`, the parent design doc's Status flip from DRAFT to IMPLEMENTED) are explicitly **out of scope** for this plan — Opus owns those and applies them post-launch as cleanup, once code is verified on Rhiannon's real-data dataset and Rhiannon has confirmed the result.
 
-**Step 4.2 — Update `scope.md` (praxis-claude-hub).** Close Open Question 7 and append the new finding 7 per design § 4.3, § 4.4. Renumber subsequent items.
+**Step 4.1 — Update `CLAUDE.md` (heatpump-analyser).** Append a Status line summarising the three fixes and noting that the M7 design has been amended via `design/smart-scenario-fixes-1.md` (parent-design path in praxis-claude-hub). (Project Identity section.)
 
-**Step 4.3 — Update `CLAUDE.md` (heatpump-analyser).** Append a Status line summarising the three fixes and the deviations from the M7 design that the new design doc has now codified. (Project Identity section.)
+**Step 4.2 — Update `~/Documents/git-repos/claude-coding-hub/context/heatpump-memory.md`.** Add the three commits and their summaries (this is the standard CLAUDE.md "After every commit" workflow — operational territory, not a cross-repo design edit).
 
-**Step 4.4 — Update `~/Documents/git-repos/claude-coding-hub/context/heatpump-memory.md`.** Add the three commits and their summaries.
-
-**Step 4.5 — Update the design doc status.** In `praxis-claude-hub/projects/tools/heatpump-analyser/design/smart-scenario-fixes-1.md`, change Status from `DRAFT — pending review` to `IMPLEMENTED — yyyy-mm-dd, see commits …`. (Following the existing convention that design docs flip to IMPLEMENTED once the code lands.)
-
-**Step 4.6 — Commit and push Phase 4** (in both repos as appropriate).
-Commit messages:
-- praxis-claude-hub: `docs: smart-scenario-fixes-1 — close OQ7, update M5/M7 module summaries`
-- heatpump-analyser: `docs: CLAUDE.md status — smart-scenario-fixes-1 implemented`
+**Step 4.3 — Commit and push Phase 4.**
+Commit message: `docs: CLAUDE.md status — smart-scenario-fixes-1 implemented`.
 
 ---
 
@@ -675,7 +695,7 @@ Commit messages:
 
 - [ ] DP infrastructure removed from `js/scenario-consumption.js` (no `dpCost`, `dpPrev`, `dpFuel`, `T_states`, `nearestStateIndex`, `discretiseStates`, `runDpForDay`)
 - [ ] `allocateGreedyDay`, `simulatePostHocTIndoor`, and rewritten `buildSmartScenario` present
-- [ ] `validation_status.smart` codes: `'ok'`, `'no_htc'`, `'hp_undersized'` (no others)
+- [ ] `validation_status.smart` codes: `'ok'`, `'insufficient_data'`, `'hp_undersized'` (no others)
 - [ ] `node test-m7.mjs` reports all assertions passing — including new tests 13, 14, 15, 16
 - [ ] `node test-m5.mjs`, `test-m5b.mjs`, `test-m6.mjs`, `test-m8.mjs`, `test-m9.mjs` report unchanged regression status
 - [ ] On Rhiannon's real-data dataset: `total_cost(smart_hp_hh) < total_cost(dumb_hp_hh)` strictly
@@ -693,11 +713,10 @@ Commit messages:
 
 ### Phase 4 (docs)
 
-- [ ] `architecture.md` (praxis hub) reflects M5 and M7 module summaries per design § 4.1, 4.2
-- [ ] `scope.md` (praxis hub) closes Open Question 7 and appends finding 7
 - [ ] `CLAUDE.md` (heatpump-analyser) Status line updated
 - [ ] `heatpump-memory.md` (claude-coding-hub) records all four phase commits
-- [ ] Design doc Status flipped to IMPLEMENTED with date and commit hashes
+
+(praxis-claude-hub edits — `architecture.md`, `scope.md`, parent design doc Status flip — are out of scope for this plan; Opus applies them post-launch once Rhiannon confirms the real-data result.)
 
 ### Pre-launch validation gates (per design § "Pre-launch validation gates")
 
@@ -708,32 +727,84 @@ Commit messages:
 
 ---
 
-## Opus Review — yyyy-mm-dd
+## Opus Review — 2026-04-28
 
 **Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Date:** 2026-04-28
+**Review type:** Plan review (pre-implementation)
+**Authoritative design:** `~/Documents/git-repos/praxis-claude-hub/projects/tools/heatpump-analyser/design/smart-scenario-fixes-1.md` (DRAFT — pending Rhiannon's approval after relaunch)
 
-**Overall verdict:** *pending*
+### Context
+
+Plan was raised on launch day (2026-04-28) in response to a defect in deployed M7: `Smart_HP_HH > Dumb_HP_HH` in cost, contradicting the by-definition optimiser invariant. Diagnosis attributed the gap to a heat-demand baseline mismatch — dumb used observed `heating_kwh × η`, smart used a DP over RC simulation with comfort constraint, and the modelled comfort demand exceeded observed for any household that underheats. The amendment design rebases smart onto observed daily heat budgets via a per-day greedy LP and repurposes the modelled-demand calculation as an M5 underheating diagnostic (with a Heat to Comfort slider). The plan transcribes the design faithfully overall but introduced four silent-failure modes plus three workflow/protocol issues that needed correction before implementation.
 
 ### What is solid
-*pending*
 
-### Clarifications required before implementation
-*pending*
+- Phasing is correct and minimises blast radius: Phase 1 (additive M5) → Phase 2 (substitutive M7) → Phase 3 (UI) → Phase 4 (docs). The build remains usable between phases.
+- `allocateGreedyDay` transcription matches design § 1.4: deterministic HH-index tiebreak, hybrid HP-vs-gas dispatch with HP-only capacity cap, resistive backup at COP=1 in cheapest eligible HH (with `q_thermal` tracked separately so the post-hoc sim doesn't double-count via `cop_by_hh`).
+- New tests 13 (Smart ≤ Dumb invariant) and 14 (heat-budget conservation) are exactly the regression gates that would have caught the original launch bug, and Step 2.9 runs all adjacent module tests as a regression check before merge.
+- Existing helpers (`computeStepEnergetics`, `requiredQDelivered`, `buildDayHhIndices`, `buildCurrentScenario`, `buildDumbHpScenario`, `buildHybridDumbScenario`) explicitly retained, and the output contract (`{ gas_kwh, elec_kwh, indoor_temp_c }` per scenario, plus the `dumb_hp_svt`/`dumb_hp_hh` shared-reference T13 behaviour) is preserved.
+- Risks table is honest about the unknowns (real-data behaviour of the greedy, slider latency, dangling DOM references) and includes Test 13 as a hard halt on real data.
 
-### Minor observations (not blockers)
-*pending*
+### Required changes for implementation
+
+1. **Non-heating-day arrays must be zero, not null.** Step 2.4's `skipDp` branch was nulling `gas_kwh[i]` and `elec_kwh[i]`, but design § 1.4 explicitly requires zero (and the in-flight `B_d ≤ 0` path inside `allocateGreedyDay` already returns zeros — same physical condition was producing inconsistent outputs).
+2. **`hp_capacity_kw` null must block smart, not silently default to `Infinity`.** Step 2.5's `?? Infinity` fallback would let the greedy dump a day's heat into a single HH with no flag if M6 returned null capacity (e.g. setpoint inference failed).
+3. **Overshoot warning must filter to HH where heat was actually delivered.** The original `.some(v > setpoint + 3)` would fire on summer outdoor temperatures too (no heat delivered, indoor naturally tracks 22–28°C), making the warning text about "schedule concentrating heating" misleading on every real-data run.
+4. **Heat to Comfort slider must hide when `underheat_ratio` is null.** Step 3.6 set `slider.value = Math.round(null * 100) = 0`, which would scale every day's `B_d` to zero and silently corrupt smart cost output. The plan's risks table flagged this but the implementation step didn't realise the fix.
+5. **`validation_status.smart` codes must match design.** Plan returned `'no_htc'`; design § 1.3 specifies `'insufficient_data'`. Folded into change 2 above.
+6. **`computeUnderheatStatus` must handle `annualObserved == 0`.** The original guard caught null/zero modelled, but a household with zero observed heating (baseload separation found no signal) and non-zero modelled produced ratio = 0 → status `'underheat'` → narrative reading "you used around 0 kWh — about 100% less", which is a UI bug.
+7. **Phase 4 cross-repo edits dropped.** Plan had Sonnet editing `architecture.md`, `scope.md`, and the parent design doc's Status field — all in `praxis-claude-hub` (Opus territory). The amendment design is still DRAFT pending Rhiannon's post-launch sign-off, and the architecture/scope rollup was explicitly deferred to post-launch cleanup. Opus applies these separately after relaunch.
+
+### Minor observations (corrected inline)
+
+- **L1.** Step 2.1 listed explicit line numbers ("lines ~26–33"), violating the planner protocol's "no line numbers" rule. Symbol references retained; line numbers stripped.
+- **L2.** Step 1.6 prose said *"Append five fields"* but the code adds six. Corrected to "six".
+- **L3.** Step 3.3 included two HTML snippets for the underheat panel with prose between explaining the second supersedes the first. Collapsed to a single canonical snippet using the `.results-summary` wrapper.
+
+### Resolution of review changes
+
+1. **Non-heating-day zero, not null** — Step 2.4 `skipDp` branch now `continue`s without assignment; arrays remain at the 0 init.
+2. **hp_capacity_kw guard** — `computeValidationStatusSmart` now takes both `heatLoss` and `heatPumpModel`; returns `'insufficient_data'` if either `htc_w_per_k` or `hp_capacity_kw` is null. Both call sites updated. `hpCap` dereferenced directly (no `?? Infinity`) under the now-guaranteed-`ok` branch.
+3. **Overshoot filter** — Now iterates `sm.q_thermal.some((q, idx) => q > 0 && smTinSim.indoor_temp_c[idx] > setpoint + 3)`; comment explains the rationale.
+4. **Slider hide-when-null** — Added `setupHeatToComfortSlider(thermalCharacter)` helper in Step 3.7, called from the M5 display chain. Step 3.6 prose updated to specify hide-when-null and dynamic default. Step 3.8 conditional plumbing (`comfort_demand_scale` omitted when ratio null) with a defensive double-guard on `scale = 1.0`.
+5. **validation_status string** — Folded into change 2 (`'insufficient_data'` everywhere); Phase 2 success criteria updated to reflect the new code set.
+6. **annualObserved == 0 → insufficient_data** — Extended Step 1.4 `computeUnderheatStatus` early-return guard to `!annualModelled || annualModelled === 0 || !annualObserved || annualObserved === 0`.
+7. **Phase 4 cross-repo edits dropped** — Steps 4.1, 4.2, 4.5 removed; Files-to-modify table and Phase 4 success criteria updated; explanatory note added at the head of Phase 4 stating Opus owns the praxis-hub edits post-launch.
+
+## Review Summary
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| CRITICAL | 0     | ✓ pass |
+| HIGH     | 4     | ✅ resolved (changes 1–4) |
+| MEDIUM   | 3     | ✅ resolved (changes 5–7) |
+| LOW      | 3     | ✅ resolved inline (L1–L3) |
+
+Verdict: **APPROVE WITH EDITS** — algorithm transcription is faithful to the design; required changes addressed silent-failure modes and a workflow boundary issue. No structural rework needed.
 
 ---
 
 ## Approval
 
-**Status:** *pending*
-**Approved by:** Rhiannon (via Opus review) — *pending*
-**Approval date:** *pending*
-**Clarifications confirmed:** *pending*
+**Status:** ⚠ Approved with edits — 2026-04-28
+**Approved by:** Rhiannon (via Opus review)
+**Approval date:** 2026-04-28
+**Clarifications confirmed:**
+- Smart ≤ Dumb invariant restored by anchoring smart B_d to observed daily totals (per design § 1.4, replacing the DP+RC+comfort-constraint optimiser).
+- Cross-repo praxis-hub edits remain Opus's responsibility post-launch.
+- Plan amendment is the deliverable; no separate review document.
 
 ---
 
 ## Implementation Deviations
 
-*To be completed after implementation. Format per planner.md template.*
+### Phase 1
+
+**D1 — test-m5.mjs: 13 new assertions instead of estimated 7 (total 39 vs 33)**
+Tests M5X1, M5X5, and M5X6 each expanded into multiple sub-assertions (a/b, a/b/c, a/b/c/d respectively) to cover array-level checks alongside scalar checks. More coverage, not less. No production code change.
+
+### Phase 2
+
+**D2 — test-m7.mjs T18b: warning keyword broadened to "insufficient" as well as "undersized"**
+The hp_undersized warning text reads "Heat pump capacity insufficient on some days…" — it contains "insufficient" but not "undersized". The T18b assertion was updated to match either keyword. The warning text itself was not changed; it accurately describes the condition.

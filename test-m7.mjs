@@ -43,7 +43,6 @@ function buildInputs({
   gasRateByHh = null, elecHhRateByHh = null,
   baseloadMethod = 'gas',
   thermalCharacterOverride = undefined,
-  tMaxPreheatOffsetC = undefined,
 } = {}) {
   const n = heating.length;
 
@@ -58,7 +57,7 @@ function buildInputs({
     };
   }
 
-  const args = {
+  return {
     heating, external,
     heatLoss: {
       htc_w_per_k,
@@ -72,8 +71,6 @@ function buildInputs({
     gasRateByHh:    gasRateByHh    ?? new Array(n).fill(7),
     elecHhRateByHh: elecHhRateByHh ?? new Array(n).fill(20),
   };
-  if (tMaxPreheatOffsetC !== undefined) args.tMaxPreheatOffsetC = tMaxPreheatOffsetC;
-  return args;
 }
 
 // ===== T1 — Dumb HP unit conversion =====
@@ -135,10 +132,9 @@ function buildInputs({
 }
 
 // ===== T5 / T6 — RC formula spec verification =====
-// `requiredQDelivered` and `computeStepEnergetics` are not exported, so these tests
-// re-derive the formula from spec (scenario-consumption.js:45-55) and verify expected
-// physical values. Implementation conformance is verified by code inspection plus
-// integration tests T7–T16, which exercise these formulas through the smart DP.
+// `requiredQDelivered` and `computeStepEnergetics` feed simulatePostHocTIndoor.
+// Formulas re-derived from spec (scenario-consumption.js) and verified against
+// expected physical values. Integration tests T9/T16 exercise them end-to-end.
 function _spec_heatLossKwh(htc, T_cur, temp) {
   return htc * (T_cur - temp) * 0.5 / 1000;
 }
@@ -157,55 +153,32 @@ function _spec_requiredQ(T_cur, T_next, C, heatLossKwh, solarGainKwh) {
 // ===== T6 — RC non-trivial ΔT =====
 // T_cur=17, T_next=17.288, temp=5, htc=200, C=10000 → Q = 2.0
 // Forward: T_next = 17 + (Q − heatLoss) × 3600 / C = 17 + 0.8 × 0.36 = 17.288
-// Missing the × 3600 factor (kJ vs kWh) catastrophically underestimates Q.
 {
   const heatLoss = _spec_heatLossKwh(200, 17, 5);
   const Q = _spec_requiredQ(17, 17.288, 10000, heatLoss, 0);
   assert(Math.abs(Q - 2.0) < 0.001, 'T6', `RC ΔT formula: Q = 2.0 at T_cur=17, T_next=17.288 (got ${Q.toFixed(4)})`);
 }
 
-// ===== T7 — DP comfort gate =====
-// All occupied, HP fuel only → every backtracked indoor_temp_c ≥ setpoint
+// ===== T8 — Greedy fills cheapest first =====
+// Rate variance: HH 0-11 cheap (2p), HH 12-47 expensive (30p).
+// Greedy concentrates all heat in cheap window → smart cost << dumb cost.
+//
+// Setup: 48 HH × 0.6 kWh heating, η=0.9, cop=3.0, cap=10 kW
+// B_d = 48 × 0.6 × 0.9 = 25.92 kWh thermal; cap per HH = 5 kWh
+// Greedy fills 5 cheap HH at 5 kWh + 6th at 0.92 → all at 2p elec
+// Smart cost ≈ 25.92/3 × 2 = 17.28p
+// Dumb: 12 × 0.18 × 2 + 36 × 0.18 × 30 = 4.32 + 194.4 = 198.72p
 {
-  const { heating, external, cop_by_hh } = buildSimpleDay({ tempC: 5, cop: 3 });
-  // Force heating > 0 so 'heating.every(h===null)' early exit doesn't trigger
-  for (let i = 0; i < 48; i++) heating[i] = hh(ts(0, i), 1.0);
-  const result = estimateScenarioConsumption(buildInputs({
-    heating, external, cop_by_hh,
-    setpoint_c: 19, thermal_mass_kj_per_k: 10000, htc_w_per_k: 200,
-    hp_capacity_kw: 10,
-    occupancy_weights: new Array(48).fill(1.0),  // all occupied
-    gasRateByHh:    new Array(48).fill(1000),    // gas effectively blocked
-    elecHhRateByHh: new Array(48).fill(10),
-  }));
-  const indoor = result.scenarios.smart_hp_hh.indoor_temp_c;
-  const allAboveSetpoint = indoor.every(t => t === null || t >= 19 - 1e-9);
-  assert(allAboveSetpoint, 'T7', `All occupied indoor_temp_c ≥ setpoint 19 (min=${Math.min(...indoor.filter(t => t !== null)).toFixed(3)})`);
-}
-
-// ===== T8 — DP pre-heating cost reduction =====
-// Cheap rate during overnight unoccupied window (HH 0-15), expensive HH 16-47.
-// Occupied HH 16-47. T_max_preheat = setpoint+4 (offset=4) gives enough coast room.
-// Smart DP should pre-heat during cheap and coast through expensive period.
-// Expected: smart_hp_hh total cost < dumb_hp_hh total cost under same rate schedule.
-{
-  const { heating, external, cop_by_hh } = buildSimpleDay({ tempC: 5, cop: 3 });
-  for (let i = 0; i < 48; i++) heating[i] = hh(ts(0, i), 1.5);  // 1.5 kWh ≈ comfort steady-state
+  const { heating, external, cop_by_hh } = buildSimpleDay({ tempC: 5, cop: 3.0 });
+  for (let i = 0; i < 48; i++) heating[i] = hh(ts(0, i), 0.6);
 
   const elecRates = new Array(48);
-  for (let i = 0; i < 48; i++) elecRates[i] = (i < 16) ? 2 : 30;
-
-  const occupancy = new Array(48);
-  for (let i = 0; i < 48; i++) occupancy[i] = (i >= 16) ? 1.0 : 0.0;
+  for (let i = 0; i < 48; i++) elecRates[i] = (i < 12) ? 2 : 30;
 
   const result = estimateScenarioConsumption(buildInputs({
     heating, external, cop_by_hh,
-    setpoint_c: 19, thermal_mass_kj_per_k: 10000, htc_w_per_k: 200,
-    hp_capacity_kw: 10,
-    occupancy_weights: occupancy,
-    gasRateByHh:    new Array(48).fill(1000),
+    gasRateByHh:    new Array(48).fill(1000),   // gas blocked
     elecHhRateByHh: elecRates,
-    tMaxPreheatOffsetC: 4,
   }));
 
   const dumb  = result.scenarios.dumb_hp_hh;
@@ -215,67 +188,62 @@ function _spec_requiredQ(T_cur, T_next, C, heatLossKwh, solarGainKwh) {
     dumbCost  += (dumb.elec_kwh[i]  ?? 0) * elecRates[i];
     smartCost += (smart.elec_kwh[i] ?? 0) * elecRates[i];
   }
-  assert(smartCost < dumbCost, 'T8', `Smart < Dumb cost under same rates (smart=${smartCost.toFixed(2)}p, dumb=${dumbCost.toFixed(2)}p)`);
+  assert(smartCost < dumbCost, 'T8', `Greedy cheapest-first: smart < dumb (smart=${smartCost.toFixed(2)}p, dumb=${dumbCost.toFixed(2)}p)`);
 }
 
-// ===== T9 — Day chaining =====
-// Day 1: unoccupied, expensive elec → DP drives T_indoor down to grid floor.
-// Day 2: occupied → must start from day-1 end state, NOT from setpoint.
-// Verify: day 2's indoor_temp_c[0] reflects ramp-up from low T (well below
-// setpoint+T_max_preheat midpoint), not from setpoint as if reset.
+// ===== T9 — Post-hoc T_indoor day chaining =====
+// Day 1: no heating (B_d=0) → building cools from setpoint toward outdoor temp.
+// Day 2: normal heating. Post-hoc sim walks the full chronological array, so day 2
+// starts from day-1's cooled state, not from setpoint.
+//
+// With htc=200, C=10000, setpoint=19, temp=5:
+//   Time constant τ ≈ 13.9 h → after 24 h T ≈ 7.5°C
+// indoor_temp_c[48] (day 2 first HH) should be well below 19 (chaining works),
+// not above 19 (which is what a reset-to-setpoint would give).
 {
   const heating = [], external = [], cop_by_hh = [];
-  for (let d = 0; d < 2; d++) {
-    for (let i = 0; i < 48; i++) {
-      heating.push(hh(ts(d, i), 1.0));
-      external.push(ext(5));
-      cop_by_hh.push(3);
-    }
+  for (let i = 0; i < 48; i++) {        // day 0: no heating
+    heating.push(hh(ts(0, i), 0));
+    external.push(ext(5));
+    cop_by_hh.push(3);
   }
-  // Day 1 unoccupied, day 2 occupied
-  const occupancy = new Array(96);
-  for (let i = 0; i < 48; i++) occupancy[i] = 0.0;
-  for (let i = 48; i < 96; i++) occupancy[i] = 1.0;
+  for (let i = 0; i < 48; i++) {        // day 1: normal heating
+    heating.push(hh(ts(1, i), 1.0));
+    external.push(ext(5));
+    cop_by_hh.push(3);
+  }
 
   const result = estimateScenarioConsumption(buildInputs({
     heating, external, cop_by_hh,
     setpoint_c: 19, thermal_mass_kj_per_k: 10000, htc_w_per_k: 200,
     hp_capacity_kw: 10,
-    occupancy_weights: occupancy,
     gasRateByHh:    new Array(96).fill(1000),
-    elecHhRateByHh: new Array(96).fill(30),
+    elecHhRateByHh: new Array(96).fill(20),
   }));
   const indoor = result.scenarios.smart_hp_hh.indoor_temp_c;
 
-  // Day 1 last HH: T should have drifted well below setpoint (no comfort gate)
-  const day1End = indoor[47];
-  // Day 2 first HH: must respect comfort gate (≥19), but starts from day1End, not 19
-  const day2Start = indoor[48];
-
-  assert(day1End < 19, 'T9a', `Day 1 unoccupied: T drifts below setpoint (day1End=${day1End?.toFixed(3)})`);
-  assert(day2Start >= 19 - 1e-9, 'T9b', `Day 2 occupied: comfort gate active (day2Start=${day2Start?.toFixed(3)})`);
-  // Most important: day 2 transitions FROM day1End. If day chaining were broken,
-  // day 2 would start fresh at setpoint and there'd be no continuity. The actual
-  // assertion is that the DP's reported day1End is plausible (< 19).
+  assert(indoor[47] < 18, 'T9a', `Day-0 no-heat cools building: T[47] < 18 (got ${indoor[47]?.toFixed(2)})`);
+  // If chaining were broken, day 1 would reset to setpoint=19 and T[48] would be ~20.3.
+  // With chaining, T[48] ≈ 9.2 (starts from ~7.5, then gets first greedy allocation).
+  assert(indoor[48] < 15, 'T9b', `Day-1 starts from cooled state, not setpoint: T[48] < 15 (got ${indoor[48]?.toFixed(2)})`);
 }
 
-// ===== T10 — Non-heating day skipped =====
-// All temps = 22 °C (above setpoint). dailyDdHours ≈ 0 → smart DP skipped.
-// Expected: smart gas=elec=0, indoor_temp_c=null
+// ===== T10 — Non-heating day (B_d = 0) =====
+// All heating_kwh = 0 → B_d = 0 → greedy returns all zeros.
+// Post-hoc sim still runs (thermal params available) → indoor_temp_c is non-null.
 {
   const { heating, external, cop_by_hh } = buildSimpleDay({ tempC: 22 });
   for (let i = 0; i < 48; i++) heating[i] = hh(ts(0, i), 0);
   const result = estimateScenarioConsumption(buildInputs({ heating, external, cop_by_hh }));
   const smart = result.scenarios.smart_hp_hh;
   const allZero = smart.gas_kwh.every(g => g === 0) && smart.elec_kwh.every(e => e === 0);
-  const allTempNull = smart.indoor_temp_c.every(t => t === null);
-  assert(allZero,     'T10a', `Non-heating day: smart gas/elec all 0`);
-  assert(allTempNull, 'T10b', `Non-heating day: indoor_temp_c all null`);
+  assert(allZero,                'T10a', `B_d=0 day: smart gas/elec all 0`);
+  assert(smart.indoor_temp_c[0] !== null, 'T10b', `Post-hoc sim runs even when B_d=0: indoor_temp_c[0] non-null`);
 }
 
-// ===== T11 — Null-upstream passthrough =====
-// thermal_mass = null → validation.smart = 'no_thermal_mass'; smart arrays null;
-// dumb scenarios computed normally.
+// ===== T11 — Null thermal_mass passthrough =====
+// thermal_mass null does NOT block smart (greedy needs only htc and hp_capacity).
+// Post-hoc sim returns all-null indoor_temp_c when C is missing.
 {
   const { heating, external, cop_by_hh } = buildSimpleDay({ tempC: 10 });
   heating[0] = hh(ts(0, 0), 1.0);
@@ -283,12 +251,15 @@ function _spec_requiredQ(T_cur, T_next, C, heatLossKwh, solarGainKwh) {
     heating, external, cop_by_hh,
     thermal_mass_kj_per_k: null,
   }));
-  assert(result.validation_status.smart === 'no_thermal_mass', 'T11a', `validation.smart = 'no_thermal_mass' (got '${result.validation_status.smart}')`);
-  const smart = result.scenarios.smart_hp_hh;
-  const allNull = smart.gas_kwh.every(g => g === null) && smart.elec_kwh.every(e => e === null);
-  assert(allNull, 'T11b', 'Smart scenarios all null when thermal_mass=null');
-  // Dumb still computed
-  assert(result.scenarios.dumb_hp_svt.elec_kwh[0] !== null, 'T11c', 'Dumb scenarios computed even when thermal_mass=null');
+  assert(result.validation_status.smart === 'ok',
+    'T11a', `validation.smart = 'ok' when thermal_mass=null (got '${result.validation_status.smart}')`);
+  assert((result.scenarios.smart_hp_hh.elec_kwh[0] ?? 0) > 0,
+    'T11b', `Smart elec_kwh computed even when thermal_mass=null`);
+  const allTempNull = result.scenarios.smart_hp_hh.indoor_temp_c.every(t => t === null);
+  assert(allTempNull,
+    'T11c', `indoor_temp_c all null when thermal_mass=null (post-hoc sim skipped)`);
+  assert((result.scenarios.dumb_hp_svt.elec_kwh[0] ?? 0) > 0,
+    'T11d', `Dumb scenarios computed even when thermal_mass=null`);
 }
 
 // ===== T12 — Current scenario unchanged =====
@@ -326,8 +297,9 @@ function _spec_requiredQ(T_cur, T_next, C, heatLossKwh, solarGainKwh) {
   );
 }
 
-// ===== T14 — DST / non-48-HH day =====
-// Inject a 47-HH day. Expected: smart arrays null for those HH; T_init unchanged.
+// ===== T14 — DST / non-48-HH day → zero (not null) =====
+// Non-48-HH days (skipDp=true) are skipped by buildSmartScenario via continue.
+// Arrays are initialised to 0 and remain at 0 for those HH.
 {
   const heating = [], external = [], cop_by_hh = [];
   // Day 0: 48 HH normal
@@ -352,29 +324,27 @@ function _spec_requiredQ(T_cur, T_next, C, heatLossKwh, solarGainKwh) {
     heating, external, cop_by_hh,
     setpoint_c: 19, thermal_mass_kj_per_k: 10000, htc_w_per_k: 200,
     hp_capacity_kw: 10,
-    occupancy_weights: new Array(heating.length).fill(1.0),
     gasRateByHh:    new Array(heating.length).fill(1000),
     elecHhRateByHh: new Array(heating.length).fill(20),
   }));
   // Day 1 starts at index 48 and is 47 HH long → indices 48..94
   const smart = result.scenarios.smart_hp_hh;
-  let day1AllNull = true;
+  let day1AllZero = true;
   for (let i = 48; i < 95; i++) {
-    if (smart.gas_kwh[i] !== null || smart.elec_kwh[i] !== null) { day1AllNull = false; break; }
+    if (smart.gas_kwh[i] !== 0 || smart.elec_kwh[i] !== 0) { day1AllZero = false; break; }
   }
-  assert(day1AllNull, 'T14a', '47-HH (DST) day: all smart arrays null');
-  // Day 0 (full 48) and day 2 (full 48) should be populated
-  assert(smart.elec_kwh[0]  !== null, 'T14b', 'Day 0 (48 HH) populated');
-  assert(smart.elec_kwh[95] !== null, 'T14c', 'Day 2 (48 HH after DST gap) populated');
+  assert(day1AllZero,          'T14a', '47-HH (DST) day: all smart gas/elec = 0');
+  // Day 0 and day 2 (full 48 HH) should get positive allocation
+  assert(smart.elec_kwh[0]  > 0, 'T14b', 'Day 0 (48 HH) allocated');
+  assert(smart.elec_kwh[95] > 0, 'T14c', 'Day 2 (48 HH after DST gap) allocated');
 }
 
 // ===== T15 — Validation 'partial' =====
 // 8% of heating HH have null COP → validation.dumb = 'partial'
 {
   const heating = [], external = [], cop_by_hh = [];
-  // 100 HH with heating > 0; 8 of them have null COP
   for (let i = 0; i < 100; i++) {
-    heating.push(hh(ts(0, i % 48), 1.0));  // timestamps reused — OK for dumb path
+    heating.push(hh(ts(0, i % 48), 1.0));
     external.push(ext(10));
     cop_by_hh.push(i < 8 ? null : 3.0);
   }
@@ -385,26 +355,108 @@ function _spec_requiredQ(T_cur, T_next, C, heatLossKwh, solarGainKwh) {
   assert(result.validation_status.dumb === 'partial', 'T15', `validation.dumb = 'partial' at 8% null COP (got '${result.validation_status.dumb}')`);
 }
 
-// ===== T16 — DP infeasible day relaxation =====
-// Severe under-sizing: tiny HP capacity vs cold day.
-// Expected: warning surfaced about "undersized for N day(s)"; smart arrays still produced.
+// ===== T16 — Smart ≤ Dumb cost invariant =====
+// Greedy anchors smart to observed B_d and allocates cheapest first.
+// By construction, total cost(smart) ≤ cost(dumb) for any rate schedule.
+// Uses same rate and COP as T8 but computes costs explicitly.
 {
-  const { heating, external, cop_by_hh } = buildSimpleDay({ tempC: -10, cop: 1.5 });
-  for (let i = 0; i < 48; i++) heating[i] = hh(ts(0, i), 5.0);
+  const { heating, external, cop_by_hh } = buildSimpleDay({ tempC: 5, cop: 3.0 });
+  for (let i = 0; i < 48; i++) heating[i] = hh(ts(0, i), 0.8);
+
+  const elecRates = new Array(48);
+  for (let i = 0; i < 48; i++) elecRates[i] = (i % 2 === 0) ? 5 : 25;  // alternating cheap/expensive
+
   const result = estimateScenarioConsumption(buildInputs({
     heating, external, cop_by_hh,
-    setpoint_c: 19, thermal_mass_kj_per_k: 10000, htc_w_per_k: 500,
-    hp_capacity_kw: 0.5,                          // severely undersized
-    occupancy_weights: new Array(48).fill(1.0),
+    gasRateByHh:    new Array(48).fill(1000),
+    elecHhRateByHh: elecRates,
+  }));
+
+  const dumb  = result.scenarios.dumb_hp_hh;
+  const smart = result.scenarios.smart_hp_hh;
+  let dumbCost = 0, smartCost = 0;
+  for (let i = 0; i < 48; i++) {
+    dumbCost  += (dumb.elec_kwh[i]  ?? 0) * elecRates[i];
+    smartCost += (smart.elec_kwh[i] ?? 0) * elecRates[i];
+  }
+  assert(smartCost <= dumbCost + 1e-6, 'T16',
+    `Smart ≤ Dumb invariant (smart=${smartCost.toFixed(2)}p, dumb=${dumbCost.toFixed(2)}p)`);
+}
+
+// ===== T17 — Daily heat-budget conservation =====
+// Sum of thermal delivery across a day must equal B_d within floating-point tolerance.
+// For smart_hp_hh (HP-only), q_thermal[i] = elec_kwh[i] × cop[i].
+{
+  const cop = 3.0;
+  const eta = 0.9;
+  const { heating, external, cop_by_hh } = buildSimpleDay({ tempC: 5, cop });
+  for (let i = 0; i < 48; i++) heating[i] = hh(ts(0, i), 1.2);
+
+  const B_d = 48 * 1.2 * eta;   // 51.84 kWh thermal
+
+  const result = estimateScenarioConsumption(buildInputs({
+    heating, external, cop_by_hh,
     gasRateByHh:    new Array(48).fill(1000),
     elecHhRateByHh: new Array(48).fill(20),
   }));
-  const undersizedWarn = result.warnings.some(w => w.toLowerCase().includes('undersized'));
-  assert(undersizedWarn, 'T16a', `Warning surfaced for undersized HP (warnings: ${JSON.stringify(result.warnings)})`);
-  // Result still produced (relaxed pass succeeded or zero-energy fallback)
+
   const smart = result.scenarios.smart_hp_hh;
-  const hasOutput = smart.elec_kwh.length === 48;
-  assert(hasOutput, 'T16b', `Smart array length 48 even with infeasible DP`);
+  let sumQ = 0;
+  for (let i = 0; i < 48; i++) sumQ += (smart.elec_kwh[i] ?? 0) * cop;
+
+  assert(Math.abs(sumQ - B_d) < 0.01, 'T17',
+    `Budget conservation: |Σq_thermal − B_d| < 0.01 (sum=${sumQ.toFixed(4)}, B_d=${B_d.toFixed(4)})`);
+}
+
+// ===== T18 — HP undersized → validation.smart = 'hp_undersized', warning =====
+// HP cap = 0.01 kW → per-HH cap = 0.005 kWh << B_d → residual > 1e-9 → hpUndersized.
+{
+  const { heating, external, cop_by_hh } = buildSimpleDay({ tempC: 5, cop: 3.0 });
+  for (let i = 0; i < 48; i++) heating[i] = hh(ts(0, i), 1.0);
+
+  const result = estimateScenarioConsumption(buildInputs({
+    heating, external, cop_by_hh,
+    hp_capacity_kw: 0.01,                         // severely undersized
+    gasRateByHh:    new Array(48).fill(1000),
+    elecHhRateByHh: new Array(48).fill(20),
+  }));
+
+  assert(result.validation_status.smart === 'hp_undersized', 'T18a',
+    `validation.smart = 'hp_undersized' when cap exhausted (got '${result.validation_status.smart}')`);
+  const hasWarn = result.warnings.some(w => w.toLowerCase().includes('insufficient') || w.toLowerCase().includes('undersized'));
+  assert(hasWarn, 'T18b',
+    `Warning surfaced for undersized HP (warnings: ${JSON.stringify(result.warnings)})`);
+}
+
+// ===== T19 — hybrid_smart prefers HP at cheap HP HH, gas at expensive HP HH =====
+// HH 0-3: cheap elec (1p) → HP unit cost = 0.33p < gas unit cost = 7.78p → HP
+// HH 4-47: expensive elec (50p) → HP unit cost = 16.7p > gas unit cost = 7.78p → gas
+// B_d = 48 × 0.6 × 0.9 = 25.92 kWh; HP cap per HH = 5 kWh
+// Greedy fills: 4 HP slots (4×5=20 kWh) + gas slots for remaining 5.92 kWh
+{
+  const heating = [], external = [], cop_by_hh_arr = [];
+  for (let i = 0; i < 48; i++) {
+    heating.push(hh(ts(0, i), 0.6));
+    external.push(ext(5));
+    cop_by_hh_arr.push(3.0);
+  }
+
+  const elecRates = new Array(48);
+  for (let i = 0; i < 48; i++) elecRates[i] = (i < 4) ? 1 : 50;
+
+  const result = estimateScenarioConsumption(buildInputs({
+    heating,
+    external,
+    cop_by_hh: cop_by_hh_arr,
+    gasRateByHh:    new Array(48).fill(7),   // gas cost = 7/0.9 = 7.78p
+    elecHhRateByHh: elecRates,
+  }));
+
+  const hyb = result.scenarios.hybrid_smart;
+  assert((hyb.elec_kwh[0] ?? 0) > 0, 'T19a', `hybrid_smart HH 0 (cheap elec): HP used, elec_kwh > 0 (got ${hyb.elec_kwh[0]?.toFixed(4)})`);
+  assert((hyb.gas_kwh[0]  ?? 0) === 0, 'T19b', `hybrid_smart HH 0 (cheap elec): gas not used (got ${hyb.gas_kwh[0]?.toFixed(4)})`);
+  assert((hyb.gas_kwh[4]  ?? 0) > 0, 'T19c', `hybrid_smart HH 4 (expensive elec): gas used (got ${hyb.gas_kwh[4]?.toFixed(4)})`);
+  assert((hyb.elec_kwh[4] ?? 0) === 0, 'T19d', `hybrid_smart HH 4 (expensive elec): HP not used (got ${hyb.elec_kwh[4]?.toFixed(4)})`);
 }
 
 // ===== Summary =====

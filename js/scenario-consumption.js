@@ -2,13 +2,7 @@
 // Produces per-HH gas and electricity arrays for six comparison scenarios.
 
 const SC_CONFIG = {
-  T_MAX_PREHEAT_OFFSET_DEFAULT: 2.0,    // °C above setpoint
-  OCCUPANCY_THRESHOLD_DEFAULT:  0.5,    // weight ≥ this → occupied
-  N_STATES:                     15,     // DP state grid resolution
-  T_RANGE_BELOW_SETPOINT:       1.0,    // grid extends 1°C below setpoint
-  NON_HEATING_DAY_DD_HOURS:     0.5,    // < this → skip DP for the day
-  PARTIAL_DUMB_THRESHOLD:       0.05,   // ≥5% gas-fallback → "partial"
-  PREHEAT_OFFSET_HIGH_WARN_C:   4.0,    // warn if user offset > this
+  PARTIAL_DUMB_THRESHOLD: 0.05,   // ≥5% gas-fallback → "partial"
 };
 
 function buildDayHhIndices(heating) {
@@ -21,25 +15,6 @@ function buildDayHhIndices(heating) {
   return Array.from(dayMap.entries())
     .sort(([a], [b]) => (a < b ? -1 : 1))
     .map(([date, indices]) => ({ date, indices, skipDp: indices.length !== 48 }));
-}
-
-function discretiseStates(setpointC, tMaxPreheatC, nStates) {
-  const T_states = new Float64Array(nStates);
-  const low  = setpointC - SC_CONFIG.T_RANGE_BELOW_SETPOINT;
-  const high = tMaxPreheatC;
-  const step = (high - low) / (nStates - 1);
-  for (let k = 0; k < nStates; k++) T_states[k] = low + k * step;
-  return T_states;
-}
-
-function nearestStateIndex(value, T_states) {
-  let best = 0;
-  let bestDist = Math.abs(value - T_states[0]);
-  for (let k = 1; k < T_states.length; k++) {
-    const d = Math.abs(value - T_states[k]);
-    if (d < bestDist) { bestDist = d; best = k; }
-  }
-  return best;
 }
 
 function computeStepEnergetics(tCur, tempC, htc, C, R, solarWm2) {
@@ -123,228 +98,142 @@ function buildHybridDumbScenario(heating, copByHh, eta, gasRateByHh, elecHhRateB
   return { gas_kwh, elec_kwh, indoor_temp_c: heating.map(() => null) };
 }
 
-function runDpForDay({ dayIndices, params, scenario, T_init }) {
-  const {
-    T_setpoint, T_max_preheat, htc, C, R, eta, hp_capacity_kw,
-    occupied, external, copByHh, gasRateByHh, elecHhRateByHh, T_states,
-  } = params;
+function allocateGreedyDay({
+  scenario, dayIndices, heating, eta, copByHh, gasRateByHh, elecHhRateByHh,
+  hpCapKw, isAbsence,
+}) {
+  const n = dayIndices.length;
+  const cap = hpCapKw * 0.5;        // thermal kWh per HH at HP capacity
 
-  const nStates = T_states.length;
-  const n       = dayIndices.length;
+  // 1. Daily thermal budget B_d from observed gas heating × η, excluding absence HH
+  let B_d = 0;
+  for (const i of dayIndices) {
+    const h = heating[i].heating_kwh;
+    if (h != null && h > 0 && !isAbsence[i]) B_d += h * eta;
+  }
+
+  const elec_kwh_alloc = new Array(n).fill(0);
+  const gas_kwh_alloc  = new Array(n).fill(0);
+  const q_delivered    = new Array(n).fill(0);
+  const fuel_mode      = new Array(n).fill('none');
+
+  if (B_d <= 0) {
+    return { q_delivered_thermal_kwh: q_delivered, fuel_mode,
+             elec_kwh_alloc, gas_kwh_alloc, hpUndersized: false };
+  }
+
+  // 2. Per-HH unit cost + cap
   const isHybrid = scenario === 'hybrid_smart';
-
-  const dpCost = Array.from({ length: n + 1 }, () => new Float64Array(nStates).fill(Infinity));
-  const dpPrev = Array.from({ length: n + 1 }, () => new Int8Array(nStates).fill(-1));
-  const dpFuel = isHybrid
-    ? Array.from({ length: n + 1 }, () => new Array(nStates).fill(null))
-    : null;
-
-  const initState = nearestStateIndex(T_init, T_states);
-
-  function runForwardPass(relaxComfort) {
-    for (let t = 0; t <= n; t++) {
-      dpCost[t].fill(Infinity);
-      dpPrev[t].fill(-1);
-      if (dpFuel) {
-        for (let s = 0; s < nStates; s++) dpFuel[t][s] = null;
-      }
-    }
-    dpCost[0][initState] = 0;
-
-    for (let t = 0; t < n; t++) {
-      const i     = dayIndices[t];
-      const tempC = external[i].temp_c;
-
-      for (let s = 0; s < nStates; s++) {
-        if (dpCost[t][s] === Infinity) continue;
-        const T_cur = T_states[s];
-
-        if (tempC === null) {
-          // No RC step possible — carry this state forward at zero cost
-          if (dpCost[t][s] < dpCost[t + 1][s]) {
-            dpCost[t + 1][s] = dpCost[t][s];
-            dpPrev[t + 1][s] = s;
-            if (dpFuel) dpFuel[t + 1][s] = dpFuel[t][s] ?? 'hp';
-          }
-          continue; // skip s_next loop for this HH period
-        }
-
-        const { heatLossKwh, solarGainKwh } = computeStepEnergetics(
-          T_cur, tempC, htc, C, R, external[i].solar_w_m2
-        );
-
-        for (let sNext = 0; sNext < nStates; sNext++) {
-          const T_next = T_states[sNext];
-          const Q = requiredQDelivered(T_cur, T_next, C, heatLossKwh, solarGainKwh);
-          if (Q < 0) continue;                                // can't actively cool
-          if (Q > hp_capacity_kw * 0.5) continue;            // capacity gate
-          if (!relaxComfort && occupied[i] && T_next < T_setpoint) continue; // comfort gate
-          if (T_next > T_max_preheat) continue;              // upper thermal gate
-
-          let stepCost, fuel;
-          if (scenario === 'smart_hp_hh') {
-            const cop      = copByHh[i];
-            const elecRate = elecHhRateByHh[i];
-            if (cop === null || elecRate === null) continue;
-            stepCost = (Q / cop) * elecRate;
-            fuel = 'hp';
-          } else { // hybrid_smart
-            const cop      = copByHh[i];
-            const elecRate = elecHhRateByHh[i];
-            const gasRate  = gasRateByHh[i];
-            const hpCost   = (cop !== null && elecRate !== null) ? (Q / cop) * elecRate : Infinity;
-            const gasCost  = gasRate !== null ? (Q / eta) * gasRate : Infinity;
-            if (hpCost === Infinity && gasCost === Infinity) continue;
-            if (hpCost <= gasCost) { stepCost = hpCost; fuel = 'hp'; }
-            else                   { stepCost = gasCost; fuel = 'gas'; }
-          }
-
-          const candidate = dpCost[t][s] + stepCost;
-          if (candidate < dpCost[t + 1][sNext]) {
-            dpCost[t + 1][sNext] = candidate;
-            dpPrev[t + 1][sNext] = s;
-            if (dpFuel) dpFuel[t + 1][sNext] = fuel;
-          }
-        }
-      }
-    }
-  }
-
-  runForwardPass(false);
-
-  let sFinal = 0;
-  for (let s = 1; s < nStates; s++) {
-    if (dpCost[n][s] < dpCost[n][sFinal]) sFinal = s;
-  }
-
-  let feasible = true;
-  if (dpCost[n][sFinal] === Infinity) {
-    feasible = false;
-    runForwardPass(true);
-    sFinal = 0;
-    for (let s = 1; s < nStates; s++) {
-      if (dpCost[n][s] < dpCost[n][sFinal]) sFinal = s;
-    }
-    // Extreme edge case: even relaxed DP is infeasible (severely undersized HP)
-    if (dpCost[n][sFinal] === Infinity) {
-      return {
-        q_delivered_kwh: new Array(n).fill(0),
-        fuel_mode:       new Array(n).fill('hp'),
-        indoor_temp_c:   new Array(n).fill(T_init),
-        T_init_next:     T_init,
-        feasible:        false,
-      };
-    }
-  }
-
-  // Backtrack: path[t] = state index at time step t
-  const path = new Int8Array(n + 1);
-  path[n] = sFinal;
-  for (let t = n; t > 0; t--) path[t - 1] = dpPrev[t][path[t]];
-
-  const q_delivered_kwh = new Array(n);
-  const fuel_mode       = new Array(n);
-  const indoor_temp_c   = new Array(n);
-
+  const slots = [];
   for (let t = 0; t < n; t++) {
-    const s  = path[t];
-    const sN = path[t + 1]; // dpFuel[t+1][sN] is the fuel for this transition
-    const i  = dayIndices[t];
-    const tempC = external[i].temp_c;
+    const i        = dayIndices[t];
+    const cop      = copByHh[i];
+    const elecRate = elecHhRateByHh[i];
+    const gasRate  = gasRateByHh[i];
 
-    indoor_temp_c[t] = T_states[sN];
+    const hpCost  = (cop != null && elecRate != null) ? elecRate / cop : Infinity;
+    const gasCost = (isHybrid && gasRate != null)     ? gasRate / eta  : Infinity;
 
-    if (tempC === null) {
-      q_delivered_kwh[t] = 0;
-      fuel_mode[t] = isHybrid ? (dpFuel[t + 1][sN] ?? 'hp') : 'hp';
+    if (!isHybrid) {
+      if (hpCost === Infinity) continue;                       // ineligible
+      slots.push({ t, i, fuel: 'hp',  unitCost: hpCost,  capI: cap });
     } else {
-      const { heatLossKwh, solarGainKwh } = computeStepEnergetics(
-        T_states[s], tempC, htc, C, R, external[i].solar_w_m2
-      );
-      const Q = requiredQDelivered(T_states[s], T_states[sN], C, heatLossKwh, solarGainKwh);
-      q_delivered_kwh[t] = Math.max(0, Q);
-      fuel_mode[t] = isHybrid ? (dpFuel[t + 1][sN] ?? 'hp') : 'hp';
+      if (hpCost === Infinity && gasCost === Infinity) continue;
+      if (hpCost <= gasCost) slots.push({ t, i, fuel: 'hp',  unitCost: hpCost,  capI: cap });
+      else                   slots.push({ t, i, fuel: 'gas', unitCost: gasCost, capI: Infinity });
     }
   }
 
-  return { q_delivered_kwh, fuel_mode, indoor_temp_c, T_init_next: T_states[sFinal], feasible };
+  // 3. Sort cheapest first, deterministic tiebreak by HH index
+  slots.sort((a, b) => a.unitCost - b.unitCost || a.t - b.t);
+
+  // 4. Greedy fill until B_d met
+  let remaining = B_d;
+  for (const s of slots) {
+    if (remaining <= 0) break;
+    const Q = Math.min(s.capI, remaining);
+    q_delivered[s.t] = Q;
+    fuel_mode[s.t]   = s.fuel;
+    if (s.fuel === 'hp')  elec_kwh_alloc[s.t] = Q / copByHh[s.i];
+    else                  gas_kwh_alloc[s.t]  = Q / eta;
+    remaining -= Q;
+  }
+
+  // 5. Undersized fallback (smart_hp_hh only — hybrid gas pool has no cap)
+  let hpUndersized = false;
+  if (remaining > 1e-9 && !isHybrid) {
+    hpUndersized = true;
+    // Resistive backup at COP=1 in cheapest eligible HH
+    const target = slots[0];
+    if (target) {
+      elec_kwh_alloc[target.t] += remaining;
+      q_delivered[target.t]    += remaining;     // 1 kWh elec → 1 kWh heat at COP=1
+      fuel_mode[target.t]       = 'hp';
+    }
+  }
+
+  return { q_delivered_thermal_kwh: q_delivered, fuel_mode,
+           elec_kwh_alloc, gas_kwh_alloc, hpUndersized };
 }
 
-function buildSmartScenario(scenario, heating, external, copByHh, hpCapKw, ratesContext, smartParams) {
-  const { gasRateByHh, elecHhRateByHh } = ratesContext;
+function simulatePostHocTIndoor({
+  q_delivered_per_hh, external, heatLoss, thermalChar, T_init,
+}) {
+  const htc = heatLoss?.htc_w_per_k;
+  const C   = thermalChar?.thermal_mass_kj_per_k;
+  if (htc == null || C == null || thermalChar?.setpoint_c == null) {
+    return { indoor_temp_c: q_delivered_per_hh.map(() => null), T_init_next: T_init };
+  }
 
-  const gas_kwh       = new Array(heating.length).fill(null);
-  const elec_kwh      = new Array(heating.length).fill(null);
-  const indoor_temp_c = new Array(heating.length).fill(null);
+  const aperture = (heatLoss?.solar_correction_applied && heatLoss?.solar_aperture_m2 != null)
+    ? heatLoss.solar_aperture_m2 : 0;
 
-  const T_states = discretiseStates(
-    smartParams.T_setpoint, smartParams.T_max_preheat, SC_CONFIG.N_STATES
-  );
+  const out = new Array(q_delivered_per_hh.length);
+  let T = T_init;
+  for (let i = 0; i < q_delivered_per_hh.length; i++) {
+    const tc = external[i]?.temp_c;
+    const sw = external[i]?.solar_w_m2 ?? 0;
+    if (tc == null) { out[i] = T; continue; }   // carry forward at unknown outdoor temp
 
-  const params = {
-    T_setpoint:    smartParams.T_setpoint,
-    T_max_preheat: smartParams.T_max_preheat,
-    htc:           smartParams.htc,
-    C:             smartParams.C,
-    R:             smartParams.R,
-    eta:           smartParams.eta,
-    hp_capacity_kw: hpCapKw,
-    occupied:      smartParams.occupied,
-    external,
-    copByHh, gasRateByHh, elecHhRateByHh,
-    T_states,
-  };
+    const lossKwh  = htc * (T - tc) * 0.5 / 1000;
+    const solarKwh = aperture * sw * 0.5 / 1000;
+    const dT = (q_delivered_per_hh[i] + solarKwh - lossKwh) * 3600 / C;
+    T += dT;
+    out[i] = T;
+  }
+  return { indoor_temp_c: out, T_init_next: T };
+}
 
+function buildSmartScenario({
+  scenario, heating, external, copByHh, hpCapKw,
+  gasRateByHh, elecHhRateByHh, eta, isAbsence,
+}) {
   const days = buildDayHhIndices(heating);
-  let T_init = smartParams.T_setpoint;
-  let infeasibleDays = 0;
+  const gas_kwh   = new Array(heating.length).fill(0);
+  const elec_kwh  = new Array(heating.length).fill(0);
+  const q_thermal = new Array(heating.length).fill(0);
+  let anyHpUndersized = false;
 
   for (const { indices, skipDp } of days) {
     if (skipDp) {
-      // Non-48-HH day (DST transition) — null-fill, T_init unchanged
-      for (const i of indices) { gas_kwh[i] = null; elec_kwh[i] = null; }
+      // Non-48-HH day (DST transition) — arrays remain at 0 per design § 1.4.
+      // Do NOT null these — M8 expects numeric arrays and design specifies zero.
       continue;
     }
-
-    // Null-safe daily degree-hours check
-    let dailyDdHours = 0;
-    for (const i of indices) {
-      const tc = external[i].temp_c;
-      if (tc !== null) dailyDdHours += Math.max(0, smartParams.T_setpoint - tc) * 0.5;
-    }
-
-    if (dailyDdHours < SC_CONFIG.NON_HEATING_DAY_DD_HOURS) {
-      for (const i of indices) { gas_kwh[i] = 0; elec_kwh[i] = 0; }
-      continue;
-    }
-
-    const dayResult = runDpForDay({ dayIndices: indices, params, scenario, T_init });
-
-    if (!dayResult.feasible) infeasibleDays += 1;
-
-    // Convert q_delivered_kwh + fuel_mode → consumed energy (kWh of input fuel)
+    const day = allocateGreedyDay({
+      scenario, dayIndices: indices, heating, eta,
+      copByHh, gasRateByHh, elecHhRateByHh, hpCapKw, isAbsence,
+    });
+    if (day.hpUndersized) anyHpUndersized = true;
     for (let k = 0; k < indices.length; k++) {
-      const i  = indices[k];
-      const q  = dayResult.q_delivered_kwh[k];
-      const fm = dayResult.fuel_mode[k];
-      indoor_temp_c[i] = dayResult.indoor_temp_c[k];
-
-      if (q === 0) {
-        gas_kwh[i] = 0; elec_kwh[i] = 0;
-      } else if (fm === 'hp') {
-        const cop = copByHh[i];
-        gas_kwh[i]  = 0;
-        elec_kwh[i] = cop !== null ? q / cop : 0;
-      } else { // 'gas'
-        gas_kwh[i]  = q / smartParams.eta;
-        elec_kwh[i] = 0;
-      }
+      const i = indices[k];
+      gas_kwh[i]   = day.gas_kwh_alloc[k];
+      elec_kwh[i]  = day.elec_kwh_alloc[k];
+      q_thermal[i] = day.q_delivered_thermal_kwh[k];
     }
-
-    T_init = dayResult.T_init_next;
   }
 
-  return { gas_kwh, elec_kwh, indoor_temp_c, infeasibleDays };
+  return { gas_kwh, elec_kwh, q_thermal, hpUndersized: anyHpUndersized };
 }
 
 function computeValidationStatusDumb(dumbDiagnostics, baseloadMethod) {
@@ -353,25 +242,23 @@ function computeValidationStatusDumb(dumbDiagnostics, baseloadMethod) {
   return fallbackFrac >= SC_CONFIG.PARTIAL_DUMB_THRESHOLD ? 'partial' : 'ok';
 }
 
-function computeValidationStatusSmart(heatLoss, thermalChar) {
-  if (heatLoss?.htc_w_per_k == null)              return 'no_htc';
-  if (thermalChar?.thermal_mass_kj_per_k == null) return 'no_thermal_mass';
-  if (thermalChar?.setpoint_c == null)            return 'no_setpoint';
-  if (thermalChar?.occupancy_weights == null)     return 'insufficient_data';
+function computeValidationStatusSmart(heatLoss, heatPumpModel) {
+  if (heatLoss?.htc_w_per_k == null)         return 'insufficient_data';
+  if (heatPumpModel?.hp_capacity_kw == null) return 'insufficient_data';
   return 'ok';
 }
 
 export function estimateScenarioConsumption({
   heating, external, heatLoss, thermalCharacter, heatPumpModel,
   baseloadMethod, gasRateByHh, elecHhRateByHh,
-  tMaxPreheatOffsetC = SC_CONFIG.T_MAX_PREHEAT_OFFSET_DEFAULT,
-  occupancyThreshold = SC_CONFIG.OCCUPANCY_THRESHOLD_DEFAULT,
+  // No tMaxPreheatOffsetC, no occupancyThreshold — removed.
 }) {
   const warnings = [];
-  const eta     = heatLoss?.boiler_efficiency_used ?? 0.9;
-  const copByHh = heatPumpModel?.cop_by_hh ?? new Array(heating.length).fill(null);
+  const eta      = heatLoss?.boiler_efficiency_used ?? 0.9;
+  const copByHh  = heatPumpModel?.cop_by_hh ?? new Array(heating.length).fill(null);
+  const isAbsence = heating.map(h => !!h.is_absence);
 
-  // Step 0 — early "no_data" path
+  // Step 0 — early no_data
   if (baseloadMethod === 'no-gas' || heating.every(h => h.heating_kwh === null)) {
     const nullArr = () => heating.map(() => null);
     const nullScenario = { gas_kwh: nullArr(), elec_kwh: nullArr(), indoor_temp_c: nullArr() };
@@ -380,52 +267,68 @@ export function estimateScenarioConsumption({
         current: nullScenario, dumb_hp_svt: nullScenario, dumb_hp_hh: nullScenario,
         hybrid_dumb: nullScenario, smart_hp_hh: nullScenario, hybrid_smart: nullScenario,
       },
-      validation_status: {
-        dumb:  'no_data',
-        smart: computeValidationStatusSmart(heatLoss, thermalCharacter),
-      },
+      validation_status: { dumb: 'no_data', smart: computeValidationStatusSmart(heatLoss, heatPumpModel) },
       warnings: ['No gas heating detected — heat pump scenarios cannot be modelled against an existing gas baseline.'],
     };
   }
 
-  // Steps 2–4: dumb scenarios
+  // Steps 1–3: dumb scenarios (unchanged)
   const current    = buildCurrentScenario(heating);
   const dumbHp     = buildDumbHpScenario(heating, copByHh, eta);
   const hybridDumb = buildHybridDumbScenario(heating, copByHh, eta, gasRateByHh, elecHhRateByHh);
+  const dumbDiagnostics = dumbHp._diagnostics; delete dumbHp._diagnostics;
 
-  const dumbDiagnostics = dumbHp._diagnostics;
-  delete dumbHp._diagnostics;
-
-  // Step 5: smart scenarios (skipped if validation not OK)
-  const smartStatus = computeValidationStatusSmart(heatLoss, thermalCharacter);
+  // Step 4: smart scenarios (greedy LP)
+  let smartStatus = computeValidationStatusSmart(heatLoss, heatPumpModel);
   let smartHpHh, hybridSmart;
 
   if (smartStatus === 'ok') {
-    const smartParams = {
-      T_setpoint:    thermalCharacter.setpoint_c,
-      T_max_preheat: thermalCharacter.setpoint_c + tMaxPreheatOffsetC,
-      htc:           heatLoss.htc_w_per_k,
-      C:             thermalCharacter.thermal_mass_kj_per_k,
-      R:             heatLoss.solar_correction_applied ? (heatLoss.solar_aperture_m2 ?? 0) : 0,
-      eta,
-      hp_capacity_kw: heatPumpModel?.hp_capacity_kw ?? Infinity,
-      occupied:      thermalCharacter.occupancy_weights.map(w => w >= occupancyThreshold),
-    };
+    // hp_capacity_kw is guaranteed non-null here by computeValidationStatusSmart's
+    // guard above. Do not fall back to Infinity — that would silently disable the
+    // per-HH cap and let the greedy dump a day's heat into a single half-hour.
+    const hpCap = heatPumpModel.hp_capacity_kw;
 
-    if (tMaxPreheatOffsetC > SC_CONFIG.PREHEAT_OFFSET_HIGH_WARN_C) {
-      warnings.push(`Pre-heat offset of ${tMaxPreheatOffsetC.toFixed(1)} °C is unusually wide; the DP grid resolution becomes coarser.`);
+    const sm = buildSmartScenario({
+      scenario: 'smart_hp_hh', heating, external, copByHh, hpCapKw: hpCap,
+      gasRateByHh, elecHhRateByHh, eta, isAbsence,
+    });
+    const hb = buildSmartScenario({
+      scenario: 'hybrid_smart', heating, external, copByHh, hpCapKw: hpCap,
+      gasRateByHh, elecHhRateByHh, eta, isAbsence,
+    });
+
+    if (sm.hpUndersized) {
+      smartStatus = 'hp_undersized';
+      warnings.push('Heat pump capacity insufficient on some days at your current heating pattern; resistive backup applied at COP = 1.');
     }
 
-    smartHpHh   = buildSmartScenario('smart_hp_hh',  heating, external, copByHh,
-                                     smartParams.hp_capacity_kw, { gasRateByHh, elecHhRateByHh }, smartParams);
-    hybridSmart = buildSmartScenario('hybrid_smart', heating, external, copByHh,
-                                     smartParams.hp_capacity_kw, { gasRateByHh, elecHhRateByHh }, smartParams);
+    // Post-hoc T_indoor sims (chronological, day-chained implicitly)
+    const smTinSim = simulatePostHocTIndoor({
+      q_delivered_per_hh: sm.q_thermal, external, heatLoss,
+      thermalChar: thermalCharacter, T_init: thermalCharacter?.setpoint_c ?? 20,
+    });
+    const hbTinSim = simulatePostHocTIndoor({
+      q_delivered_per_hh: hb.q_thermal, external, heatLoss,
+      thermalChar: thermalCharacter, T_init: thermalCharacter?.setpoint_c ?? 20,
+    });
 
-    if (smartHpHh.infeasibleDays > 0 || hybridSmart.infeasibleDays > 0) {
-      warnings.push(`HP appears undersized for ${Math.max(smartHpHh.infeasibleDays, hybridSmart.infeasibleDays)} day(s) of extreme cold — comfort constraint relaxed for those days.`);
+    smartHpHh   = { gas_kwh: sm.gas_kwh, elec_kwh: sm.elec_kwh, indoor_temp_c: smTinSim.indoor_temp_c };
+    hybridSmart = { gas_kwh: hb.gas_kwh, elec_kwh: hb.elec_kwh, indoor_temp_c: hbTinSim.indoor_temp_c };
+
+    // Concentrated-heating note (design § 1.5): inspect post-hoc indoor for overshoot.
+    // Filter to HH where heat was actually delivered. Without this filter, summer days
+    // where the building naturally tracks 22–28°C outdoor temperatures would trigger
+    // the warning despite no smart-schedule activity, making the warning text
+    // ("schedule concentrates heating into low-cost periods") misleading.
+    const overshoot = sm.q_thermal.some((q, idx) => {
+      if (q == null || q <= 0) return false;
+      const t = smTinSim.indoor_temp_c[idx];
+      if (t == null || thermalCharacter?.setpoint_c == null) return false;
+      return t > thermalCharacter.setpoint_c + 3.0;
+    });
+    if (overshoot) {
+      warnings.push('Smart-HP schedule concentrates heating into low-cost periods; in practice your thermostat would moderate this.');
     }
-    delete smartHpHh.infeasibleDays;
-    delete hybridSmart.infeasibleDays;
   } else {
     const nullArr = () => heating.map(() => null);
     smartHpHh   = { gas_kwh: nullArr(), elec_kwh: nullArr(), indoor_temp_c: nullArr() };
@@ -436,7 +339,7 @@ export function estimateScenarioConsumption({
     scenarios: {
       current,
       dumb_hp_svt: dumbHp,
-      dumb_hp_hh:  dumbHp,   // SAME reference — intentional (T13)
+      dumb_hp_hh:  dumbHp,        // shared ref preserved (T13)
       hybrid_dumb: hybridDumb,
       smart_hp_hh: smartHpHh,
       hybrid_smart: hybridSmart,
