@@ -900,4 +900,11 @@ Verdict: APPROVE — plan is faithful to the design doc; two minor logic issues 
 
 ## Implementation Deviations
 
-[To be filled in after implementation.]
+**Date:** 2026-04-28
+**Commit:** (see git log)
+
+None. All four clarifications from the Opus review were applied as specified:
+1. `readCapitalParams().avoided_ac_cost_gbp` used throughout Step 16.
+2. `methodologyDisclosure.classList.remove('hidden')` added to `runHeatLoss`, alongside `heatLossCard.classList.remove('hidden')`.
+3. `dumb_hp_hh` SVT comparison sentence guarded by `svtAvailable` check.
+4. Marginal verdict condition: `payback_status === 'ok' && annual_saving_gbp > 0`.

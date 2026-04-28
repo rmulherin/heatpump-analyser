@@ -18,11 +18,19 @@
 html { font-size: 16px; -webkit-text-size-adjust: 100%; }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: Roboto, arial, sans-serif;
   color: var(--colour-dark);
   background: var(--colour-light-grey);
   line-height: 1.6;
   min-height: 100vh;
+}
+
+h1, h2, h3, h4,
+.btn,
+.section-heading,
+.tab-btn,
+.methodology-summary {
+  font-family: Montserrat, sans-serif;
 }
 
 /* ===== Layout ===== */
@@ -402,6 +410,88 @@ input:focus {
 
 /* ===== Utility ===== */
 .hidden { display: none; }
+
+/* ===== Section Banners ===== */
+.section-banner {
+  margin: 2rem 0 0.5rem;
+}
+
+.section-heading {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--colour-navy);
+  border-bottom: 2px solid var(--colour-teal);
+  padding-bottom: 0.35rem;
+  margin-bottom: 0;
+}
+
+/* ===== Methodology Disclosure ===== */
+.methodology-disclosure {
+  margin-bottom: 1.5rem;
+}
+
+.methodology-summary {
+  display: block;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--colour-teal);
+  cursor: pointer;
+  padding: 0.75rem 1rem;
+  background: var(--colour-light-grey);
+  border: 1px solid var(--colour-border);
+  border-radius: var(--radius);
+  user-select: none;
+}
+
+.methodology-summary::-webkit-details-marker { display: none; }
+
+.methodology-summary::before {
+  content: '▶  ';
+  font-size: 0.75em;
+}
+
+details[open] .methodology-summary::before {
+  content: '▼  ';
+}
+
+/* ===== Verdict Card ===== */
+.verdict-card {
+  border-left: 4px solid var(--colour-teal);
+}
+
+.verdict-headline {
+  font-size: 1rem;
+  line-height: 1.7;
+  color: var(--colour-dark);
+}
+
+.verdict-headline strong {
+  color: var(--colour-navy);
+}
+
+.verdict-chart-wrap {
+  height: 260px;
+  margin: 1.25rem 0;
+}
+
+.verdict-quality {
+  font-size: 0.82rem;
+  color: var(--colour-dark);
+  opacity: 0.65;
+  margin-top: 0.75rem;
+  border-top: 1px solid var(--colour-border);
+  padding-top: 0.75rem;
+}
+
+.verdict-cooling {
+  font-size: 0.9rem;
+  background: var(--colour-light-grey);
+  border-left: 3px solid var(--colour-teal);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  padding: 0.6rem 0.85rem;
+  margin-top: 0.75rem;
+  color: var(--colour-dark);
+}
 
 /* ===== Responsive ===== */
 @media (max-width: 768px) {

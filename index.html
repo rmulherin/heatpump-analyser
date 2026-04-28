@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Heat Pump Analyser</title>
   <meta name="description" content="Should you install a heat pump? Find out using your own smart meter data.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600&family=Roboto:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/styles.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/luxon@3.5.0/build/global/luxon.min.js"></script>
@@ -132,160 +135,212 @@
       </div>
     </section>
 
+    <!-- Verdict Card -->
+    <section class="card verdict-card hidden" id="verdict-card">
+      <div class="verdict-headline" id="verdict-headline"></div>
+      <div class="verdict-chart-wrap">
+        <canvas id="verdict-chart"></canvas>
+      </div>
+      <p class="verdict-cooling hidden" id="verdict-cooling"></p>
+      <p class="verdict-quality" id="verdict-quality"></p>
+    </section>
+
+    <!-- Section Banner: Your home -->
+    <div class="section-banner hidden" id="section-banner-your-home">
+      <h2 class="section-heading">Your home</h2>
+    </div>
+
     <!-- Results Summary -->
     <section class="card hidden" id="results-card">
-      <h2>Data Summary</h2>
+      <h2>Your data</h2>
       <div class="results-summary" id="results-summary"></div>
     </section>
 
     <!-- Module 3: Energy Summary -->
     <section class="card hidden" id="energy-summary-card">
-      <h2>Energy Summary</h2>
+      <h2>How you use energy</h2>
       <div id="energy-summary-content"></div>
     </section>
 
-    <!-- Module 4: Heat Loss Estimation -->
-    <section class="card hidden" id="heat-loss-card">
-      <h2>Heat Loss Estimation</h2>
-      <div id="heat-loss-params">
-        <div class="form-row">
-          <div class="form-group">
-            <label for="boiler-efficiency">Boiler efficiency</label>
-            <input type="number" id="boiler-efficiency" value="0.90" step="0.01" min="0.60" max="0.98">
-            <p class="form-hint">Typical condensing boiler: 0.85–0.92. Check your boiler manual.</p>
-          </div>
-          <div class="form-group">
-            <label for="floor-area">Floor area (m²) <span style="font-weight:normal;color:var(--colour-dark)">(optional)</span></label>
-            <input type="number" id="floor-area" placeholder="e.g. 85" step="1" min="0">
-            <p class="form-hint">Total heated floor area. Used to calculate heat loss per m².</p>
-          </div>
-        </div>
-        <div class="form-group" style="margin-top: 0.5rem;">
-          <label for="wall-construction">Wall construction <span style="font-weight:normal;color:var(--colour-dark)">(optional)</span></label>
-          <select id="wall-construction">
-            <option value="">Unknown</option>
-            <option value="solid_masonry">Solid masonry (pre-1920s brick / stone)</option>
-            <option value="cavity_wall">Cavity wall (1930s–2000s brick)</option>
-            <option value="timber_frame">Timber frame</option>
-          </select>
-          <p class="form-hint">Used to cross-check the estimated thermal mass.</p>
-        </div>
-        <button class="btn btn-primary" id="btn-recalculate-heat-loss">Recalculate</button>
-      </div>
-      <div id="heat-loss-results" class="hidden">
-        <div class="status-area" id="heat-loss-status"></div>
-        <dl id="heat-loss-summary"></dl>
-      </div>
-    </section>
+    <!-- Methodology Disclosure -->
+    <details class="methodology-disclosure hidden" id="methodology-disclosure">
+      <summary class="methodology-summary">Show methodology</summary>
 
-    <!-- Module 5: Thermal Character -->
-    <section class="card hidden" id="thermal-char-card">
-      <h2>Thermal Character</h2>
-      <div id="thermal-char-inputs">
-        <p class="card-intro">
-          Two optional inputs help when your boiler runs continuously overnight, which
-          prevents the data-driven cold-soak estimate. Both can be left blank.
-        </p>
-        <div class="form-group">
-          <label for="t-at-restart">Indoor temperature on return from a winter trip
-            <span class="unit">°C</span>
-            <span style="font-weight:normal;color:var(--colour-dark)">(optional)</span>
-          </label>
-          <input id="t-at-restart" type="number" step="0.5" min="5" max="19" placeholder="e.g. 14">
-          <p class="form-hint">
-            When you've come home after several days away in winter, what does the indoor
-            thermometer typically read?
+      <!-- Module 4: Heat Loss Estimation -->
+      <section class="card hidden" id="heat-loss-card">
+        <h2>Heat loss</h2>
+        <div id="heat-loss-params">
+          <div class="form-row">
+            <div class="form-group">
+              <label for="boiler-efficiency">Boiler efficiency</label>
+              <input type="number" id="boiler-efficiency" value="0.90" step="0.01" min="0.60" max="0.98">
+              <p class="form-hint">Typical condensing boiler: 0.85–0.92. Check your boiler manual.</p>
+            </div>
+            <div class="form-group">
+              <label for="floor-area">Floor area (m²) <span style="font-weight:normal;color:var(--colour-dark)">(optional)</span></label>
+              <input type="number" id="floor-area" placeholder="e.g. 85" step="1" min="0">
+              <p class="form-hint">Total heated floor area. Used to calculate heat loss per m².</p>
+            </div>
+          </div>
+          <div class="form-group" style="margin-top: 0.5rem;">
+            <label for="wall-construction">Wall construction <span style="font-weight:normal;color:var(--colour-dark)">(optional)</span></label>
+            <select id="wall-construction">
+              <option value="">Unknown</option>
+              <option value="solid_masonry">Solid masonry (pre-1920s brick / stone)</option>
+              <option value="cavity_wall">Cavity wall (1930s–2000s brick)</option>
+              <option value="timber_frame">Timber frame</option>
+            </select>
+            <p class="form-hint">Used to cross-check the estimated thermal mass.</p>
+          </div>
+          <button class="btn btn-primary" id="btn-recalculate-heat-loss">Recalculate</button>
+        </div>
+        <div id="heat-loss-results" class="hidden">
+          <div class="status-area" id="heat-loss-status"></div>
+          <dl id="heat-loss-summary"></dl>
+        </div>
+      </section>
+
+      <!-- Module 5: Thermal Character -->
+      <section class="card hidden" id="thermal-char-card">
+        <h2>Thermal character</h2>
+        <div id="thermal-char-inputs">
+          <p class="card-intro">
+            Two optional inputs help when your boiler runs continuously overnight, which
+            prevents the data-driven cold-soak estimate. Both can be left blank.
+          </p>
+          <div class="form-group">
+            <label for="t-at-restart">Indoor temperature on return from a winter trip
+              <span class="unit">°C</span>
+              <span style="font-weight:normal;color:var(--colour-dark)">(optional)</span>
+            </label>
+            <input id="t-at-restart" type="number" step="0.5" min="5" max="19" placeholder="e.g. 14">
+            <p class="form-hint">
+              When you've come home after several days away in winter, what does the indoor
+              thermometer typically read?
+            </p>
+          </div>
+          <div class="form-group">
+            <label for="tau-bucket">How does your home hold its warmth?
+              <span style="font-weight:normal;color:var(--colour-dark)">(optional)</span>
+            </label>
+            <select id="tau-bucket">
+              <option value="">Don't know</option>
+              <option value="fast">Cools noticeably within a few hours</option>
+              <option value="evening">Stays warm into the evening, cooler by morning</option>
+              <option value="all_day">Holds its warmth for most of a day</option>
+              <option value="stays_for_days">Stays warm for days — takes ages to cool</option>
+            </select>
+            <p class="form-hint">After turning the heating off in winter.</p>
+          </div>
+        </div>
+        <div id="thermal-char-results" class="hidden">
+          <div class="status-area" id="thermal-char-status"></div>
+          <dl id="thermal-char-summary"></dl>
+        </div>
+        <button class="btn btn-primary" id="btn-recalculate-thermal-char">Recalculate</button>
+      </section>
+
+      <!-- Module 6: Heat Pump Model -->
+      <section class="card hidden" id="hp-model-card">
+        <h2>Heat pump sizing</h2>
+        <div id="hp-model-controls">
+          <label for="cop-scalar">COP performance setting:</label>
+          <input id="cop-scalar" type="range" min="0.5" max="1.5" step="0.05" value="1.0">
+          <output id="cop-scalar-value">1.00</output>
+          <p class="control-help">
+            1.00 = average UK installed performance (EoH field trial median).
+            Adjust to model a higher- or lower-performing unit.
           </p>
         </div>
-        <div class="form-group">
-          <label for="tau-bucket">How does your home hold its warmth?
-            <span style="font-weight:normal;color:var(--colour-dark)">(optional)</span>
-          </label>
-          <select id="tau-bucket">
-            <option value="">Don't know</option>
-            <option value="fast">Cools noticeably within a few hours</option>
-            <option value="evening">Stays warm into the evening, cooler by morning</option>
-            <option value="all_day">Holds its warmth for most of a day</option>
-            <option value="stays_for_days">Stays warm for days — takes ages to cool</option>
-          </select>
-          <p class="form-hint">After turning the heating off in winter.</p>
+        <div id="hp-model-results" class="hidden">
+          <div class="status-area" id="hp-model-status"></div>
+          <dl id="hp-model-summary"></dl>
+          <h3>COP at reference temperatures</h3>
+          <table id="hp-cop-table">
+            <thead><tr><th>Outdoor temperature (°C)</th><th>COP</th></tr></thead>
+            <tbody></tbody>
+          </table>
         </div>
+        <button class="btn btn-primary" id="btn-recalculate-hp-model">Recalculate with updated COP setting</button>
+      </section>
+
+      <!-- Module 7: Scenario Consumption -->
+      <section class="card hidden" id="scenario-card">
+        <h2>Energy by scenario</h2>
+
+        <div id="scenario-controls">
+          <label for="preheat-offset">Pre-heat ceiling above setpoint:</label>
+          <input id="preheat-offset" type="range" min="0.5" max="5.0" step="0.5" value="2.0">
+          <output id="preheat-offset-value">2.0</output>
+          <span class="control-unit">°C</span>
+
+          <label for="occupancy-threshold">Occupancy threshold:</label>
+          <input id="occupancy-threshold" type="range" min="0.1" max="0.9" step="0.05" value="0.50">
+          <output id="occupancy-threshold-value">0.50</output>
+
+          <p class="control-help">
+            Pre-heat ceiling caps how much the smart scenarios may overshoot the setpoint to
+            bank cheap-rate heat. The occupancy threshold sets which half-hourly slots are
+            treated as "must be at setpoint" based on your observed heating pattern.
+          </p>
+        </div>
+
+        <div id="scenario-results" class="hidden">
+          <div class="status-area" id="scenario-status"></div>
+          <h3>Annual heating energy by scenario</h3>
+          <table id="scenario-summary">
+            <thead>
+              <tr>
+                <th>Scenario</th>
+                <th>Gas (kWh/yr)</th>
+                <th>Electricity (kWh/yr)</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <button class="btn btn-primary" id="btn-recalculate-scenario">Recalculate scenarios</button>
+      </section>
+
+    </details>
+
+    <!-- Section Banner: The verdict -->
+    <div class="section-banner hidden" id="section-banner-verdict">
+      <h2 class="section-heading">The verdict</h2>
+    </div>
+
+    <!-- Module 8: Pricing Results -->
+    <section class="card hidden" id="pricing-card">
+      <h2>Annual running costs</h2>
+      <div class="status-area" id="pricing-status"></div>
+      <div id="pricing-results" class="hidden">
+        <div id="pricing-summary"></div>
       </div>
-      <div id="thermal-char-results" class="hidden">
-        <div class="status-area" id="thermal-char-status"></div>
-        <dl id="thermal-char-summary"></dl>
-      </div>
-      <button class="btn btn-primary" id="btn-recalculate-thermal-char">Recalculate</button>
+      <button class="btn btn-primary hidden" id="btn-recalculate-pricing">Recalculate costs</button>
     </section>
 
-    <!-- Module 6: Heat Pump Model -->
-    <section class="card hidden" id="hp-model-card">
-      <h2>Heat Pump Model</h2>
-      <div id="hp-model-controls">
-        <label for="cop-scalar">COP performance setting:</label>
-        <input id="cop-scalar" type="range" min="0.5" max="1.5" step="0.05" value="1.0">
-        <output id="cop-scalar-value">1.00</output>
-        <p class="control-help">
-          1.00 = average UK installed performance (EoH field trial median).
-          Adjust to model a higher- or lower-performing unit.
-        </p>
+    <!-- Module 9: Financial Summary -->
+    <section class="card hidden" id="financial-card">
+      <h2>Savings and payback</h2>
+      <div class="status-area" id="financial-status"></div>
+      <div id="financial-results" class="hidden">
+        <div id="financial-summary"></div>
       </div>
-      <div id="hp-model-results" class="hidden">
-        <div class="status-area" id="hp-model-status"></div>
-        <dl id="hp-model-summary"></dl>
-        <h3>COP at reference temperatures</h3>
-        <table id="hp-cop-table">
-          <thead><tr><th>Outdoor temperature (°C)</th><th>COP</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-      <button class="btn btn-primary" id="btn-recalculate-hp-model">Recalculate with updated COP setting</button>
+      <button class="btn btn-primary hidden" id="btn-recalculate-financial">Recalculate</button>
     </section>
 
-    <!-- Module 7: Scenario Consumption -->
-    <section class="card hidden" id="scenario-card">
-      <h2>Scenario Consumption</h2>
-
-      <div id="scenario-controls">
-        <label for="preheat-offset">Pre-heat ceiling above setpoint:</label>
-        <input id="preheat-offset" type="range" min="0.5" max="5.0" step="0.5" value="2.0">
-        <output id="preheat-offset-value">2.0</output>
-        <span class="control-unit">°C</span>
-
-        <label for="occupancy-threshold">Occupancy threshold:</label>
-        <input id="occupancy-threshold" type="range" min="0.1" max="0.9" step="0.05" value="0.50">
-        <output id="occupancy-threshold-value">0.50</output>
-
-        <p class="control-help">
-          Pre-heat ceiling caps how much the smart scenarios may overshoot the setpoint to
-          bank cheap-rate heat. The occupancy threshold sets which half-hourly slots are
-          treated as "must be at setpoint" based on your observed heating pattern.
-        </p>
-      </div>
-
-      <div id="scenario-results" class="hidden">
-        <div class="status-area" id="scenario-status"></div>
-        <h3>Annual heating energy by scenario</h3>
-        <table id="scenario-summary">
-          <thead>
-            <tr>
-              <th>Scenario</th>
-              <th>Gas (kWh/yr)</th>
-              <th>Electricity (kWh/yr)</th>
-              <th>Notes</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-
-      <button class="btn btn-primary" id="btn-recalculate-scenario">Recalculate scenarios</button>
-    </section>
+    <!-- Section Banner: Adjust the assumptions -->
+    <div class="section-banner hidden" id="section-banner-assumptions">
+      <h2 class="section-heading">Adjust the assumptions</h2>
+    </div>
 
     <!-- Module 8: Pricing Parameters -->
     <section class="card hidden" id="pricing-params-card">
-      <h2>Pricing Parameters</h2>
-      <p class="card-intro">Rates default to the Ofgem Q2 2026 price cap. Adjust to explore different tariff scenarios.</p>
+      <h2>Pricing assumptions</h2>
+      <p class="card-intro">These rates default to the Ofgem Q2 2026 price cap. Change them to model a
+      different tariff or future price scenario, then click Recalculate costs.</p>
       <div class="params-grid">
         <label for="svt-rate">Flat electricity rate (Ofgem Q2 2026 cap)
           <span class="unit">p/kWh</span></label>
@@ -305,21 +360,11 @@
       </div>
     </section>
 
-    <!-- Module 8: Pricing Results -->
-    <section class="card hidden" id="pricing-card">
-      <h2>Scenario Costs</h2>
-      <div class="status-area" id="pricing-status"></div>
-      <div id="pricing-results" class="hidden">
-        <div id="pricing-summary"></div>
-      </div>
-      <button class="btn btn-primary hidden" id="btn-recalculate-pricing">Recalculate costs</button>
-    </section>
-
     <!-- Module 9: Capital Cost Inputs -->
     <section class="card hidden" id="financial-params-card">
-      <h2>Installation Costs</h2>
-      <p class="card-intro">Defaults reflect typical UK 2025–2026 market rates and the
-      current Boiler Upgrade Scheme grant. Adjust for your own quotes.</p>
+      <h2>Installation costs</h2>
+      <p class="card-intro">Defaults reflect typical 2025–2026 market rates and the current Boiler Upgrade
+      Scheme grant. Update with your own installer quote if you have one.</p>
       <div class="params-grid">
         <label for="install-full-hp">Full heat pump installation
           <span class="unit">£</span></label>
@@ -337,16 +382,6 @@
           <span class="unit">£</span></label>
         <input id="avoided-ac" type="number" step="100" min="0" value="0">
       </div>
-    </section>
-
-    <!-- Module 9: Financial Summary -->
-    <section class="card hidden" id="financial-card">
-      <h2>Financial Summary</h2>
-      <div class="status-area" id="financial-status"></div>
-      <div id="financial-results" class="hidden">
-        <div id="financial-summary"></div>
-      </div>
-      <button class="btn btn-primary hidden" id="btn-recalculate-financial">Recalculate</button>
     </section>
 
   </div>

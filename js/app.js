@@ -118,6 +118,8 @@ const THERMAL_MASS_RATING_LABELS = {
   very_high: 'Very high (solid stone, large Victorian, concrete)',
 };
 
+let verdictChart = null;
+
 // ===== DOM References =====
 const apiKeyInput = document.getElementById('api-key');
 const accountInput = document.getElementById('account-number');
@@ -219,6 +221,20 @@ const elecStandingInput  = document.getElementById('elec-standing-charge');
 const gasStandingInput   = document.getElementById('gas-standing-charge');
 const hhOverheadInput    = document.getElementById('hh-overhead');
 const btnRecalcPricing   = document.getElementById('btn-recalculate-pricing');
+
+// Verdict card DOM references
+const verdictCard      = document.getElementById('verdict-card');
+const verdictHeadline  = document.getElementById('verdict-headline');
+const verdictCooling   = document.getElementById('verdict-cooling');
+const verdictQuality   = document.getElementById('verdict-quality');
+
+// Section banner DOM references
+const bannerYourHome    = document.getElementById('section-banner-your-home');
+const bannerVerdict     = document.getElementById('section-banner-verdict');
+const bannerAssumptions = document.getElementById('section-banner-assumptions');
+
+// Methodology disclosure DOM reference
+const methodologyDisclosure = document.getElementById('methodology-disclosure');
 
 // ===== Module 6: Live slider value display =====
 
@@ -734,6 +750,7 @@ function showSuccessSummary(normalised, tariffRates, metadata) {
     </dl>
   `;
 
+  bannerYourHome.classList.remove('hidden');
   resultsCard.classList.remove('hidden');
   showStatus('Data loaded successfully.', 'success');
 }
@@ -880,6 +897,8 @@ function renderEnergySummaryTable() {
   ];
 
   energySummaryContent.innerHTML = `
+    <p class="card-intro">Here's how your annual energy use breaks down. Gas heating is
+    what a heat pump would replace.</p>
     <table class="energy-summary-table">
       <thead>
         <tr><th>Category</th><th>kWh</th><th>% of total</th></tr>
@@ -1049,33 +1068,29 @@ function displayHeatLossResults(result) {
   const fmt = (v, dp = 0) => v !== null && v !== undefined ? v.toFixed(dp) : '—';
   const rows = [];
 
-  rows.push(['Heat transfer coefficient (HTC)', `${fmt(result.htc_w_per_k)} W/K`]);
+  rows.push(['Heat loss rate', `${fmt(result.htc_w_per_k)} W/K`]);
   if (result.htc_confidence_interval_95) {
     const ci = result.htc_confidence_interval_95;
-    rows.push(['95% confidence interval', `${fmt(ci.lower)} – ${fmt(ci.upper)} W/K`]);
+    rows.push(['Confidence range (95%)', `${fmt(ci.lower)} – ${fmt(ci.upper)} W/K`]);
   }
   if (result.htc_w_per_k_adjusted !== null) {
-    rows.push(['Adjusted HTC (incl. electric heating)', `${fmt(result.htc_w_per_k_adjusted)} W/K`]);
+    rows.push(['Adjusted heat loss rate (includes electric heating)', `${fmt(result.htc_w_per_k_adjusted)} W/K`]);
   }
   rows.push(['Insulation rating', HEAT_LOSS_RATING_DISPLAY[result.rating] ?? result.rating ?? '—']);
   if (result.hlp_w_per_m2_k !== null) {
-    rows.push(['Heat loss parameter (HLP)', `${result.hlp_w_per_m2_k.toFixed(2)} W/m²K`]);
+    rows.push(['Heat loss per m² (HLP)', `${result.hlp_w_per_m2_k.toFixed(2)} W/m²K`]);
   }
   if (result.solar_correction_applied && result.solar_aperture_m2 !== null) {
-    rows.push(['Effective solar aperture', `${fmt(result.solar_aperture_m2, 1)} m²`]);
+    rows.push(['Solar aperture (free heat from the sun)', `${fmt(result.solar_aperture_m2, 1)} m²`]);
     rows.push(['Solar gain rating', SOLAR_RATING_DISPLAY[result.solar_rating] ?? result.solar_rating ?? '—']);
     if (result.cooling_consideration) {
       const coolingLabel = result.cooling_consideration.replace(/_/g, ' ');
       rows.push(['Summer cooling consideration', coolingLabel]);
     }
   }
-  rows.push(['Degree-day base temperature', `${result.degree_day_base_c}°C`]);
-  rows.push(['Boiler efficiency used', result.boiler_efficiency_used.toFixed(2)]);
-  rows.push(['Days used in fit', result.days_used_in_fit]);
   if (result.regression_r2 !== null) {
     rows.push(['Fit quality (R²)', result.regression_r2.toFixed(2)]);
   }
-  rows.push(['Validation status', result.validation_status]);
 
   heatLossSummary.innerHTML = rows
     .map(([dt, dd]) => `<dt>${escapeHtml(String(dt))}</dt><dd>${escapeHtml(String(dd))}</dd>`)
@@ -1113,6 +1128,7 @@ async function runHeatLoss(showProgressFn, showStatusFn) {
   }
 
   setHeatLossResult(result);
+  methodologyDisclosure.classList.remove('hidden');
   heatLossCard.classList.remove('hidden');
   displayHeatLossResults(result);
 }
@@ -1170,10 +1186,10 @@ function displayThermalCharacterResults(result) {
   const rows = [];
 
   if (result.setpoint_c !== null) {
-    rows.push(['Inferred thermostat setpoint', `${fmt(result.setpoint_c, 1)}°C`]);
+    rows.push(['Estimated thermostat setpoint', `${fmt(result.setpoint_c, 1)}°C`]);
   }
   if (result.thermal_mass_kj_per_k !== null) {
-    rows.push(['Thermal mass', `${Math.round(result.thermal_mass_kj_per_k).toLocaleString()} kJ/K`]);
+    rows.push(['Thermal mass (kJ/K)', `${Math.round(result.thermal_mass_kj_per_k).toLocaleString()} kJ/K`]);
   }
   if (result.thermal_mass_source !== null) {
     const sourceLabel = ({
@@ -1192,11 +1208,7 @@ function displayThermalCharacterResults(result) {
   const occupancyLabel = result.occupancy_weights !== null
     ? 'Available (feeds pre-heating optimiser)'
     : 'Insufficient data';
-  rows.push(['Occupancy pattern', occupancyLabel]);
-
-  rows.push(['Half-hourly periods used (setpoint fit)', result.setpoint_days_used]);
-  rows.push(['Warm-up events used (thermal mass)', result.thermal_mass_events_used]);
-  rows.push(['Validation status', result.validation_status]);
+  rows.push(['Occupancy model', occupancyLabel]);
 
   thermalCharSummary.innerHTML = rows
     .map(([dt, dd]) => `<dt>${escapeHtml(String(dt))}</dt><dd>${escapeHtml(String(dd))}</dd>`)
@@ -1317,22 +1329,14 @@ function displayHeatPumpModelResults(result) {
   const rows = [];
 
   if (result.hp_capacity_kw !== null) {
-    rows.push(['HP heat output (design conditions, −3°C)', `${fmt(result.hp_capacity_kw, 1)} kW`]);
-  }
-  if (result.hp_capacity_kw_elec !== null) {
-    rows.push(['HP electrical input (design conditions)', `${fmt(result.hp_capacity_kw_elec, 1)} kW`]);
+    rows.push(['Required heat output at −3°C', `${fmt(result.hp_capacity_kw, 1)} kW`]);
   }
   if (result.annual_mean_cop !== null) {
-    rows.push(['Annual mean COP (demand-weighted)', fmt(result.annual_mean_cop)]);
+    rows.push(['Estimated mean annual COP', fmt(result.annual_mean_cop)]);
   }
   if (result.cop_range !== null) {
-    rows.push(['COP range across the year', `${fmt(result.cop_range.min)} — ${fmt(result.cop_range.max)}`]);
+    rows.push(['COP range (coldest to warmest days)', `${fmt(result.cop_range.min)} — ${fmt(result.cop_range.max)}`]);
   }
-  if (result.fraction_below_design_temp !== null) {
-    rows.push(['Hours below design temperature', `${(result.fraction_below_design_temp * 100).toFixed(1)}% of heating hours`]);
-  }
-  rows.push(['Design outdoor temperature', '−3 °C (BS EN 12831)']);
-  rows.push(['Validation status', result.validation_status]);
 
   hpModelSummary.innerHTML = rows
     .map(([dt, dd]) => `<dt>${escapeHtml(String(dt))}</dt><dd>${escapeHtml(String(dd))}</dd>`)
@@ -1417,12 +1421,12 @@ function buildRateArrays(consumption, external, tariffRates) {
 }
 
 const SCENARIO_LABELS = {
-  current:      'Current boiler',
-  dumb_hp_svt:  'Dumb HP (SVT pricing)',
-  dumb_hp_hh:   'Dumb HP (HH wholesale pricing)',
-  hybrid_dumb:  'Hybrid — dumb dispatch',
-  smart_hp_hh:  'Smart HP',
-  hybrid_smart: 'Smart hybrid',
+  current:      'Your current boiler',
+  dumb_hp_svt:  'Heat pump — flat-rate tariff',
+  dumb_hp_hh:   'Heat pump — half-hourly tariff',
+  hybrid_dumb:  'Hybrid — half-hourly tariff',
+  smart_hp_hh:  'Smart heat pump — half-hourly tariff',
+  hybrid_smart: 'Smart hybrid — half-hourly tariff',
 };
 
 function displayScenarioResults(result) {
@@ -1544,12 +1548,12 @@ btnRecalcScenario.addEventListener('click', async () => {
 // ===== Module 8: Pricing Engine =====
 
 const SCENARIO_DISPLAY_NAMES = {
-  current:      'Current (gas boiler)',
-  dumb_hp_svt:  'Heat pump — flat rate',
-  dumb_hp_hh:   'Heat pump — HH rate',
-  hybrid_dumb:  'Hybrid — HH rate',
-  smart_hp_hh:  'Smart heat pump — HH rate',
-  hybrid_smart: 'Smart hybrid — HH rate',
+  current:      'Your current boiler',
+  dumb_hp_svt:  'Heat pump — flat-rate tariff',
+  dumb_hp_hh:   'Heat pump — half-hourly tariff',
+  hybrid_dumb:  'Hybrid — half-hourly tariff',
+  smart_hp_hh:  'Smart heat pump — half-hourly tariff',
+  hybrid_smart: 'Smart hybrid — half-hourly tariff',
 };
 
 function prefillRateInputs(tariffRates) {
@@ -1619,6 +1623,8 @@ function displayPricingResults(pricingResult) {
   pricingCard.classList.remove('hidden');
   pricingParamsCard.classList.remove('hidden');
   btnRecalcPricing.classList.remove('hidden');
+  bannerVerdict.classList.remove('hidden');
+  bannerAssumptions.classList.remove('hidden');
 }
 
 async function runPricingEngine(showProgressFn, showStatusFn) {
@@ -1670,12 +1676,12 @@ btnRecalcPricing.addEventListener('click', async () => {
 // ===== Module 9: Financial Analysis =====
 
 const FINANCIAL_DISPLAY_NAMES = {
-  current:      'Current (gas boiler)',
-  dumb_hp_svt:  'Heat pump — flat rate',
-  dumb_hp_hh:   'Heat pump — HH rate',
-  hybrid_dumb:  'Hybrid — HH rate',
-  smart_hp_hh:  'Smart heat pump — HH rate',
-  hybrid_smart: 'Smart hybrid — HH rate',
+  current:      'Your current boiler',
+  dumb_hp_svt:  'Heat pump — flat-rate tariff',
+  dumb_hp_hh:   'Heat pump — half-hourly tariff',
+  hybrid_dumb:  'Hybrid — half-hourly tariff',
+  smart_hp_hh:  'Smart heat pump — half-hourly tariff',
+  hybrid_smart: 'Smart hybrid — half-hourly tariff',
 };
 
 const FINANCIAL_DISPLAY_ORDER = ['current', 'dumb_hp_svt', 'dumb_hp_hh', 'hybrid_dumb', 'smart_hp_hh', 'hybrid_smart'];
@@ -1727,9 +1733,9 @@ function displayFinancialResults(result) {
         <tr>
           <th>Scenario</th>
           <th>Annual cost</th>
-          <th>Annual saving vs boiler</th>
-          <th>Net investment</th>
-          <th>Payback</th>
+          <th>Annual saving</th>
+          <th>Net cost (after grant)</th>
+          <th>Payback period</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -1748,6 +1754,204 @@ function displayFinancialResults(result) {
   financialCard.classList.remove('hidden');
   financialParamsCard.classList.remove('hidden');
   btnRecalcFinancial.classList.remove('hidden');
+
+  const heatLossRes = getHeatLossResult();
+  const rateMeta    = getRateMetadata();
+  if (rateMeta) {
+    buildAndDisplayVerdict(result, heatLossRes, rateMeta);
+  }
+}
+
+// ===== Module 10a: Verdict Block =====
+
+const VERDICT_CHART_LABELS = {
+  current:      'Current boiler',
+  dumb_hp_svt:  'HP — flat rate',
+  dumb_hp_hh:   'HP — half-hourly',
+  hybrid_dumb:  'Hybrid — HH',
+  smart_hp_hh:  'Smart HP — HH',
+  hybrid_smart: 'Smart hybrid — HH',
+};
+
+function buildAndDisplayVerdict(financialResult, heatLossResult, rateMetadata) {
+  const sc = (key) => financialResult.scenarios[key];
+
+  // Step 16a — identify primary scenario
+  const priority = ['smart_hp_hh', 'dumb_hp_hh', 'dumb_hp_svt'];
+  const primaryKey = priority.find(k => sc(k).payback_status !== 'no_data') ?? null;
+
+  // Step 16b — determine verdict type (clarification 4: simplified marginal condition)
+  let verdictType;
+  if (!primaryKey) {
+    verdictType = 'insufficient';
+  } else {
+    const ps = sc(primaryKey);
+    if (ps.payback_status === 'ok' && ps.annual_saving_gbp > 50) {
+      verdictType = 'positive';
+    } else if (ps.payback_status === 'ok' && ps.annual_saving_gbp > 0) {
+      verdictType = 'marginal';
+    } else {
+      verdictType = 'negative';
+    }
+  }
+
+  // Step 16c — format helpers
+  const fmtGbpVerdict = (v) => `£${Math.abs(Math.round(v)).toLocaleString('en-GB')}`;
+  const fmtPaybackYears = (years) => {
+    if (years > 30) return 'well beyond a 30-year planning horizon';
+    const y = Math.round(years);
+    return `${y} year${y === 1 ? '' : 's'}`;
+  };
+
+  // Step 16d — build headline HTML
+  const currentCost = fmtGbpVerdict(sc('current').annual_cost_gbp ?? 0);
+  let headlineHtml = '';
+
+  if (verdictType === 'positive' && primaryKey === 'smart_hp_hh') {
+    const saving  = fmtGbpVerdict(sc('smart_hp_hh').annual_saving_gbp);
+    const hpCost  = fmtGbpVerdict(sc('smart_hp_hh').annual_cost_gbp);
+    const payback = fmtPaybackYears(sc('smart_hp_hh').payback_years);
+    const svtAvailable = sc('dumb_hp_svt').payback_status !== 'no_data';
+
+    headlineHtml = `Based on your ${rateMetadata.data_period_days} days of data, a smart heat pump on a
+half-hourly tariff would cut your annual heating bill by around <strong>${saving}</strong> — from
+<strong>${currentCost}</strong> to <strong>${hpCost}</strong> per year.
+At current installation costs, payback would be roughly <strong>${payback}</strong>.`;
+
+    if (svtAvailable) {
+      const svtSaving = sc('dumb_hp_svt').annual_saving_gbp;
+      if (svtSaving <= 0) {
+        headlineHtml += `<br><br>On a standard flat-rate tariff, a heat pump would cost slightly more to
+run than your current boiler. The economics depend heavily on switching to a half-hourly tariff.`;
+      } else {
+        headlineHtml += `<br><br>On a standard flat-rate tariff, the saving falls to about
+<strong>${fmtGbpVerdict(svtSaving)}</strong> per year — close to break-even. The difference comes down
+largely to tariff choice and how well your home holds heat.`;
+      }
+    }
+
+  } else if (verdictType === 'positive' && primaryKey === 'dumb_hp_hh') {
+    const saving  = fmtGbpVerdict(sc('dumb_hp_hh').annual_saving_gbp);
+    const hpCost  = fmtGbpVerdict(sc('dumb_hp_hh').annual_cost_gbp);
+    const payback = fmtPaybackYears(sc('dumb_hp_hh').payback_years);
+    const svtAvailable = sc('dumb_hp_svt').payback_status !== 'no_data';
+
+    headlineHtml = `Based on your ${rateMetadata.data_period_days} days of data, a heat pump on a
+half-hourly tariff would cut your annual heating bill by around <strong>${saving}</strong> — from
+<strong>${currentCost}</strong> to <strong>${hpCost}</strong> per year.
+Payback is roughly <strong>${payback}</strong> at current installation costs.`;
+
+    if (svtAvailable) {
+      headlineHtml += `<br><br>On a flat-rate tariff, the saving falls to about
+<strong>${fmtGbpVerdict(sc('dumb_hp_svt').annual_saving_gbp)}</strong> per year.`;
+    }
+
+  } else if (verdictType === 'positive' && primaryKey === 'dumb_hp_svt') {
+    const saving  = fmtGbpVerdict(sc('dumb_hp_svt').annual_saving_gbp);
+    const hpCost  = fmtGbpVerdict(sc('dumb_hp_svt').annual_cost_gbp);
+    const payback = fmtPaybackYears(sc('dumb_hp_svt').payback_years);
+
+    headlineHtml = `Based on your ${rateMetadata.data_period_days} days of data, a heat pump on a
+flat-rate tariff would cut your annual heating bill by around <strong>${saving}</strong> — from
+<strong>${currentCost}</strong> to <strong>${hpCost}</strong> per year.
+Payback is roughly <strong>${payback}</strong> at current installation costs.`;
+
+  } else if (verdictType === 'marginal') {
+    const saving = fmtGbpVerdict(sc(primaryKey).annual_saving_gbp);
+    headlineHtml = `Based on your data, the best heat pump scenario saves around <strong>${saving}</strong>
+per year — roughly break-even against your current boiler. Whether it makes sense depends on
+factors beyond running costs: the reliability of your existing boiler, the cooling capability a
+heat pump adds, and future energy prices. Use the assumptions panel below to explore.`;
+
+  } else if (verdictType === 'negative') {
+    const absSaving = fmtGbpVerdict(Math.abs(sc(primaryKey).annual_saving_gbp ?? 0));
+    headlineHtml = `On your data, our modelling suggests a heat pump would cost slightly more to run
+than your current boiler — by about <strong>${absSaving}</strong> per year on the best scenario.
+This can shift significantly with tariff choice, installation quality, and future gas prices.
+Use the assumptions panel below to explore.`;
+
+  } else {
+    headlineHtml = `We couldn't get a confident picture from your data — you'll see why in the
+methodology section below. The figures in the tables are rough estimates only.`;
+  }
+
+  verdictHeadline.innerHTML = headlineHtml;
+
+  // Step 16e — data-quality footnote
+  const r2      = heatLossResult?.regression_r2;
+  const vstatus = heatLossResult?.validation_status;
+  const n       = rateMetadata.data_period_days;
+  let qualityText;
+
+  if (r2 === null || r2 === undefined || vstatus !== 'ok') {
+    qualityText = 'Heat-loss estimation was not possible from your data — running cost figures are rough estimates only.';
+  } else if (r2 >= 0.80) {
+    qualityText = `Analysis based on ${n} days of smart meter data. Fit quality: good (R²=${r2.toFixed(2)}) — accuracy is typically ±15–20% on the heat-loss estimate.`;
+  } else if (r2 >= 0.60) {
+    qualityText = `Fit quality: fair (R²=${r2.toFixed(2)}) — treat these figures as a rough guide rather than a precise prediction.`;
+  } else {
+    qualityText = `Fit quality: poor (R²=${r2.toFixed(2)}) — the heat-loss estimate is unreliable. Consider a professional survey before making a decision.`;
+  }
+  verdictQuality.textContent = qualityText;
+
+  // Step 16f — cooling note
+  const avoidedAc = readCapitalParams().avoided_ac_cost_gbp ?? 0;
+  if (avoidedAc === 0) {
+    verdictCooling.textContent = 'A heat pump also provides cooling in summer. If you\'d otherwise buy or replace an air-conditioning unit, enter the estimated cost in "Adjust the assumptions" below to improve the payback figure.';
+    verdictCooling.classList.remove('hidden');
+  } else {
+    verdictCooling.classList.add('hidden');
+  }
+
+  // Step 16g — scenario bar chart
+  if (verdictChart) verdictChart.destroy();
+
+  const scenarioOrder = ['current', 'dumb_hp_svt', 'dumb_hp_hh', 'hybrid_dumb', 'smart_hp_hh', 'hybrid_smart'];
+  const chartData = scenarioOrder
+    .filter(k => financialResult.scenarios[k].annual_cost_gbp !== null)
+    .map(k => ({
+      key:    k,
+      label:  VERDICT_CHART_LABELS[k],
+      cost:   financialResult.scenarios[k].annual_cost_gbp,
+      saving: financialResult.scenarios[k].annual_saving_gbp,
+    }));
+
+  const bgColors = chartData.map(d =>
+    d.key === 'current' ? '#26588D' : (d.saving > 0 ? '#3B8284' : '#FD7A7F')
+  );
+
+  const ctx = document.getElementById('verdict-chart').getContext('2d');
+  verdictChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: chartData.map(d => d.label),
+      datasets: [{ data: chartData.map(d => d.cost), backgroundColor: bgColors }],
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => `£${Math.round(ctx.parsed.x).toLocaleString('en-GB')}/yr`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          beginAtZero: true,
+          title: { display: true, text: 'Annual cost (£/yr)' },
+          ticks: { callback: v => `£${Math.round(v).toLocaleString('en-GB')}` },
+        },
+        y: { ticks: { font: { size: 12 } } },
+      },
+    },
+  });
+
+  // Step 16h — reveal verdict card
+  verdictCard.classList.remove('hidden');
 }
 
 async function runFinancialAnalysis(showProgressFn, showStatusFn) {
