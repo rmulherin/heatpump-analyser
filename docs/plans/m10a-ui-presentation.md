@@ -1,7 +1,7 @@
 # Step M10a — UI & Presentation (v1 launch build)
 
 **Date:** 2026-04-28
-**Status:** Awaiting approval — review via claude.ai before implementation begins.
+**Status:** ✅ Approved — 2026-04-28
 
 ---
 
@@ -561,7 +561,7 @@ if (!primaryKey) {
   const ps = financialResult.scenarios[primaryKey];
   if (ps.payback_status === 'ok' && ps.annual_saving_gbp > 50) {
     verdictType = 'positive';
-  } else if (ps.payback_status === 'ok' || (ps.annual_saving_gbp > 0 && ps.annual_saving_gbp <= 50)) {
+  } else if (ps.payback_status === 'ok' && ps.annual_saving_gbp > 0) {
     verdictType = 'marginal';
   } else {
     verdictType = 'negative';
@@ -615,12 +615,15 @@ largely to tariff choice and how well your home holds heat.`;
   const saving = fmtGbpVerdict(sc('dumb_hp_hh').annual_saving_gbp);
   const hpCost = fmtGbpVerdict(sc('dumb_hp_hh').annual_cost_gbp);
   const payback = fmtPaybackYears(sc('dumb_hp_hh').payback_years);
-  const svtSaving = fmtGbpVerdict(sc('dumb_hp_svt').annual_saving_gbp ?? 0);
+  const svtAvailable = sc('dumb_hp_svt').payback_status !== 'no_data';
   headlineHtml = `Based on your ${rateMetadata.data_period_days} days of data, a heat pump on a
 half-hourly tariff would cut your annual heating bill by around <strong>${saving}</strong> — from
 <strong>${currentCost}</strong> to <strong>${hpCost}</strong> per year.
-Payback is roughly <strong>${payback}</strong> at current installation costs.<br><br>
-On a flat-rate tariff, the saving falls to about <strong>${svtSaving}</strong> per year.`;
+Payback is roughly <strong>${payback}</strong> at current installation costs.`;
+  if (svtAvailable) {
+    const svtSaving = fmtGbpVerdict(sc('dumb_hp_svt').annual_saving_gbp ?? 0);
+    headlineHtml += `<br><br>On a flat-rate tariff, the saving falls to about <strong>${svtSaving}</strong> per year.`;
+  }
 
 } else if (verdictType === 'positive' && primaryKey === 'dumb_hp_svt') {
   const saving = fmtGbpVerdict(sc('dumb_hp_svt').annual_saving_gbp);
@@ -831,31 +834,67 @@ The guard `if (rateMeta)` ensures the verdict does not crash if pricing has not 
 
 ---
 
-## Claude.ai Review — yyyy-mm-dd
+## Design Review
 
 **Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Date:** 2026-04-28
+**Review type:** Plan review (pre-implementation)
+**Authoritative design:** `praxis-claude-hub/projects/tools/heatpump-analyser/design/ui-design-m10a.md`
 
-**Overall verdict:** [Approved / Approved with clarifications / Revise and resubmit]
+### Context
 
-### What is solid
-[What the plan gets right. Be specific.]
+M10a is the v1 UI & Presentation module, written the same day as this plan. The
+design doc was produced by the Opus window and reviewed with Rhiannon before Sonnet
+planned against it. Two discrepancies between the design doc and the actual codebase
+were correctly identified and resolved in Research findings: `getCapitalParams` →
+`readCapitalParams().avoided_ac_cost_gbp`, and the `methodology-disclosure` reveal
+location (`runHeatLoss`, not `displayHeatLossResults`). Both resolutions are correct.
 
-### Clarifications required before implementation
-[Any ambiguity, missing specification, or underdefined behaviour that would force
-Claude Code to make an undocumented decision mid-build. Each item must include
-the resolution — not just the problem.]
+### Required changes for implementation
 
-### Minor observations (not blockers)
-[Optional. Suggestions for V2, style notes, things to keep in mind.]
+**1. `dumb_hp_hh` positive branch: add SVT availability guard**
+
+The `dumb_hp_hh` branch showed the flat-rate comparison sentence unconditionally,
+using `?? 0` to handle a null saving — which would silently display "£0" if
+`dumb_hp_svt` has no data. Fixed to match the `smart_hp_hh` branch pattern:
+`svtAvailable` guard added; sentence only rendered when `payback_status !== 'no_data'`.
+
+**2. Marginal verdict condition: simplify**
+
+`else if (ps.payback_status === 'ok' || (ps.annual_saving_gbp > 0 && ps.annual_saving_gbp <= 50))`
+replaced with `else if (ps.payback_status === 'ok' && ps.annual_saving_gbp > 0)`.
+The original OR arm was redundant (M9 sets `payback_status === 'ok'` whenever saving
+is positive) and created a latent misclassification risk. Simplified form is correct
+and matches the design doc intent.
+
+### Resolution of review changes
+
+1. **SVT guard in `dumb_hp_hh` branch** — applied inline to Step 16d. `svtAvailable`
+   guard added; `svtSaving` computation moved inside the conditional block.
+2. **Marginal condition simplified** — applied inline to Step 16b. OR arm removed.
+
+## Review Summary
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| CRITICAL | 0     | ✓ pass |
+| HIGH     | 0     | ✓ pass |
+| MEDIUM   | 1     | ✅ resolved |
+| LOW      | 1     | ✅ resolved |
+
+Verdict: APPROVE — plan is faithful to the design doc; two minor logic issues fixed inline.
 
 ---
 
 ## Approval
 
-**Status:** ✅ Approved — yyyy-mm-dd
-**Approved by:** Rhiannon
-**Clarifications confirmed:** [Restate each clarification resolution so Claude Code
-has a single authoritative source.]
+**Status:** ✅ Approved — 2026-04-28
+**Approved by:** Rhiannon (via Opus review)
+**Clarifications confirmed:**
+1. Use `readCapitalParams().avoided_ac_cost_gbp` (not `getCapitalParams`).
+2. Reveal `methodology-disclosure` in `runHeatLoss` alongside `heatLossCard.classList.remove('hidden')`.
+3. `dumb_hp_hh` SVT comparison sentence guarded by `svtAvailable` check.
+4. Marginal verdict condition: `payback_status === 'ok' && annual_saving_gbp > 0`.
 
 ---
 
