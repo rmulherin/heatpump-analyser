@@ -89,12 +89,18 @@ Update the comment above the grouping loop in `detectAbsences()`:
 
 ## Success criteria
 
-- [ ] **Test 13 (inverted):** A 2-day period where both whole days have `gas_kwh = 0` → `absence_periods` contains one entry `{ days: 2 }`; both days have `is_absence = true`; both excluded from Step G and Step H regressions. (Was: not flagged under ≥3 run-length rule.)
-- [ ] **Test 15 (inverted):** A single whole day with `gas_kwh = 0` mid-winter → `absence_periods` contains one entry `{ days: 1 }`; that day has `is_absence = true`; excluded from Step G and Step H. (Was: not flagged.)
-- [ ] **Test 15a (new):** A day where some HH periods are null (simulating meter-read failure) with near-zero recorded gas → NOT flagged as absence. `isWholeDay` returns false, so the day is not evaluated for the low-gas condition.
-- [ ] **Test 11 (unchanged):** A 10-day period with `gas_kwh = 0` → `absence_periods` contains one entry `{ days: 10 }`; all 10 days excluded; R² computed on remaining days is higher than with absence included.
-- [ ] **Test 14 (unchanged):** A 10-day period at 30% of normal gas (above 20% threshold) → NOT flagged as absence.
-- [ ] `ABSENCE_MIN_CONSECUTIVE_DAYS` removed: `grep -r "ABSENCE_MIN_CONSECUTIVE_DAYS" js/` returns no results.
+- [x] **Test 13 (inverted):** A 2-day period where both whole days have `gas_kwh = 0` → `absence_periods` contains one entry `{ days: 2 }`; both days have `is_absence = true`; both excluded from Step G and Step H regressions. (Was: not flagged under ≥3 run-length rule.)
+  ✅ Node test-m3-step-f.mjs T13a–T13d — 2026-04-28.
+- [x] **Test 15 (inverted):** A single whole day with `gas_kwh = 0` mid-winter → `absence_periods` contains one entry `{ days: 1 }`; that day has `is_absence = true`; excluded from Step G and Step H. (Was: not flagged.)
+  ✅ Node test-m3-step-f.mjs T15a–T15d — 2026-04-28.
+- [x] **Test 15a (new):** A day where some HH periods are null (simulating meter-read failure) with near-zero recorded gas → NOT flagged as absence. `isWholeDay` returns false, so the day is not evaluated for the low-gas condition.
+  ✅ Node test-m3-step-f.mjs T15a-a–T15a-c — 2026-04-28.
+- [x] **Test 11 (unchanged):** A 10-day period with `gas_kwh = 0` → `absence_periods` contains one entry `{ days: 10 }`; all 10 days excluded; R² computed on remaining days is higher than with absence included.
+  ✅ Node test-m3-step-f.mjs T11a–T11d — 2026-04-28.
+- [x] **Test 14 (unchanged):** A 10-day period at 30% of normal gas (above 20% threshold) → NOT flagged as absence.
+  ✅ Node test-m3-step-f.mjs T14a–T14c — 2026-04-28.
+- [x] `ABSENCE_MIN_CONSECUTIVE_DAYS` removed: `grep -r "ABSENCE_MIN_CONSECUTIVE_DAYS" js/` returns no results.
+  ✅ Confirmed 2026-04-28.
 - [ ] No syntax errors in `baseload.js` (open in browser, console clean).
 
 ---
