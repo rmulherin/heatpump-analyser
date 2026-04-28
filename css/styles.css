@@ -493,6 +493,27 @@ details[open] .methodology-summary::before {
   color: var(--colour-dark);
 }
 
+/* ===== Underheat diagnostic ===== */
+.underheat-light {
+  display: inline-block;
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 50%;
+  margin-left: 0.5rem;
+  vertical-align: middle;
+}
+.underheat-light.green { background: #2E7D32; }
+.underheat-light.amber { background: #F57F17; }
+.underheat-narrative {
+  font-size: 0.9rem;
+  color: var(--colour-dark);
+  margin-top: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: var(--colour-light-grey);
+  border-left: 3px solid var(--colour-teal);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
 /* ===== Responsive ===== */
 @media (max-width: 768px) {
   .container { padding: 1rem 0.75rem; }

@@ -100,7 +100,7 @@ function buildHybridDumbScenario(heating, copByHh, eta, gasRateByHh, elecHhRateB
 
 function allocateGreedyDay({
   scenario, dayIndices, heating, eta, copByHh, gasRateByHh, elecHhRateByHh,
-  hpCapKw, isAbsence,
+  hpCapKw, isAbsence, demandScale = 1.0,
 }) {
   const n = dayIndices.length;
   const cap = hpCapKw * 0.5;        // thermal kWh per HH at HP capacity
@@ -111,6 +111,7 @@ function allocateGreedyDay({
     const h = heating[i].heating_kwh;
     if (h != null && h > 0 && !isAbsence[i]) B_d += h * eta;
   }
+  B_d *= demandScale;
 
   const elec_kwh_alloc = new Array(n).fill(0);
   const gas_kwh_alloc  = new Array(n).fill(0);
@@ -206,7 +207,7 @@ function simulatePostHocTIndoor({
 
 function buildSmartScenario({
   scenario, heating, external, copByHh, hpCapKw,
-  gasRateByHh, elecHhRateByHh, eta, isAbsence,
+  gasRateByHh, elecHhRateByHh, eta, isAbsence, demandScale = 1.0,
 }) {
   const days = buildDayHhIndices(heating);
   const gas_kwh   = new Array(heating.length).fill(0);
@@ -222,7 +223,7 @@ function buildSmartScenario({
     }
     const day = allocateGreedyDay({
       scenario, dayIndices: indices, heating, eta,
-      copByHh, gasRateByHh, elecHhRateByHh, hpCapKw, isAbsence,
+      copByHh, gasRateByHh, elecHhRateByHh, hpCapKw, isAbsence, demandScale,
     });
     if (day.hpUndersized) anyHpUndersized = true;
     for (let k = 0; k < indices.length; k++) {
@@ -251,7 +252,7 @@ function computeValidationStatusSmart(heatLoss, heatPumpModel) {
 export function estimateScenarioConsumption({
   heating, external, heatLoss, thermalCharacter, heatPumpModel,
   baseloadMethod, gasRateByHh, elecHhRateByHh,
-  // No tMaxPreheatOffsetC, no occupancyThreshold — removed.
+  comfort_demand_scale,   // optional; slider value in % (e.g. 80 = 80%); undefined → scale=1
 }) {
   const warnings = [];
   const eta      = heatLoss?.boiler_efficiency_used ?? 0.9;
@@ -288,13 +289,21 @@ export function estimateScenarioConsumption({
     // per-HH cap and let the greedy dump a day's heat into a single half-hour.
     const hpCap = heatPumpModel.hp_capacity_kw;
 
+    // comfort_demand_scale: slider % relative to modelled comfort demand.
+    // scale = (pct/100) / ratio converts "% of comfort demand" → "multiplier on observed B_d".
+    // Defensive: when ratio is null the slider is hidden so scale should be 1; double-guard here.
+    const ratio = thermalCharacter?.underheat_ratio;
+    const demandScale = (comfort_demand_scale != null && ratio != null)
+      ? (comfort_demand_scale / 100) / Math.max(ratio, 0.001)
+      : 1.0;
+
     const sm = buildSmartScenario({
       scenario: 'smart_hp_hh', heating, external, copByHh, hpCapKw: hpCap,
-      gasRateByHh, elecHhRateByHh, eta, isAbsence,
+      gasRateByHh, elecHhRateByHh, eta, isAbsence, demandScale,
     });
     const hb = buildSmartScenario({
       scenario: 'hybrid_smart', heating, external, copByHh, hpCapKw: hpCap,
-      gasRateByHh, elecHhRateByHh, eta, isAbsence,
+      gasRateByHh, elecHhRateByHh, eta, isAbsence, demandScale,
     });
 
     if (sm.hpUndersized) {

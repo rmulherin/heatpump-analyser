@@ -804,6 +804,14 @@ Verdict: **APPROVE WITH EDITS** — algorithm transcription is faithful to the d
 **D1 — test-m5.mjs: 13 new assertions instead of estimated 7 (total 39 vs 33)**
 Tests M5X1, M5X5, and M5X6 each expanded into multiple sub-assertions (a/b, a/b/c, a/b/c/d respectively) to cover array-level checks alongside scalar checks. More coverage, not less. No production code change.
 
+### Phase 3
+
+**D3 — underheat-card placed after thermal-char-card, not between "Building thermal character" and "Smart tariff potential" as written**
+The plan said "between Building thermal character and Smart tariff potential", which maps to after thermal-char-card and before hp-model-card. Implemented exactly this: underheat-card sits at line 244, directly after thermal-char-card closes. The phrase "Smart tariff potential" was not a card title in the HTML; hp-model-card ("Heat pump sizing") is the card immediately following. No functional change — placement is semantically correct.
+
+**D4 — Heat to Comfort slider placed inside scenario-card, not in a "What If banner"**
+The plan referenced "What If banner" but no such element exists in the HTML. The slider was placed inside the scenario-card (replacing the removed #scenario-controls), which is where the preheat/occupancy sliders previously lived and is the logical location for a control that directly affects M7 scenario output.
+
 ### Phase 2
 
 **D2 — test-m7.mjs T18b: warning keyword broadened to "insufficient" as well as "undersized"**

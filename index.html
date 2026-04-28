@@ -240,6 +240,22 @@
         <button class="btn btn-primary" id="btn-recalculate-thermal-char">Recalculate</button>
       </section>
 
+      <!-- Module 5b: Underheat diagnostic (shown after thermal character runs) -->
+      <section class="card hidden" id="underheat-card">
+        <h2>Heating to comfort</h2>
+        <div class="results-summary" id="underheat-content">
+          <dl>
+            <dt>Annual heat consumption (observed)</dt>
+            <dd><span id="underheat-observed">—</span> kWh thermal</dd>
+            <dt>Modelled comfort demand at <span id="underheat-setpoint">—</span>°C</dt>
+            <dd><span id="underheat-modelled">—</span> kWh thermal</dd>
+            <dt>Ratio</dt>
+            <dd><span id="underheat-ratio-value">—</span><span class="underheat-light" id="underheat-light"></span></dd>
+          </dl>
+          <p class="underheat-narrative" id="underheat-narrative"></p>
+        </div>
+      </section>
+
       <!-- Module 6: Heat Pump Model -->
       <section class="card hidden" id="hp-model-card">
         <h2>Heat pump sizing</h2>
@@ -268,20 +284,15 @@
       <section class="card hidden" id="scenario-card">
         <h2>Energy by scenario</h2>
 
-        <div id="scenario-controls">
-          <label for="preheat-offset">Pre-heat ceiling above setpoint:</label>
-          <input id="preheat-offset" type="range" min="0.5" max="5.0" step="0.5" value="2.0">
-          <output id="preheat-offset-value">2.0</output>
-          <span class="control-unit">°C</span>
-
-          <label for="occupancy-threshold">Occupancy threshold:</label>
-          <input id="occupancy-threshold" type="range" min="0.1" max="0.9" step="0.05" value="0.50">
-          <output id="occupancy-threshold-value">0.50</output>
-
-          <p class="control-help">
-            Pre-heat ceiling caps how much the smart scenarios may overshoot the setpoint to
-            bank cheap-rate heat. The occupancy threshold sets which half-hourly slots are
-            treated as "must be at setpoint" based on your observed heating pattern.
+        <div class="form-group hidden" id="heat-to-comfort-group">
+          <label for="heat-to-comfort">Heat to comfort temperature
+            <span class="unit">% of modelled demand</span>
+          </label>
+          <input id="heat-to-comfort" type="range" min="0" max="150" step="5" value="100">
+          <output id="heat-to-comfort-value">100</output>
+          <p class="form-hint">
+            100% = the modelled demand to keep your home at setpoint year-round.
+            Lower values match your current usage pattern; higher values explore consistent extra heating.
           </p>
         </div>
 

@@ -192,10 +192,6 @@ const scenarioCard            = document.getElementById('scenario-card');
 const scenarioResults         = document.getElementById('scenario-results');
 const scenarioStatus          = document.getElementById('scenario-status');
 const scenarioSummary         = document.getElementById('scenario-summary');
-const preheatOffsetInput      = document.getElementById('preheat-offset');
-const preheatOffsetValue      = document.getElementById('preheat-offset-value');
-const occupancyThresholdInput = document.getElementById('occupancy-threshold');
-const occupancyThresholdValue = document.getElementById('occupancy-threshold-value');
 const btnRecalcScenario       = document.getElementById('btn-recalculate-scenario');
 
 // Financial analysis DOM references
@@ -242,13 +238,19 @@ copScalarInput.addEventListener('input', () => {
   copScalarValue.textContent = parseFloat(copScalarInput.value).toFixed(2);
 });
 
-// ===== Module 7: Live slider value display =====
+// ===== Heat to Comfort slider =====
 
-preheatOffsetInput.addEventListener('input', () => {
-  preheatOffsetValue.textContent = parseFloat(preheatOffsetInput.value).toFixed(1);
+const heatToComfortSlider = document.getElementById('heat-to-comfort');
+const heatToComfortOutput = document.getElementById('heat-to-comfort-value');
+
+heatToComfortSlider.addEventListener('input', () => {
+  heatToComfortOutput.value = heatToComfortSlider.value;
 });
-occupancyThresholdInput.addEventListener('input', () => {
-  occupancyThresholdValue.textContent = parseFloat(occupancyThresholdInput.value).toFixed(2);
+
+heatToComfortSlider.addEventListener('change', async () => {
+  await runScenarioConsumption(() => {}, () => {});
+  await runPricingEngine(() => {}, () => {});
+  await runFinancialAnalysis(() => {}, () => {});
 });
 
 // ===== Module 8: Rate param helpers =====
@@ -1150,6 +1152,41 @@ btnRecalculateHeatLoss.addEventListener('click', async () => {
   btnRecalculateHeatLoss.disabled = false;
 });
 
+// ===== Underheat diagnostic panel =====
+
+function displayUnderheatPanel(tc) {
+  const card = document.getElementById('underheat-card');
+  if (!tc || tc.underheat_status === 'insufficient_data') {
+    card.classList.add('hidden');
+    return;
+  }
+  card.classList.remove('hidden');
+
+  const fmtKwh = v => (Math.round(v / 100) * 100).toLocaleString('en-GB');
+  document.getElementById('underheat-observed').textContent = fmtKwh(tc.annual_observed_demand_kwh);
+  document.getElementById('underheat-modelled').textContent = fmtKwh(tc.annual_modelled_demand_kwh);
+  document.getElementById('underheat-setpoint').textContent = tc.setpoint_c.toFixed(1);
+  document.getElementById('underheat-ratio-value').textContent = `${Math.round(tc.underheat_ratio * 100)}%`;
+
+  const light = document.getElementById('underheat-light');
+  light.className = 'underheat-light ' + (tc.underheat_status === 'match' ? 'green' : 'amber');
+
+  document.getElementById('underheat-narrative').textContent = tc.underheat_narrative;
+}
+
+function setupHeatToComfortSlider(tc) {
+  const group  = document.getElementById('heat-to-comfort-group');
+  const ratio  = tc?.underheat_ratio;
+  if (ratio == null) {
+    group.classList.add('hidden');
+    return;
+  }
+  group.classList.remove('hidden');
+  const defaultPct = Math.min(150, Math.max(0, Math.round(ratio * 100)));
+  heatToComfortSlider.value = defaultPct;
+  heatToComfortOutput.value = defaultPct;
+}
+
 // ===== Module 5: Thermal Character Orchestration =====
 
 function displayThermalCharacterResults(result) {
@@ -1254,6 +1291,8 @@ async function runThermalCharacter(showProgressFn, showStatusFn) {
   setThermalCharacterResult(result);
   thermalCharCard.classList.remove('hidden');
   displayThermalCharacterResults(result);
+  displayUnderheatPanel(result);
+  setupHeatToComfortSlider(result);
 }
 
 btnRecalcThermalChar.addEventListener('click', async () => {
@@ -1465,7 +1504,9 @@ function displayScenarioResults(result) {
     let notes = '';
 
     if (key === 'smart_hp_hh' || key === 'hybrid_smart') {
-      if (validation_status.smart !== 'ok') {
+      if (validation_status.smart === 'hp_undersized') {
+        notes = 'HP undersized — resistive backup applied';
+      } else if (validation_status.smart !== 'ok') {
         notes = validation_status.smart.replace(/_/g, ' ');
       }
     } else if (key === 'dumb_hp_svt' || key === 'dumb_hp_hh') {
@@ -1502,6 +1543,10 @@ async function runScenarioConsumption(showProgressFn, showStatusFn) {
   const { gasRateByHh, elecHhRateByHh } = buildRateArrays(
     ingestion.consumption, externalResult.external, ingestion.tariff_rates);
 
+  const comfortScale = (thermalChar?.underheat_ratio != null)
+    ? parseFloat(heatToComfortSlider.value)
+    : undefined;
+
   let result;
   try {
     result = estimateScenarioConsumption({
@@ -1512,6 +1557,7 @@ async function runScenarioConsumption(showProgressFn, showStatusFn) {
       heatPumpModel:   hpModel,
       baseloadMethod:  baseloadResult.baseload_metadata.method,
       gasRateByHh, elecHhRateByHh,
+      comfort_demand_scale: comfortScale,
     });
   } catch (err) {
     showStatusFn('Scenario computation failed: ' + err.message, 'error');
