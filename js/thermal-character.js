@@ -38,6 +38,8 @@ const TC_CONFIG = {
   LONG_EVENT_OFF_HH:        48,
   TAU_SANITY_HIGH_RATIO:    2.0,
   TAU_SANITY_LOW_RATIO:     0.5,
+  UNDERHEAT_RATIO_LOW:      0.85,   // < this → "underheat"
+  UNDERHEAT_RATIO_HIGH:     1.15,   // > this → "overheat"
 };
 
 const WALL_CONSTRUCTION_RANGES = {
@@ -83,6 +85,79 @@ function computeC(T_at_restart, E_warmup_kwh, warmup_hh_count, T_outdoor_warmup,
   const delta_T       = setpointC - T_at_restart;
   if (E_net_kj > 0 && delta_T > 0.5) return E_net_kj / delta_T;
   return null;
+}
+
+// ===== Comfort-demand diagnostic helpers (Phase 1, smart-scenario-fixes-1) =====
+
+function computeModelledHeatingByHh(heating, external, heatLoss, setpointC) {
+  const htc = heatLoss?.htc_w_per_k;
+  const aperture = (heatLoss?.solar_correction_applied && heatLoss?.solar_aperture_m2 != null)
+    ? heatLoss.solar_aperture_m2 : 0;
+
+  const out = new Array(heating.length).fill(null);
+  if (htc == null || setpointC == null) return out;
+
+  for (let i = 0; i < heating.length; i++) {
+    const tc = external[i]?.temp_c;
+    if (tc == null) continue;
+    const lossKwh  = htc * Math.max(0, setpointC - tc) * 0.5 / 1000;
+    const solarKwh = aperture * (external[i]?.solar_w_m2 ?? 0) * 0.5 / 1000;
+    out[i] = Math.max(0, lossKwh - solarKwh);
+  }
+  return out;
+}
+
+function computeUnderheatStatus(modelledByHh, heating, eta) {
+  const annualModelled = modelledByHh.reduce((s, v) => v == null ? s : s + v, 0);
+  const annualObserved = heating.reduce(
+    (s, h) => (h.heating_kwh != null && !h.is_absence) ? s + h.heating_kwh * eta : s,
+    0,
+  );
+
+  // Insufficient_data covers: no modelled demand (null/0 — missing HTC/setpoint or no
+  // weather), AND no observed demand (null/0 — baseload separation found no heating
+  // signal). Either edge produces a degenerate ratio that should not surface narrative.
+  if (!annualModelled || annualModelled === 0 || !annualObserved || annualObserved === 0) {
+    return {
+      annual_modelled_demand_kwh: annualModelled || null,
+      annual_observed_demand_kwh: annualObserved || null,
+      underheat_ratio:  null,
+      underheat_status: 'insufficient_data',
+    };
+  }
+  const ratio = annualObserved / annualModelled;
+  const status = ratio < TC_CONFIG.UNDERHEAT_RATIO_LOW  ? 'underheat'
+               : ratio > TC_CONFIG.UNDERHEAT_RATIO_HIGH ? 'overheat'
+               : 'match';
+  return {
+    annual_modelled_demand_kwh: annualModelled,
+    annual_observed_demand_kwh: annualObserved,
+    underheat_ratio:  ratio,
+    underheat_status: status,
+  };
+}
+
+function buildUnderheatNarrative(underheat, setpointC) {
+  if (underheat.underheat_status === 'insufficient_data' || setpointC == null) return '';
+  const fmtKwh = v => (Math.round(v / 100) * 100).toLocaleString('en-GB');
+  const sp = setpointC.toFixed(1);
+  const { underheat_status: status, annual_modelled_demand_kwh: Y,
+          annual_observed_demand_kwh: X, underheat_ratio: ratio } = underheat;
+  if (status === 'underheat') {
+    const pctLess = Math.round((1 - ratio) * 100);
+    return `You appear to be underheating. To keep your home at ${sp}°C year-round `
+         + `you'd need around ${fmtKwh(Y)} kWh of heat. Your data shows you used around `
+         + `${fmtKwh(X)} kWh — about ${pctLess}% less. Many UK households underheat to `
+         + `manage gas bills; the cost figures below assume you continue your current `
+         + `heating pattern. To see what proper comfort would cost, use the Heat to Comfort `
+         + `slider in What If.`;
+  }
+  if (status === 'overheat') {
+    return `Your heating exceeds the modelled demand for ${sp}°C. Possible causes include `
+         + `open windows, heat lost to unoccupied spaces, or an HTC estimate that `
+         + `underestimates your true heat loss. The cost figures below reflect your actual usage.`;
+  }
+  return `Your heating matches the modelled comfort demand for ${sp}°C — your setpoint and your usage are consistent.`;
 }
 
 // ===== Step 1: Per-day summaries =====
@@ -459,6 +534,12 @@ export function estimateThermalCharacter(heating, external, heatLoss, baseloadMe
     validation_status,
     long_event_discarded_for_missing_user_temp: false,
     warnings: [],
+    modelled_heating_kwh_by_hh: null,
+    annual_modelled_demand_kwh: null,
+    annual_observed_demand_kwh: null,
+    underheat_ratio: null,
+    underheat_status: 'insufficient_data',
+    underheat_narrative: '',
   });
 
   if (baseloadMethod === 'no-gas') return nullResult('no_gas');
@@ -568,6 +649,10 @@ export function estimateThermalCharacter(heating, external, heatLoss, baseloadMe
     setpoint_c, thermal_mass_kj_per_k, thermal_mass_source, setpoint_days_used, thermal_mass_events_used
   );
 
+  const modelledByHh      = computeModelledHeatingByHh(heating, external, heatLoss, setpoint_c);
+  const underheat         = computeUnderheatStatus(modelledByHh, heating, eta);
+  const underheatNarrative = buildUnderheatNarrative(underheat, setpoint_c);
+
   return {
     setpoint_c,
     thermal_mass_kj_per_k,
@@ -590,5 +675,11 @@ export function estimateThermalCharacter(heating, external, heatLoss, baseloadMe
       ...(owWarn ? [owWarn] : []),
       ...(wcWarn ? [wcWarn] : []),
     ],
+    modelled_heating_kwh_by_hh: modelledByHh,
+    annual_modelled_demand_kwh: underheat.annual_modelled_demand_kwh,
+    annual_observed_demand_kwh: underheat.annual_observed_demand_kwh,
+    underheat_ratio:            underheat.underheat_ratio,
+    underheat_status:           underheat.underheat_status,
+    underheat_narrative:        underheatNarrative,
   };
 }

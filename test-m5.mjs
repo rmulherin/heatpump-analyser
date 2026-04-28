@@ -317,6 +317,136 @@ function makeDayHH(dayCount, heatingFn, tempFn, absenceFn) {
     'No wall construction warning for cavity_wall (C in [6000,20000])');
 }
 
+// ===== X tests — comfort-demand diagnostic (smart-scenario-fixes-1 phase 1) =====
+// Base dataset for X1–X5, X7: 90 days × 48 HH, SS heating in HH 40-47 per day,
+// all external temp = 5°C → setpoint inferred ≈ 19°C from sustained 8-HH blocks.
+
+// ===== M5.X1 — modelled demand units =====
+// HTC=250, setpoint=19, temp=5, no solar → loss = 250×14×0.5/1000 = 1.75 kWh
+{
+  const htc = 250, eta = 0.9, T_set = 19, T_out = 5;
+  const ssKwh = htc * (T_set - T_out) / (eta * 2000);
+  const { heating, external } = makeDayHH(90, (d, h) => (h >= 40) ? ssKwh : 0, () => T_out);
+  const result = estimateThermalCharacter(heating, external,
+    { htc_w_per_k: htc, boiler_efficiency_used: eta,
+      solar_correction_applied: false, solar_aperture_m2: null }, 'gas', null);
+  assert(result.modelled_heating_kwh_by_hh !== null, 'M5X1a',
+    'modelled_heating_kwh_by_hh present');
+  assert(result.modelled_heating_kwh_by_hh !== null &&
+         Math.abs(result.modelled_heating_kwh_by_hh[0] - 1.75) < 0.001,
+    'M5X1b', `per-HH modelled = 1.75 kWh (got ${result.modelled_heating_kwh_by_hh?.[0]?.toFixed(4)})`);
+}
+
+// ===== M5.X2 — solar gain subtracts =====
+// solar_aperture=5, solar_w_m2=200 → solar_gain=0.5 kWh → modelled = 1.25 kWh
+{
+  const htc = 250, eta = 0.9, T_set = 19, T_out = 5;
+  const ssKwh = htc * (T_set - T_out) / (eta * 2000);
+  const { heating, external } = makeDayHH(90, (d, h) => (h >= 40) ? ssKwh : 0, () => T_out);
+  external[0] = { temp_c: T_out, solar_w_m2: 200 };
+  const result = estimateThermalCharacter(heating, external,
+    { htc_w_per_k: htc, boiler_efficiency_used: eta,
+      solar_correction_applied: true, solar_aperture_m2: 5 }, 'gas', null);
+  assert(result.modelled_heating_kwh_by_hh !== null &&
+         Math.abs(result.modelled_heating_kwh_by_hh[0] - 1.25) < 0.001,
+    'M5X2', `solar offset: modelled = 1.25 kWh (got ${result.modelled_heating_kwh_by_hh?.[0]?.toFixed(4)})`);
+}
+
+// ===== M5.X3 — solar overshoot clamped to zero =====
+// solar_gain = 5×1000×0.5/1000 = 2.5 > 1.75 loss → clamp to 0
+{
+  const htc = 250, eta = 0.9, T_set = 19, T_out = 5;
+  const ssKwh = htc * (T_set - T_out) / (eta * 2000);
+  const { heating, external } = makeDayHH(90, (d, h) => (h >= 40) ? ssKwh : 0, () => T_out);
+  external[0] = { temp_c: T_out, solar_w_m2: 1000 };
+  const result = estimateThermalCharacter(heating, external,
+    { htc_w_per_k: htc, boiler_efficiency_used: eta,
+      solar_correction_applied: true, solar_aperture_m2: 5 }, 'gas', null);
+  assert(result.modelled_heating_kwh_by_hh !== null &&
+         result.modelled_heating_kwh_by_hh[0] === 0,
+    'M5X3', `solar overshoot clamped to 0 (got ${result.modelled_heating_kwh_by_hh?.[0]})`);
+}
+
+// ===== M5.X4 — outdoor temp ≥ setpoint → modelled = 0 =====
+{
+  const htc = 250, eta = 0.9, T_set = 19, T_out = 5;
+  const ssKwh = htc * (T_set - T_out) / (eta * 2000);
+  const { heating, external } = makeDayHH(90, (d, h) => (h >= 40) ? ssKwh : 0, () => T_out);
+  external[0] = { temp_c: 22 };   // 22°C ≥ setpoint 19°C → max(0, 19-22) = 0
+  const result = estimateThermalCharacter(heating, external,
+    { htc_w_per_k: htc, boiler_efficiency_used: eta }, 'gas', null);
+  assert(result.modelled_heating_kwh_by_hh !== null &&
+         result.modelled_heating_kwh_by_hh[0] === 0,
+    'M5X4', `temp ≥ setpoint → modelled = 0 (got ${result.modelled_heating_kwh_by_hh?.[0]})`);
+}
+
+// ===== M5.X5 — underheat ratio thresholds =====
+{
+  const htc = 250, eta = 0.9, T_set = 19, T_out = 5;
+  const ssKwh = htc * (T_set - T_out) / (eta * 2000);
+
+  // X5a — underheat: only 8 HH/day heated → observed ≪ modelled → ratio ≈ 0.17
+  {
+    const { heating, external } = makeDayHH(90, (d, h) => (h >= 40) ? ssKwh : 0, () => T_out);
+    const result = estimateThermalCharacter(heating, external,
+      { htc_w_per_k: htc, boiler_efficiency_used: eta }, 'gas', null);
+    assert(result.underheat_status === 'underheat', 'M5X5a',
+      `ratio < 0.85 → underheat (got status=${result.underheat_status}, ratio=${result.underheat_ratio?.toFixed(3)})`);
+  }
+
+  // X5b — match: all HH at SS → observed = modelled → ratio = 1.0
+  {
+    const { heating, external } = makeDayHH(90, () => ssKwh, () => T_out);
+    const result = estimateThermalCharacter(heating, external,
+      { htc_w_per_k: htc, boiler_efficiency_used: eta }, 'gas', null);
+    assert(result.underheat_status === 'match', 'M5X5b',
+      `ratio ≈ 1.0 → match (got status=${result.underheat_status}, ratio=${result.underheat_ratio?.toFixed(3)})`);
+  }
+
+  // X5c — overheat: even days at SS (setpoint 19°C), odd days at 1.5×SS (est 26°C, clipped)
+  // ratio = (45×48×1.75 + 45×48×2.625) / (90×48×1.75) ≈ 1.25 → overheat
+  {
+    const { heating, external } = makeDayHH(90,
+      (d, h) => (d % 2 === 0) ? ssKwh : 1.5 * ssKwh,
+      () => T_out,
+    );
+    const result = estimateThermalCharacter(heating, external,
+      { htc_w_per_k: htc, boiler_efficiency_used: eta }, 'gas', null);
+    assert(result.underheat_status === 'overheat', 'M5X5c',
+      `ratio > 1.15 → overheat (got status=${result.underheat_status}, ratio=${result.underheat_ratio?.toFixed(3)})`);
+  }
+}
+
+// ===== M5.X6 — null HTC passthrough =====
+{
+  const { heating, external } = makeFlatHH(48, () => 1.0, () => 5);
+  const result = estimateThermalCharacter(heating, external,
+    { htc_w_per_k: null, boiler_efficiency_used: 0.9 }, 'gas', null);
+  assert(result.underheat_status === 'insufficient_data', 'M5X6a',
+    "null HTC → underheat_status = 'insufficient_data'");
+  assert(result.underheat_ratio === null, 'M5X6b',
+    'null HTC → underheat_ratio = null');
+  assert(result.annual_modelled_demand_kwh === null, 'M5X6c',
+    'null HTC → annual_modelled_demand_kwh = null');
+  assert(result.modelled_heating_kwh_by_hh === null, 'M5X6d',
+    'null HTC → modelled_heating_kwh_by_hh = null');
+}
+
+// ===== M5.X7 — solar_correction_applied = false → no solar gain =====
+{
+  const htc = 250, eta = 0.9, T_set = 19, T_out = 5;
+  const ssKwh = htc * (T_set - T_out) / (eta * 2000);
+  const { heating, external } = makeDayHH(90, (d, h) => (h >= 40) ? ssKwh : 0, () => T_out);
+  external[0] = { temp_c: T_out, solar_w_m2: 200 };
+  const result = estimateThermalCharacter(heating, external,
+    { htc_w_per_k: htc, boiler_efficiency_used: eta,
+      solar_correction_applied: false, solar_aperture_m2: 5 }, 'gas', null);
+  // flag false → aperture = 0 → no solar reduction → modelled stays at 1.75
+  assert(result.modelled_heating_kwh_by_hh !== null &&
+         Math.abs(result.modelled_heating_kwh_by_hh[0] - 1.75) < 0.001,
+    'M5X7', `solar flag false → modelled = 1.75 kWh (got ${result.modelled_heating_kwh_by_hh?.[0]?.toFixed(4)})`);
+}
+
 // ===== Summary =====
 console.log('');
 console.log(`Results: ${passed} passed, ${failed} failed`);
