@@ -737,4 +737,14 @@ Verdict: ⚠ APPROVED WITH EDITS — Sonnet applies Edits 1–7 to plan body bef
 
 ## Implementation Deviations
 
-[To be completed post-implementation]
+**D1 — `updatePolicyOutput`, `updateQuotesOutput`, `computeThresholdCop` called from `runFinancialAnalysis`.**
+Plan Step 9 implies outputs are updated from individual update functions called after each chain run. Implemented by adding all three calls inside `runFinancialAnalysis` directly (after `displayFinancialResults`). This means they run on every M9 execution — including Policy Reform, COP recalc, and Quotes updates — without requiring explicit calls in each async wrapper. Cleaner and ensures consistency.
+
+**D2 — `computeGasDisconnectDelta()` removed as a standalone function; `computeGasDisconnectComponents()` is the single source.**
+Plan Step 9 defines both `computeGasDisconnectDelta()` and components separately. Implemented `computeGasDisconnectComponents()` as the canonical function; the simple delta is computed inline where needed.
+
+**D3 — `_baseCasePayback` pattern for policy output comparison.**
+Plan shows "Compared with Y years at the Ofgem cap base case" as a second line. Implemented via `_baseCasePayback` module-level variable set when ofgem-apr26 preset is active. When preset is deactivated, stored value is used for comparison. No recompute needed.
+
+**D4 — Threshold COP iteration normalises from current COP scalar.**
+Plan assumes threshold run uses `elec_kwh[i] / scalar` directly from the scenario result, implying scalar=1.0. Implementation normalises to scalar=1.0 baseline first: `baselineElec[k][i] = elec_kwh[i] * currentScalar`, then `scaledElec[i] = baselineElec[i] / testScalar`. This is mathematically equivalent when currentScalar=1.0 (initial run) and correct when user has changed the slider before threshold is computed.

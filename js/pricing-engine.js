@@ -76,19 +76,24 @@ export function prepareRates(ingestion, external, params) {
     const ts     = ingestion.consumption[i].timestamp;
     const tsDate = new Date(ts);
 
-    // Gas rate lookup — forward scan through sorted windows
-    let gasRate = null;
-    for (const w of gasWindows) {
-      if (new Date(w.valid_from) > tsDate) break;
-      if (!w.valid_to || new Date(w.valid_to) > tsDate) { gasRate = w.rate_p_kwh; break; }
-    }
-    if (gasRate === null) {
-      // Gap in tariff history — fall back to nearest window before this timestamp
-      gasRate = gasWindows.findLast(w => new Date(w.valid_from) <= tsDate)?.rate_p_kwh
-             ?? gasWindows[0]?.rate_p_kwh ?? 0;
-      if (!warnedGapTariff) {
-        warnings.push('Gap in gas tariff history — using nearest rate for affected periods.');
-        warnedGapTariff = true;
+    // Gas rate — use override if provided (Policy Reform what-if), else tariff windowing
+    let gasRate;
+    if (params.gas_rate_override_p_kwh != null) {
+      gasRate = params.gas_rate_override_p_kwh;
+    } else {
+      // Forward scan through sorted windows
+      gasRate = null;
+      for (const w of gasWindows) {
+        if (new Date(w.valid_from) > tsDate) break;
+        if (!w.valid_to || new Date(w.valid_to) > tsDate) { gasRate = w.rate_p_kwh; break; }
+      }
+      if (gasRate === null) {
+        gasRate = gasWindows.findLast(w => new Date(w.valid_from) <= tsDate)?.rate_p_kwh
+               ?? gasWindows[0]?.rate_p_kwh ?? 0;
+        if (!warnedGapTariff) {
+          warnings.push('Gap in gas tariff history — using nearest rate for affected periods.');
+          warnedGapTariff = true;
+        }
       }
     }
     gas_rate_by_hh[i] = gasRate;

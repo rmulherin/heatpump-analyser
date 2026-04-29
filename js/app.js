@@ -78,6 +78,7 @@ import {
 const OFGEM_CAP_ELEC_P_KWH  = 24.67;
 const OFGEM_CAP_GAS_P_KWH   = 5.70;
 const OFGEM_CAP_VALID_FROM  = '2026-04-01';
+const COP_BASELINE_AT_7C    = 2.91;  // EoH field-trial median COP at 7°C (M6 baseline)
 
 // ===== Module 3 — Label maps =====
 
@@ -193,9 +194,11 @@ const hpModelResults     = document.getElementById('hp-model-results');
 const hpModelStatus      = document.getElementById('hp-model-status');
 const hpModelSummary     = document.getElementById('hp-model-summary');
 const hpCopTableBody     = document.querySelector('#hp-cop-table tbody');
-const copScalarInput     = document.getElementById('cop-scalar');
-const copScalarValue     = document.getElementById('cop-scalar-value');
-const btnRecalcHpModel   = document.getElementById('btn-recalculate-hp-model');
+const copScalarWhatIfInput = document.getElementById('cop-scalar-what-if');
+const copScalarDisplay     = document.getElementById('cop-scalar-display');
+const btnRecalcCopWhatIf   = document.getElementById('btn-recalc-cop-what-if');
+const copPaybackLine       = document.getElementById('cop-payback-line');
+const copThresholdLine     = document.getElementById('cop-threshold-line');
 
 // Scenario consumption DOM references
 const scenarioCard            = document.getElementById('scenario-card');
@@ -205,26 +208,16 @@ const scenarioSummary         = document.getElementById('scenario-summary');
 const btnRecalcScenario       = document.getElementById('btn-recalculate-scenario');
 
 // Financial analysis DOM references
-const financialParamsCard  = document.getElementById('financial-params-card');
 const financialCard        = document.getElementById('financial-card');
 const financialResults     = document.getElementById('financial-results');
 const financialStatus      = document.getElementById('financial-status');
 const financialSummary     = document.getElementById('financial-summary');
-const installFullHpInput   = document.getElementById('install-full-hp');
-const busGrantInput        = document.getElementById('bus-grant');
-const avoidedAcInput       = document.getElementById('avoided-ac');
-const btnRecalcFinancial   = document.getElementById('btn-recalculate-financial');
 
 // Pricing engine DOM references
-const pricingParamsCard  = document.getElementById('pricing-params-card');
 const pricingCard        = document.getElementById('pricing-card');
 const pricingResults     = document.getElementById('pricing-results');
 const pricingStatus      = document.getElementById('pricing-status');
 const pricingSummary     = document.getElementById('pricing-summary');
-const svtRateInput       = document.getElementById('svt-rate');
-const elecStandingInput  = document.getElementById('elec-standing-charge');
-const gasStandingInput   = document.getElementById('gas-standing-charge');
-const btnRecalcPricing   = document.getElementById('btn-recalculate-pricing');
 
 // Verdict card DOM references
 const verdictCard      = document.getElementById('verdict-card');
@@ -236,16 +229,34 @@ const droveCard        = document.getElementById('drove-card');
 // Section banner DOM references
 const bannerYourHome      = document.getElementById('section-banner-your-home');
 const bannerCostBreakdown = document.getElementById('section-banner-cost-breakdown');
-const bannerAssumptions   = document.getElementById('section-banner-assumptions');
+
+// What If section DOM references
+const sectionBannerWhatIf  = document.getElementById('section-banner-what-if');
+const whatIfTiles          = document.getElementById('what-if-tiles');
+// Policy Reform
+const wiSvtRateInput       = document.getElementById('wi-svt-rate');
+const wiGasRateInput       = document.getElementById('wi-gas-rate');
+const wiElecStandingInput  = document.getElementById('wi-elec-standing');
+const wiGasStandingInput   = document.getElementById('wi-gas-standing');
+const policyOutput         = document.getElementById('policy-output');
+const wiLevyElecDeltaInput = document.getElementById('wi-levy-elec-delta');
+const wiLevyGasDeltaInput  = document.getElementById('wi-levy-gas-delta');
+// Get Your Quotes
+const wiInstallCostInput   = document.getElementById('wi-install-cost');
+const wiGrantInput         = document.getElementById('wi-grant');
+const wiAvoidedAcInput     = document.getElementById('wi-avoided-ac');
+const quotesOutput         = document.getElementById('quotes-output');
+// Disconnect gas
+const disconnectGasToggle  = document.getElementById('disconnect-gas-toggle');
+const gasSplitGroup        = document.getElementById('gas-split-group');
+const gasSplitSlider       = document.getElementById('gas-split-slider');
+const gasSplitDisplay      = document.getElementById('gas-split-display');
 
 // Methodology disclosure DOM reference
 const methodologyDisclosure = document.getElementById('methodology-disclosure');
 
-// ===== Module 6: Live slider value display =====
-
-copScalarInput.addEventListener('input', () => {
-  copScalarValue.textContent = parseFloat(copScalarInput.value).toFixed(2);
-});
+// Alias for M6 chain (reads COP scalar from the What If tile)
+const copScalarInput = copScalarWhatIfInput;
 
 // ===== Heat to Comfort slider =====
 
@@ -270,19 +281,21 @@ function parseRate(input, fallback) {
 }
 
 function readRateParams() {
+  const gasRate = parseFloat(wiGasRateInput.value);
   return {
-    svt_rate_p_per_kwh:    parseRate(svtRateInput,      PE_CONFIG.SVT_RATE_DEFAULT_P),
-    svt_standing_charge_p: parseRate(elecStandingInput, PE_CONFIG.ELEC_STANDING_DEFAULT_P_DAY),
-    gas_standing_charge_p: parseRate(gasStandingInput,  PE_CONFIG.GAS_STANDING_DEFAULT_P_DAY),
-    ofgem_cap_elec_p_kwh:  OFGEM_CAP_ELEC_P_KWH,
+    svt_rate_p_per_kwh:      parseRate(wiSvtRateInput,      PE_CONFIG.SVT_RATE_DEFAULT_P),
+    svt_standing_charge_p:   parseRate(wiElecStandingInput, PE_CONFIG.ELEC_STANDING_DEFAULT_P_DAY),
+    gas_standing_charge_p:   parseRate(wiGasStandingInput,  PE_CONFIG.GAS_STANDING_DEFAULT_P_DAY),
+    ofgem_cap_elec_p_kwh:    OFGEM_CAP_ELEC_P_KWH,
+    gas_rate_override_p_kwh: Number.isFinite(gasRate) ? gasRate : null,
   };
 }
 
 function readCapitalParams() {
   return {
-    installation_cost_full_hp_gbp: parseRate(installFullHpInput, FA_CONFIG.INSTALLATION_FULL_HP_DEFAULT_GBP),
-    bus_grant_gbp:                 parseRate(busGrantInput,       FA_CONFIG.BUS_GRANT_DEFAULT_GBP),
-    avoided_ac_cost_gbp:           parseRate(avoidedAcInput,      FA_CONFIG.AVOIDED_AC_DEFAULT_GBP),
+    installation_cost_full_hp_gbp: parseRate(wiInstallCostInput, FA_CONFIG.INSTALLATION_FULL_HP_DEFAULT_GBP),
+    bus_grant_gbp:                 parseRate(wiGrantInput,        FA_CONFIG.BUS_GRANT_DEFAULT_GBP),
+    avoided_ac_cost_gbp:           parseRate(wiAvoidedAcInput,    FA_CONFIG.AVOIDED_AC_DEFAULT_GBP),
   };
 }
 
@@ -1452,24 +1465,6 @@ async function runHeatPumpModel(showProgressFn, showStatusFn) {
   displayHeatPumpModelResults(result);
 }
 
-btnRecalcHpModel.addEventListener('click', async () => {
-  btnRecalcHpModel.disabled = true;
-  hpModelStatus.innerHTML  = '';
-  hpModelSummary.innerHTML = '';
-  hpCopTableBody.innerHTML = '';
-  hpModelResults.classList.add('hidden');
-  await runHeatPumpModel(
-    () => {},
-    (msg, type) => {
-      const div = document.createElement('div');
-      div.className = `status-msg ${type}`;
-      div.textContent = msg;
-      hpModelStatus.appendChild(div);
-    }
-  );
-  btnRecalcHpModel.disabled = false;
-});
-
 // ===== Module 7: Scenario Consumption =====
 
 function buildRateArrays(consumption, external, tariffRates) {
@@ -1633,8 +1628,11 @@ const SCENARIO_DISPLAY_NAMES = {
 function prefillRateInputs(tariffRates) {
   const gasArr  = tariffRates.gas;
   const elecArr = tariffRates.electricity;
-  if (gasArr.length)  gasStandingInput.value  = gasArr[gasArr.length - 1].standing_p_day.toFixed(2);
-  if (elecArr.length) elecStandingInput.value = elecArr[elecArr.length - 1].standing_p_day.toFixed(2);
+  if (gasArr.length)  wiGasStandingInput.value  = gasArr[gasArr.length - 1].standing_p_day.toFixed(2);
+  if (elecArr.length) wiElecStandingInput.value = elecArr[elecArr.length - 1].standing_p_day.toFixed(2);
+  // Pre-fill base rates with Ofgem cap defaults (override with "historical" preset later)
+  if (!wiSvtRateInput.value) wiSvtRateInput.value = OFGEM_CAP_ELEC_P_KWH;
+  if (!wiGasRateInput.value) wiGasRateInput.value = OFGEM_CAP_GAS_P_KWH;
 }
 
 function displayPricingResults(pricingResult) {
@@ -1709,10 +1707,9 @@ function displayPricingResults(pricingResult) {
 
   pricingResults.classList.remove('hidden');
   pricingCard.classList.remove('hidden');
-  pricingParamsCard.classList.remove('hidden');
-  btnRecalcPricing.classList.remove('hidden');
   bannerCostBreakdown.classList.remove('hidden');
-  bannerAssumptions.classList.remove('hidden');
+  sectionBannerWhatIf.classList.remove('hidden');
+  whatIfTiles.classList.remove('hidden');
 }
 
 async function runPricingEngine(showProgressFn, showStatusFn) {
@@ -1751,23 +1748,6 @@ async function runPricingEngine(showProgressFn, showStatusFn) {
   for (const w of rateMetadata.warnings)  showStatusFn(w, 'warning');
   for (const w of pricingResult.warnings) showStatusFn(w, 'warning');
 }
-
-btnRecalcPricing.addEventListener('click', async () => {
-  btnRecalcPricing.disabled = true;
-  pricingStatus.innerHTML   = '';
-  pricingSummary.innerHTML  = '';
-  pricingResults.classList.add('hidden');
-  await runPricingEngine(
-    () => {},
-    (msg, type) => {
-      const div = document.createElement('div');
-      div.className = `status-msg ${type}`;
-      div.textContent = msg;
-      pricingStatus.appendChild(div);
-    }
-  );
-  btnRecalcPricing.disabled = false;
-});
 
 // ===== Module 9: Financial Analysis =====
 
@@ -1850,8 +1830,6 @@ function displayFinancialResults(result) {
 
   financialResults.classList.remove('hidden');
   financialCard.classList.remove('hidden');
-  financialParamsCard.classList.remove('hidden');
-  btnRecalcFinancial.classList.remove('hidden');
 
   const heatLossRes = getHeatLossResult();
   const rateMeta    = getRateMetadata();
@@ -2190,25 +2168,307 @@ async function runFinancialAnalysis(showProgressFn, showStatusFn) {
   setFinancialResult(result);
 
   displayFinancialResults(result);
+  computeThresholdCop();
+  updatePolicyOutput();
+  updateQuotesOutput();
 
   for (const w of result.warnings) showStatusFn(w, 'warning');
 }
 
-btnRecalcFinancial.addEventListener('click', async () => {
-  btnRecalcFinancial.disabled = true;
-  financialStatus.innerHTML   = '';
-  financialSummary.innerHTML  = '';
-  financialResults.classList.add('hidden');
-  await runFinancialAnalysis(
+// ===== Module 10c: What If section =====
+
+// ----- Policy Reform: preset buttons -----
+document.querySelectorAll('#tile-policy-and-tech .preset-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#tile-policy-and-tech .preset-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const preset = btn.dataset.preset;
+    if (preset === 'ofgem-apr26') {
+      wiSvtRateInput.value = OFGEM_CAP_ELEC_P_KWH;
+      wiGasRateInput.value = OFGEM_CAP_GAS_P_KWH;
+    } else if (preset === 'levy-removal') {
+      const elecDelta = parseFloat(wiLevyElecDeltaInput.value);
+      const gasDelta  = parseFloat(wiLevyGasDeltaInput.value);
+      wiSvtRateInput.value = (OFGEM_CAP_ELEC_P_KWH - (Number.isFinite(elecDelta) ? elecDelta : 2.0)).toFixed(2);
+      wiGasRateInput.value = (OFGEM_CAP_GAS_P_KWH  + (Number.isFinite(gasDelta)  ? gasDelta  : 0.5)).toFixed(2);
+    } else if (preset === 'historical') {
+      const ingestion = getIngestionResult();
+      const elecRates = ingestion?.tariff_rates?.electricity;
+      const gasRates  = ingestion?.tariff_rates?.gas;
+      wiSvtRateInput.value = elecRates?.length ? elecRates[elecRates.length - 1].rate_p_kwh : OFGEM_CAP_ELEC_P_KWH;
+      wiGasRateInput.value = gasRates?.length  ? gasRates[gasRates.length - 1].rate_p_kwh   : OFGEM_CAP_GAS_P_KWH;
+    }
+    runPolicyReformUpdate();
+  });
+});
+
+[wiSvtRateInput, wiGasRateInput, wiElecStandingInput, wiGasStandingInput].forEach(input => {
+  input.addEventListener('input', () => {
+    document.querySelectorAll('#tile-policy-and-tech .preset-btn').forEach(b => b.classList.remove('active'));
+    runPolicyReformUpdate();
+  });
+});
+
+async function runPolicyReformUpdate() {
+  await runPricingEngine(() => {}, () => {});
+  await runFinancialAnalysis(() => {}, () => {});
+}
+
+let _baseCasePayback = null;
+
+function updatePolicyOutput() {
+  const financialResult = getFinancialResult();
+  if (!financialResult) { policyOutput.innerHTML = ''; return; }
+
+  const isBase = document.querySelector('#tile-policy-and-tech .preset-btn[data-preset="ofgem-apr26"]')
+                        ?.classList.contains('active');
+
+  const order = ['smart_hp_hh', 'dumb_hp_hh', 'dumb_hp_svt'];
+  let bestPayback = Infinity;
+  for (const k of order) {
+    const sc = financialResult.scenarios[k];
+    if (sc?.payback_status === 'ok' && sc.payback_years !== null && sc.payback_years < bestPayback) {
+      bestPayback = sc.payback_years;
+    }
+  }
+
+  if (isBase) {
+    _baseCasePayback = bestPayback === Infinity ? null : bestPayback;
+    policyOutput.innerHTML = '<p>Same as the results above — this is the base case.</p>';
+    return;
+  }
+
+  let line1;
+  if (bestPayback === Infinity) {
+    line1 = 'At these rates, no heat pump scenario shows a payback.';
+  } else if (bestPayback > 40) {
+    line1 = 'At these rates, your best scenario payback is more than 40 years.';
+  } else {
+    line1 = `At these rates, your best scenario payback is ${bestPayback.toFixed(1)} years.`;
+  }
+
+  let comparison = '';
+  if (_baseCasePayback !== null) {
+    comparison = ` Compared with ${_baseCasePayback.toFixed(1)} years at the Ofgem cap base case.`;
+  }
+
+  policyOutput.innerHTML = `<p>${line1}${comparison}</p>`;
+}
+
+// ----- Wait for Technology: COP slider live display -----
+copScalarWhatIfInput.addEventListener('input', () => {
+  const scalar = parseFloat(copScalarWhatIfInput.value);
+  const copAt7 = (scalar * COP_BASELINE_AT_7C).toFixed(1);
+  copScalarDisplay.textContent = `${scalar.toFixed(2)}× (COP ${copAt7} at 7°C)`;
+});
+
+// ----- Wait for Technology: Recalculate button (M6→M7→M8→M9 chain) -----
+btnRecalcCopWhatIf.addEventListener('click', async () => {
+  btnRecalcCopWhatIf.disabled = true;
+  hpModelStatus.innerHTML  = '';
+  hpModelSummary.innerHTML = '';
+  hpCopTableBody.innerHTML = '';
+  hpModelResults.classList.add('hidden');
+  await runHeatPumpModel(
     () => {},
     (msg, type) => {
       const div = document.createElement('div');
       div.className = `status-msg ${type}`;
       div.textContent = msg;
-      financialStatus.appendChild(div);
+      hpModelStatus.appendChild(div);
     }
   );
-  btnRecalcFinancial.disabled = false;
+  await runScenarioConsumption(() => {}, () => {});
+  await runPricingEngine(() => {}, () => {});
+  await runFinancialAnalysis(() => {}, () => {});
+  btnRecalcCopWhatIf.disabled = false;
+});
+
+// ----- Threshold COP computation -----
+let _thresholdCopScalar = null;
+
+function computeThresholdCop() {
+  const scenarioResult = getScenarioConsumptionResult();
+  const rateMetadata   = getRateMetadata();
+  if (!scenarioResult || !rateMetadata) return;
+
+  const currentScalar = parseFloat(copScalarWhatIfInput.value) || 1.0;
+  const capitalParams = readCapitalParams();
+  const rateParams    = readRateParams();
+  const hpKeys        = ['dumb_hp_svt', 'dumb_hp_hh', 'smart_hp_hh'];
+  const baseline      = scenarioResult.scenarios;
+
+  // Normalise to scalar=1.0 by multiplying back by current scalar
+  const baselineElec = {};
+  for (const k of hpKeys) {
+    baselineElec[k] = baseline[k].elec_kwh.map(v => (v ?? 0) * currentScalar);
+  }
+
+  let thresholdScalar = null;
+  for (let raw = 60; raw <= 150; raw += 5) {
+    const testScalar = raw / 100;
+    const scaledScenarios = {};
+    for (const k of Object.keys(baseline)) {
+      scaledScenarios[k] = hpKeys.includes(k)
+        ? { gas_kwh: baseline[k].gas_kwh, elec_kwh: baselineElec[k].map(v => v / testScalar) }
+        : baseline[k];
+    }
+    const scaledScenarioResult = { scenarios: scaledScenarios, validation_status: scenarioResult.validation_status };
+    const scaledPricing   = computeCosts(rateMetadata, scaledScenarioResult, rateParams, getBaseloadResult()?.heating ?? null);
+    const scaledFinancial = analyseFinancials(scaledPricing, rateMetadata, scaledScenarioResult, capitalParams);
+
+    let bestPayback = Infinity;
+    for (const k of hpKeys) {
+      const sc = scaledFinancial.scenarios[k];
+      if (sc?.payback_status === 'ok' && sc.payback_years !== null && sc.payback_years < bestPayback) {
+        bestPayback = sc.payback_years;
+      }
+    }
+    if (bestPayback <= 10) {
+      thresholdScalar = testScalar;
+      break;
+    }
+  }
+
+  _thresholdCopScalar = thresholdScalar;
+
+  if (thresholdScalar !== null) {
+    const copAt7 = (thresholdScalar * COP_BASELINE_AT_7C).toFixed(1);
+    copThresholdLine.textContent = `Your payback drops below 10 years at a COP of ${copAt7} (${thresholdScalar.toFixed(2)}× the field-trial median).`;
+  } else {
+    copThresholdLine.textContent = 'Your payback stays above 10 years across the full range of modelled performance.';
+  }
+}
+
+// ----- Get Your Quotes: preset buttons -----
+document.querySelectorAll('#tile-get-quotes .preset-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#tile-get-quotes .preset-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const preset = btn.dataset.preset;
+    if (preset === 'bus-current')  wiGrantInput.value = 7500;
+    if (preset === 'bus-none')     wiGrantInput.value = 0;
+    if (preset === 'bus-enhanced') wiGrantInput.value = 10000;
+    runQuotesUpdate();
+  });
+});
+
+[wiInstallCostInput, wiGrantInput, wiAvoidedAcInput].forEach(input => {
+  input.addEventListener('input', () => {
+    document.querySelectorAll('#tile-get-quotes .preset-btn').forEach(b => b.classList.remove('active'));
+    runQuotesUpdate();
+  });
+});
+
+async function runQuotesUpdate() {
+  await runFinancialAnalysis(() => {}, () => {});
+}
+
+function updateQuotesOutput() {
+  const financialResult = getFinancialResult();
+  if (!financialResult) { quotesOutput.innerHTML = ''; return; }
+
+  const components = computeGasDisconnectComponents();
+  const showDisconnect = disconnectGasToggle.checked && components !== null;
+
+  const netInv = Math.max(0,
+    (parseFloat(wiInstallCostInput.value) || 0)
+    - (parseFloat(wiGrantInput.value) || 0)
+    - (parseFloat(wiAvoidedAcInput.value) || 0)
+  );
+
+  const rows = [
+    { key: 'smart_hp_hh', label: 'Smart HP (half-hourly)' },
+    { key: 'dumb_hp_svt', label: 'HP (flat rate)' },
+  ];
+
+  let html = '<table style="width:100%;border-collapse:collapse;font-size:0.9rem;margin-top:0.5rem;">';
+  html += '<thead><tr><th style="text-align:left;padding:0.25rem 0;font-weight:600;">Scenario</th>';
+  if (showDisconnect) {
+    html += '<th style="text-align:right;padding:0.25rem 0.5rem;font-weight:600;">Gas retained</th>';
+    html += '<th style="text-align:right;padding:0.25rem 0;font-weight:600;">Gas disconnected</th>';
+  } else {
+    html += '<th style="text-align:right;padding:0.25rem 0;font-weight:600;">Payback</th>';
+  }
+  html += '</tr></thead><tbody>';
+
+  for (const { key, label } of rows) {
+    const sc      = financialResult.scenarios[key];
+    const payback = fmtPayback(sc?.payback_status, sc?.payback_years);
+    const isBold  = sc?.payback_status === 'ok' && (sc?.payback_years ?? Infinity) <= 20;
+
+    html += '<tr>';
+    html += `<td style="padding:0.2rem 0;">${isBold ? `<strong>${label}</strong>` : label}</td>`;
+
+    if (showDisconnect) {
+      const retainedCell = isBold ? `<strong>${payback}</strong>` : payback;
+      let disconnectedCell;
+      if (sc?.annual_saving_gbp !== null && sc?.annual_saving_gbp !== undefined) {
+        const delta        = components.gasSaving - components.elecAdded;
+        const adjustedSave = (sc.annual_saving_gbp ?? 0) + delta;
+        const adjPayback   = adjustedSave > 0 ? netInv / adjustedSave : Infinity;
+        const adjFmt       = adjPayback === Infinity ? 'No saving' : adjPayback > 40 ? '>40 years' : `${adjPayback.toFixed(1)} yrs`;
+        const adjBold      = adjPayback <= 20;
+        disconnectedCell   = adjBold ? `<strong>${adjFmt}</strong>` : adjFmt;
+      } else {
+        disconnectedCell = '—';
+      }
+      html += `<td style="text-align:right;padding:0.2rem 0.5rem;">${retainedCell}</td>`;
+      html += `<td style="text-align:right;padding:0.2rem 0;">${disconnectedCell}</td>`;
+    } else {
+      html += `<td style="text-align:right;padding:0.2rem 0;">${isBold ? `<strong>${payback}</strong>` : payback}</td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+
+  if (showDisconnect) {
+    const net = components.gasSaving - components.elecAdded;
+    if (net > 0) {
+      html += `<p style="margin-top:0.5rem;font-size:0.85rem;">Disconnecting gas saves £${components.gasSaving.toFixed(0)}/year in gas costs; adds £${components.elecAdded.toFixed(0)}/year in electricity. Net annual benefit: £${Math.abs(net).toFixed(0)}.</p>`;
+    } else if (net < 0) {
+      html += `<p style="margin-top:0.5rem;font-size:0.85rem;">Disconnecting gas would add £${Math.abs(net).toFixed(0)}/year at these rates.</p>`;
+    }
+  }
+
+  quotesOutput.innerHTML = html;
+}
+
+function computeGasDisconnectComponents() {
+  const baseload = getBaseloadResult();
+  const baseloadGasKwh = baseload?.heating
+    ? baseload.heating.reduce((s, h) => s + (h.baseload_kwh ?? 0), 0)
+    : null;
+  if (!baseloadGasKwh) return null;
+
+  const COP_DHW   = 2.5;
+  const COP_OTHER = 1.0;
+
+  const gasRateP  = parseFloat(wiGasRateInput.value)     || OFGEM_CAP_GAS_P_KWH;
+  const gasScP    = parseFloat(wiGasStandingInput.value) || 0;
+  const elecRateP = parseFloat(wiSvtRateInput.value)     || OFGEM_CAP_ELEC_P_KWH;
+
+  const gasSaving     = (baseloadGasKwh * gasRateP / 100) + (gasScP * 365 / 100);
+  const hwFraction    = parseInt(gasSplitSlider.value) / 100;
+  const otherFraction = 1 - hwFraction;
+  const dhwElecKwh    = baseloadGasKwh * hwFraction    / COP_DHW;
+  const otherElecKwh  = baseloadGasKwh * otherFraction / COP_OTHER;
+  const elecAdded     = (dhwElecKwh + otherElecKwh) * elecRateP / 100;
+
+  return { gasSaving, elecAdded };
+}
+
+// ----- Disconnect gas toggle -----
+disconnectGasToggle.addEventListener('change', () => {
+  gasSplitGroup.hidden = !disconnectGasToggle.checked;
+  updateQuotesOutput();
+});
+
+// ----- Gas split slider -----
+gasSplitSlider.addEventListener('input', () => {
+  const hw = parseInt(gasSplitSlider.value);
+  gasSplitDisplay.textContent = `${hw}% hot water · ${100 - hw}% other`;
+  updateQuotesOutput();
 });
 
 // ===== CSV Helpers =====

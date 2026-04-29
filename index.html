@@ -330,15 +330,6 @@
       <!-- Module 6: Heat Pump Model -->
       <section class="card hidden" id="hp-model-card">
         <h2>Heat pump sizing</h2>
-        <div id="hp-model-controls">
-          <label for="cop-scalar">COP performance setting:</label>
-          <input id="cop-scalar" type="range" min="0.5" max="1.5" step="0.05" value="1.0">
-          <output id="cop-scalar-value">1.00</output>
-          <p class="control-help">
-            1.00 = average UK installed performance (EoH field trial median).
-            Adjust to model a higher- or lower-performing unit.
-          </p>
-        </div>
         <div id="hp-model-results" class="hidden">
           <div class="status-area" id="hp-model-status"></div>
           <dl id="hp-model-summary" class="summary-dl"></dl>
@@ -348,7 +339,6 @@
             <tbody></tbody>
           </table>
         </div>
-        <button class="btn btn-primary" id="btn-recalculate-hp-model">Recalculate with updated COP setting</button>
       </section>
 
       <!-- Module 7: Scenario Consumption -->
@@ -401,7 +391,6 @@
       <div id="pricing-results" class="hidden">
         <div id="pricing-summary"></div>
       </div>
-      <button class="btn btn-primary hidden" id="btn-recalculate-pricing">Recalculate costs</button>
     </section>
 
     <!-- Module 9: Financial Summary -->
@@ -411,54 +400,123 @@
       <div id="financial-results" class="hidden">
         <div id="financial-summary"></div>
       </div>
-      <button class="btn btn-primary hidden" id="btn-recalculate-financial">Recalculate</button>
     </section>
 
-    <!-- Section Banner: Adjust the assumptions -->
-    <div class="section-banner hidden" id="section-banner-assumptions">
-      <h2 class="section-heading">Adjust the assumptions</h2>
+    <!-- Section 5: What If -->
+    <div class="section-banner hidden" id="section-banner-what-if">
+      <h2 class="section-heading">What If</h2>
     </div>
+    <div class="section-tiles hidden" id="what-if-tiles">
 
-    <!-- Module 8: Pricing Parameters -->
-    <section class="card hidden" id="pricing-params-card">
-      <h2>Pricing assumptions</h2>
-      <p class="card-intro">These rates default to the Ofgem Q2 2026 price cap. Change them to model a
-      different tariff or future price scenario, then click Recalculate costs.</p>
-      <div class="params-grid">
-        <label for="svt-rate">Flat electricity rate (Ofgem Q2 2026 cap)
-          <span class="unit">p/kWh</span></label>
-        <input id="svt-rate" type="number" step="0.01" min="0" value="24.50">
+      <!-- Tile 1: Policy Reform + Wait for Technology (combined card) -->
+      <div class="card" id="tile-policy-and-tech">
 
-        <label for="elec-standing-charge">Electricity standing charge (Q2 2026)
-          <span class="unit">p/day</span></label>
-        <input id="elec-standing-charge" type="number" step="0.01" min="0" value="61.64">
+        <!-- B1. Policy Reform -->
+        <h3>Policy Reform</h3>
+        <p class="card-intro">HP running costs above use the April 2026 Ofgem cap rates —
+          what you'd pay if you installed today. See how further policy change, or your
+          historical rates, compare.</p>
+        <div class="preset-group" id="policy-presets">
+          <button class="preset-btn active" data-preset="ofgem-apr26">Ofgem cap (base)</button>
+          <button class="preset-btn" data-preset="levy-removal">Full levy removal</button>
+          <button class="preset-btn" data-preset="historical">Your historical rates</button>
+        </div>
+        <div class="params-grid">
+          <label for="wi-svt-rate">Electricity unit rate <span class="unit">p/kWh</span></label>
+          <input id="wi-svt-rate" type="number" step="0.01" min="0">
+          <label for="wi-gas-rate">Gas unit rate <span class="unit">p/kWh</span></label>
+          <input id="wi-gas-rate" type="number" step="0.01" min="0">
+        </div>
+        <details class="wi-finetune">
+          <summary>Fine-tune ▸</summary>
+          <div class="params-grid">
+            <label for="wi-elec-standing">Electricity standing charge <span class="unit">p/day</span></label>
+            <input id="wi-elec-standing" type="number" step="0.01" min="0">
+            <label for="wi-gas-standing">Gas standing charge <span class="unit">p/day</span></label>
+            <input id="wi-gas-standing" type="number" step="0.01" min="0">
+            <label for="wi-levy-elec-delta">Electricity levy reduction <span class="unit">p/kWh</span></label>
+            <input id="wi-levy-elec-delta" type="number" step="0.1" min="0" value="2.0">
+            <label for="wi-levy-gas-delta">Gas levy increase <span class="unit">p/kWh</span></label>
+            <input id="wi-levy-gas-delta" type="number" step="0.1" min="0" value="0.5">
+          </div>
+          <p class="field-hint">The "Full levy removal" preset moves these amounts off
+            your electricity unit rate and onto gas — adjust if you have a different
+            view of the policy shift.</p>
+        </details>
+        <div class="wi-output" id="policy-output"></div>
 
-        <label for="gas-standing-charge">Gas standing charge (Q2 2026)
-          <span class="unit">p/day</span></label>
-        <input id="gas-standing-charge" type="number" step="0.01" min="0" value="31.66">
+        <hr class="tile-divider">
+
+        <!-- B2. Wait for Technology -->
+        <h3>Wait for Technology</h3>
+        <p class="card-intro">Heat pump efficiency (COP) has improved from ~2.5 to ~3.4
+          over the past decade. This analysis uses a field-trial median. Adjust the slider
+          to see how better — or worse — real-world performance changes your payback.</p>
+        <label for="cop-scalar-what-if">Performance vs field-trial median</label>
+        <input type="range" id="cop-scalar-what-if" min="0.6" max="1.5" step="0.05" value="1.0">
+        <span id="cop-scalar-display">1.00× (COP 2.9 at 7°C)</span>
+        <button class="btn btn-primary" id="btn-recalc-cop-what-if">Recalculate</button>
+        <div class="wi-output" id="cop-output">
+          <p id="cop-payback-line"></p>
+          <p id="cop-threshold-line"></p>
+        </div>
 
       </div>
-    </section>
 
-    <!-- Module 9: Capital Cost Inputs -->
-    <section class="card hidden" id="financial-params-card">
-      <h2>Installation costs</h2>
-      <p class="card-intro">Defaults reflect typical 2025–2026 market rates and the current Boiler Upgrade
-      Scheme grant. Update with your own installer quote if you have one.</p>
-      <div class="params-grid">
-        <label for="install-full-hp">Heat pump installation
-          <span class="unit">£</span></label>
-        <input id="install-full-hp" type="number" step="100" min="0" value="12500">
-
-        <label for="bus-grant">Boiler Upgrade Scheme grant
-          <span class="unit">£</span></label>
-        <input id="bus-grant" type="number" step="100" min="0" value="7500">
-
-        <label for="avoided-ac">Avoided air conditioning cost (if any)
-          <span class="unit">£</span></label>
-        <input id="avoided-ac" type="number" step="100" min="0" value="0">
+      <!-- Tile 2: Get Your Quotes -->
+      <div class="card" id="tile-get-quotes">
+        <h3>Get Your Quotes</h3>
+        <p class="card-intro">Installation costs vary from £8,000 to £18,000 depending on
+          property, installer, and system size. Get three quotes from MCS-certified
+          installers and enter the range below.</p>
+        <div class="preset-group" id="grant-presets">
+          <button class="preset-btn active" data-preset="bus-current">BUS grant — £7,500</button>
+          <button class="preset-btn" data-preset="bus-none">No grant</button>
+          <button class="preset-btn" data-preset="bus-enhanced">Enhanced — £10,000 (proposed)</button>
+        </div>
+        <div class="params-grid">
+          <label for="wi-install-cost">Installation cost <span class="unit">£</span></label>
+          <input id="wi-install-cost" type="number" step="100" min="0" value="12500">
+          <label for="wi-grant">Grant / subsidy <span class="unit">£</span></label>
+          <input id="wi-grant" type="number" step="100" min="0" value="7500">
+          <label>
+            Avoided AC cost <span class="unit">£</span>
+            <details class="info-popout">
+              <summary class="info-icon" aria-label="More information">ⓘ</summary>
+              <div class="info-content">
+                Some heat pump systems (particularly air-to-air) can provide cooling,
+                removing the need for a separate AC installation. Enter the avoided upfront
+                cost here. AC running costs are not modelled — heat pumps have no efficiency
+                advantage over conventional AC when used for cooling.
+              </div>
+            </details>
+          </label>
+          <input id="wi-avoided-ac" type="number" step="100" min="0" value="0">
+        </div>
+        <div class="wi-output" id="quotes-output"></div>
+        <label class="field-group" style="margin-top:0.75rem;display:flex;gap:0.5rem;align-items:center;">
+          <input type="checkbox" id="disconnect-gas-toggle">
+          Disconnect gas connection entirely
+        </label>
+        <div id="gas-split-group" hidden>
+          <label for="gas-split-slider">How is your non-heating gas used?</label>
+          <div class="slider-labels" style="display:flex;justify-content:space-between;font-size:0.8rem;">
+            <span>Hot water (HP-integrated DHW)</span>
+            <span>Other (cooking / immersion)</span>
+          </div>
+          <input type="range" id="gas-split-slider" min="0" max="100" step="5" value="70">
+          <span id="gas-split-display">70% hot water · 30% other</span>
+          <p class="field-hint">If you plan to use an immersion heater rather than
+            HP-integrated hot water, slide fully to Other.</p>
+        </div>
+        <p class="card-intro" style="margin-top:0.75rem;font-size:0.85rem;">
+          The BUS grant (£7,500) applies to standalone air-source or ground-source heat pump
+          installations. Other schemes (e.g. £2,500 for air-to-air units) can be entered in
+          the grant field above.
+        </p>
       </div>
-    </section>
+
+    </div>
 
   </div>
 

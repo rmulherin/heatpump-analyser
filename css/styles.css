@@ -420,6 +420,80 @@ input:focus {
   margin-top: 0.5rem;
 }
 
+/* ===== Tile divider (within a combined card) ===== */
+.tile-divider {
+  border: none;
+  border-top: 1px solid var(--colour-border);
+  margin: 1.5rem 0;
+}
+
+/* ===== Preset buttons ===== */
+.preset-group {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+.preset-btn {
+  padding: 0.35rem 0.75rem;
+  border: 1.5px solid var(--colour-teal);
+  border-radius: var(--radius);
+  background: #fff;
+  color: var(--colour-teal);
+  font-family: var(--font-heading);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.preset-btn.active {
+  background: var(--colour-teal);
+  color: #fff;
+}
+.preset-btn:hover:not(.active) { background: #f0f7f7; }
+
+/* ===== Info popout (Avoided AC and future fields) ===== */
+.info-popout {
+  display: inline-block;
+  position: relative;
+  margin-left: 0.35rem;
+}
+.info-icon {
+  cursor: pointer;
+  list-style: none;
+  color: var(--colour-teal);
+  font-size: 0.95rem;
+  font-weight: 600;
+  user-select: none;
+}
+.info-icon::-webkit-details-marker { display: none; }
+.info-popout[open] .info-icon { color: var(--colour-coral); }
+.info-content {
+  position: absolute;
+  top: 1.6rem;
+  left: 0;
+  z-index: 10;
+  width: 22rem;
+  max-width: 90vw;
+  padding: 0.75rem 0.9rem;
+  background: #fff;
+  border: 1px solid var(--colour-border);
+  border-radius: var(--radius);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--colour-dark);
+  font-weight: normal;
+}
+
+/* ===== What If output areas ===== */
+.wi-output {
+  margin-top: 0.75rem;
+  font-size: 0.9rem;
+  color: var(--colour-dark);
+}
+.wi-output p { margin: 0.2rem 0; }
+
 /* ===== Utility ===== */
 .hidden { display: none; }
 
