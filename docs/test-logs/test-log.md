@@ -198,7 +198,159 @@ Run 2026-04-26, console script batch.
 
 ---
 
-## Outstanding tests — 2026-04-27
+## 2026-04-29 — Node test suites after m8-patch + smart-scenario-fixes-1
+
+**Environment:** Windows 11, Node v24. Re-run required after m8-patch removed hybrid scenarios and changed M7/M8/M9 output shapes.
+
+| Suite | Assertions | Result | Notes |
+|-------|-----------|--------|-------|
+| test-m7.mjs | 25/25 | ✅ | Hybrid keys removed from suite; greedy LP from smart-scenario-fixes-1 |
+| test-m8.mjs | 24/24 | ✅ | T4b, T10b updated for hybrid removal; T5 updated for Ofgem cap 24.67p |
+| test-m9.mjs | 24/24 | ✅ | Hybrid keys removed throughout |
+
+---
+
+## Outstanding tests — 2026-04-29
+
+All tests below are ⏳ Not yet run. These supersede the 2026-04-27 outstanding tests for M7–M9 (hybrid-removal changes the expected outputs). Tests are grouped by plan; within each plan, tests come from the plan's success criteria.
+
+**Legend:** ✅ Pass | ❌ Fail | ⏭ Validated by other means | ⏳ Not yet run | 🚫 Deferred
+
+---
+
+### smart-scenario-fixes-1 — Phase 3 (M10 UI / underheat panel)
+
+Browser / real data (Rhiannon's Octopus account).
+
+| ID | Description | Result | Notes |
+|----|-------------|--------|-------|
+| SF1 | `#scenario-controls` absent from page — no pre-heat offset slider or occupancy threshold input | ⏳ | Pre-heat/occupancy sliders removed in Phase 2 |
+| SF2 | Underheating sub-panel (`#underheat-card`) renders inside Your Home after pipeline run; traffic-light dot visible | ⏳ | Rhiannon's data expected: `underheat_ratio > 0` if SP setpoint inference < actual occupant setpoint |
+| SF3 | Heat to Comfort slider triggers M7→M8→M9→verdict re-run; visible cost/payback values change; no console errors | ⏳ | Slider only shown when `underheat_ratio != null` |
+| SF4 | `hp_undersized` warning appears under scenario comparison when `validation_status.smart === 'hp_undersized'` | ⏳ | May not trigger on Rhiannon's data if HP is well-sized |
+| SF5 | Smart HP total cost < Dumb HP (HH) total cost on Rhiannon's data (strict inequality) | ⏳ | Pre-launch validation gate — hard halt if this fails |
+| SF6 | No console errors during full pipeline run including Heat to Comfort slider re-run | ⏳ | |
+
+---
+
+### m8-patch-gas-connection-retained — browser tests
+
+Browser / real data. All pricing and financial cards affected.
+
+| ID | Description | Result | Notes |
+|----|-------------|--------|-------|
+| MP1 | Annual running costs table has 4 scenario rows (no hybrid), 5 cost columns + total | ⏳ | `current`, `dumb_hp_svt`, `dumb_hp_hh`, `smart_hp_hh` |
+| MP2 | Non-heating gas column identical across all 4 scenarios | ⏳ | Same baseload gas + standing charge |
+| MP3 | Non-heating elec column identical across all 4 scenarios | ⏳ | Standing charge only |
+| MP4 | Heating gas column: non-zero for `current` only; HP scenarios show `—` | ⏳ | |
+| MP5 | Heating elec column: `—` for `current`; non-zero for three HP scenarios | ⏳ | |
+| MP6 | Total per scenario reconciles to ≈ actual annual bill | ⏳ | Sense check |
+| MP7 | Gas-connection-retained footnote visible below the table | ⏳ | |
+| MP8 | Ofgem cap note reads: "Heat pump scenario electricity costs use the current Ofgem price cap rate (electricity: 24.67p/kWh). Gas costs (for the retained connection and baseload) and your current boiler costs use your actual historical tariff rates." | ⏳ | Exact wording check |
+| MP9 | Table scrolls horizontally on mobile; no layout break | ⏳ | |
+| MP10 | `agile_calibration.D` in range 2.0–2.4 (devtools console) | ⏳ | |
+| MP11 | `agile_calibration.P_peak_p_kwh` in range 8–16 p/kWh | ⏳ | |
+| MP12 | Off-peak HH rate = D × wholesale; peak (16–19h) = D × wholesale + P (spot-check one period each) | ⏳ | |
+| MP13 | `hh_overhead` input field gone from UI | ⏳ | Removed by m8-patch |
+| MP14 | `dumb_hp_svt` uses Ofgem cap rate 24.67 p/kWh, not historical rate | ⏳ | |
+| MP15 | No console errors | ⏳ | |
+
+---
+
+### ui-fixes-1 — browser tests
+
+| ID | Description | Result | Notes |
+|----|-------------|--------|-------|
+| UF1-1 | Savings column shows `£X` without `+` prefix; negative savings show `−£X` | ⏳ | |
+| UF1-2 | Progress bar fill animates as Elexon chunks complete | ⏳ | Visual bar moves, not just text |
+| UF1-3 | Methodology DLs render in two columns (label left, value right) | ⏳ | |
+| UF1-4 | BUS-eligibility note appears below the financial table | ⏳ | Text from plan; no change to grant figures |
+| UF1-5 | When smart scenarios unavailable but HH dumb available: amber status line + "Provide that input ↓" link | ⏳ | May not trigger on Rhiannon's data if M5b produces thermal mass |
+| UF1-6 | Clicking "Provide that input ↓" link: opens methodology disclosure, scrolls to thermal char card, focuses first-empty M5b input, applies 1.5s highlight | ⏳ | |
+| UF1-7 | When all data good: no status line in verdict card | ⏳ | |
+| UF1-8 | No console errors | ⏳ | |
+
+---
+
+### ui-fixes-2 — browser tests
+
+| ID | Description | Result | Notes |
+|----|-------------|--------|-------|
+| UF2-1 | Octopus tab: Account Number field appears above API Key field | ⏳ | |
+| UF2-2 | After single-meter fetch: gas toggle pre-checked to m³ if meter reported m³; pre-unchecked for kWh | ⏳ | Rhiannon's meters use m³ — expect pre-checked |
+| UF2-3 | Console shows `Tier 1 meter (gas): unit=m3` log line (or `unit=kwh`) | ⏳ | |
+| UF2-4 | Status notices hidden on page load; shows "N notices" summary when notices added; expands on click | ⏳ | |
+| UF2-5 | Clearing and re-running resets notices to closed and hidden | ⏳ | |
+| UF2-6 | No cooling note text anywhere in verdict block | ⏳ | |
+| UF2-7 | Break-even verdict copy does not mention cooling | ⏳ | |
+| UF2-8 | No console errors | ⏳ | |
+
+---
+
+### patch-agile-region-calibration — browser tests
+
+| ID | Description | Result | Notes |
+|----|-------------|--------|-------|
+| AC1 | Octopus path: `ingestionResult.gsp_region` is a single letter A–P (not I or O); visible in Data Input card | ⏳ | Rhiannon's meter is in London — expect `C` |
+| AC2 | Octopus path: read-only region display shown in Octopus card (no dropdown) | ⏳ | |
+| AC3 | CSV path: region `<select>` visible; selecting "London" produces `gsp_region = 'C'` | ⏳ | |
+| AC4 | `agile_calibration.D` in range 2.0–2.4 on real data | ⏳ | Same as MP10 — verify both here and in devtools |
+| AC5 | `agile_calibration.P_peak_p_kwh` in range 8–16 on real data | ⏳ | |
+| AC6 | `calibration_period` in external metadata reflects most recent completed post-reform month | ⏳ | April 2026 partial month: expect "(partial)" suffix |
+| AC7 | No new console errors on normal (successful) path | ⏳ | |
+
+---
+
+### ui-design-m10b — browser tests
+
+| ID | Description | Result | Notes |
+|----|-------------|--------|-------|
+| M10B1 | At desktop (≥1100px): verdict-card and drove-card side by side, equal width | ⏳ | |
+| M10B2 | At desktop: results-card and energy-summary-card side by side | ⏳ | |
+| M10B3 | At desktop: Methodology (when opened) shows 2×2 grid — heat-loss + thermal-char (row 1), hp-model + scenario (row 2); underheat-card full-width between rows | ⏳ | |
+| M10B4 | Cost breakdown section shows pricing-card and financial-card full-width stacked | ⏳ | |
+| M10B5 | At ≤768px: every `.section-tiles` collapses to single column | ⏳ | |
+| M10B6 | drove-card populates four stat blocks: heat loss W/K, HP size kW, electricity context (region/rate), installation cost + grant | ⏳ | |
+| M10B7 | Stat 3 label and value adapt for `dumb_hp_svt` (flat rate, no region) vs HH scenarios (region + Agile D×W+P) | ⏳ | |
+| M10B8 | Section banner reads "Cost breakdown" (not "The verdict") | ⏳ | |
+| M10B9 | Container max-width 1100px confirmed in DevTools | ⏳ | |
+| M10B10 | Bar chart renders correctly at ~520px tile width | ⏳ | |
+| M10B11 | Methodology disclosure still opens/closes; inner 2×2 grid visible when open | ⏳ | |
+| M10B12 | No layout breakage at desktop, tablet (768–1099px), mobile (≤375px) | ⏳ | |
+| M10B13 | No console errors | ⏳ | |
+
+---
+
+### ui-design-m10c-what-if — browser tests
+
+| ID | Description | Result | Notes |
+|----|-------------|--------|-------|
+| WI1 | "What If" section appears after Cost breakdown; old "Adjust assumptions" section gone | ⏳ | |
+| WI2 | Two tiles side by side at desktop; stack at ≤768px; no horizontal overflow | ⏳ | |
+| WI3 | Policy Reform: "Ofgem cap (base)" pre-fills 24.67 p/kWh elec, 5.70 p/kWh gas; output reads "Same as results above — this is the base case." | ⏳ | |
+| WI4 | Policy Reform: "Full levy removal" adjusts rates by levy delta inputs (default 2.0/0.5); rates update in the input fields | ⏳ | |
+| WI5 | Policy Reform: "Your historical rates" fills from ingestion tariff data | ⏳ | |
+| WI6 | Policy Reform: manually editing a rate deselects all preset buttons | ⏳ | |
+| WI7 | Policy Reform: any rate input change triggers M8→M9 re-run; policy output updates | ⏳ | |
+| WI8 | Policy Reform: Fine-tune standing charges visible when `<details>` expanded | ⏳ | |
+| WI9 | Wait for Technology: COP slider absent from methodology disclosure (relocated to What If tile) | ⏳ | |
+| WI10 | Wait for Technology: dragging slider updates live display `X× (COP Y at 7°C)` instantly | ⏳ | |
+| WI11 | Wait for Technology: "Recalculate" runs M6→M7→M8→M9 chain; payback and threshold lines update | ⏳ | |
+| WI12 | Wait for Technology: threshold COP line appears on initial render — correct wording for found/not-found cases | ⏳ | |
+| WI13 | Get Your Quotes: grant presets fill `#wi-grant` input; "Enhanced — £10,000 (proposed)" label correct | ⏳ | |
+| WI14 | Get Your Quotes: changing any input immediately updates condensed payback table (M9 re-run) | ⏳ | |
+| WI15 | Get Your Quotes: avoided AC info popout (ⓘ) opens and displays explainer text | ⏳ | |
+| WI16 | Get Your Quotes: "Disconnect gas" toggle off — single payback column shown | ⏳ | |
+| WI17 | Get Your Quotes: "Disconnect gas" toggle on — two-column table (gas retained / gas disconnected); split slider appears | ⏳ | |
+| WI18 | Get Your Quotes: net benefit line shows below table; arithmetic matches hand calculation at 70/30 default | ⏳ | |
+| WI19 | No `#install-hybrid` input anywhere in page | ⏳ | Removed by m8-patch |
+| WI20 | No console errors after any combination of tile interactions | ⏳ | |
+
+---
+
+## Outstanding tests — 2026-04-27 (superseded by 2026-04-29 section above)
+
+> The M7/M8/M9 browser tests below were written before m8-patch-gas-connection-retained removed hybrid scenarios and replaced the pricing table with the 4-component design. The superseded tests are retained for the record; the authoritative pending tests are in the 2026-04-29 section. Tests that are still valid (e.g. M5, M6) remain relevant.
 
 All tests below are ⏳ Not yet run unless noted. Tests requiring a Node script are grouped separately — scripts need to be written before those can run. Browser tests require real data loaded via the Octopus flow (or CSV for no-gas variants).
 
