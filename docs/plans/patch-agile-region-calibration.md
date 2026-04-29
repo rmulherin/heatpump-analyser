@@ -1,7 +1,7 @@
 # patch-agile-region-calibration — M1 GSP region + M2 Agile calibration
 
 **Date:** 2026-04-29
-**Status:** Awaiting approval — review via claude.ai before implementation begins.
+**Status:** ✅ Approved — 2026-04-29
 **Design doc:** `design/patch-agile-region-calibration.md`
 **Implements:** sequence 3 of 6 (after ui-fixes-1, ui-fixes-2; before m8-patch)
 
@@ -320,25 +320,84 @@ Pass `agileCalibration` to `buildExternalMetadata`.
 
 ---
 
-## Claude.ai Review — yyyy-mm-dd
+## Design Review
 
 **Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Date:** 2026-04-29
+**Review type:** Plan review (pre-implementation)
+**Authoritative design:** `design/patch-agile-region-calibration.md` (praxis-claude-hub commit `1f40cba`)
 
-**Overall verdict:** [Approved / Approved with clarifications / Revise and resubmit]
+### Context
 
-### What is solid
+Plan reviewed against `design/patch-agile-region-calibration.md` (committed
+2026-04-29 in praxis-claude-hub, `1f40cba`). The plan implements the M1 + M2
+upstream additions required by `m8-patch-gas-connection-retained` section F3
+(Agile D×W+P rate model). No CRITICAL, HIGH, or MEDIUM findings.
 
-### Clarifications required before implementation
+### Required changes for implementation
 
-### Minor observations (not blockers)
+None — implementation steps are unchanged.
+
+### Substantive checks performed
+
+- **Algorithm correctness (B1–B6).** Calibration window logic, paginated
+  Agile fetch, D/P median computation, and error handling all match the
+  design line-for-line. The "compute D first, then derive P from previously
+  collected raw `(agile, wholesale)` peak samples" sequencing is correct
+  (P's formula depends on D).
+- **VAT handling.** `D = agile_rate_inc_vat / wholesale_exc_vat` correctly
+  absorbs the VAT factor; later `D × wholesale_exc_vat` produces inc_vat
+  consumer-facing rates directly.
+- **Off-peak / peak partition.** `wholesale > 1.0`, agile non-null, and the
+  UK local time `isUkPeakHour` check are implemented correctly. Off-peak
+  goes to `D_samples`; peak goes to `P_samples` for later derivation.
+- **`fetchWithRetry` verified to exist** at `external-data.js:41` (used 4×
+  elsewhere). Plan's call pattern is consistent with the existing code.
+- **`buildExternalMetadata` has a single caller** at `app.js:845` — adding
+  the `agile_calibration` parameter is a single-call-site change with no
+  hidden breakage risk.
+- **Timestamp alignment between `priceLookup` and `agileMap`.** Both keys
+  are normalised via `new Date(x).toISOString()`. Risk row 3 acknowledges
+  the alignment concern; Sonnet to verify at implementation time.
+- **Defensive empty-array paths** present: `agileRates.length === 0 → null`,
+  `D_samples.length === 0 → null`, `P_computed.length === 0 → P = 0`.
+- **April 2026 partial-month edge case** acknowledged in Risk row 4. Empty
+  Agile records array provides indirect safety at degenerate zero-length
+  windows.
+
+### Plan-internal cleanup applied at amend time
+
+**1. Section heading renamed (LOW).** `## Claude.ai Review` → `## Design Review`
+per the heatpump CLAUDE.md substitution table.
+
+**2. Status field updated (LOW).** `Awaiting approval` → `✅ Approved — 2026-04-29`.
+
+### Note for future plans (not applied)
+
+Same as ui-fixes-2: research findings reference specific line numbers
+(e.g. `data-ingestion.js:109`, `external-data.js:209/298/357`). Acceptable
+here because implementation is imminent and most line refs are paired
+with surrounding function names. Worth discouraging in future plans per
+the heatpump architect brief.
+
+## Review Summary
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| CRITICAL | 0     | — |
+| HIGH     | 0     | — |
+| MEDIUM   | 0     | — |
+| LOW      | 3     | 1 + 2 ✅ resolved; 3 noted for future |
+
+Verdict: ✅ APPROVED — implementation steps unchanged; template hygiene applied.
 
 ---
 
 ## Approval
 
-**Status:** [pending]
-**Approved by:**
-**Clarifications confirmed:**
+**Status:** ✅ Approved — 2026-04-29
+**Approved by:** Rhiannon (via Opus review)
+**Clarifications confirmed:** None substantive — implementation matches design as written. M8-patch (sequence 3) consumes `gsp_region` from M1's ingestion result and `agile_calibration` from M2's external metadata.
 
 ---
 
