@@ -1,7 +1,7 @@
 # m8-patch-gas-connection-retained — Gas retained; Agile D×W+P; Ofgem cap rates
 
 **Date:** 2026-04-29
-**Status:** Awaiting re-review — rewrite v2
+**Status:** ✅ Approved — 2026-04-29
 **Design doc:** `design/m8-patch-gas-connection-retained.md`
 **Implements:** sequence 4 of 6 (after patch-agile-region-calibration; before ui-design-m10b)
 
@@ -393,7 +393,7 @@ If `rateMetadata.calibration_source === 'default'`, add a warning above the tabl
 **Date:** 2026-04-29
 **Review type:** Plan review (pre-implementation)
 **Authoritative design:** `design/m8-patch-gas-connection-retained.md` (praxis-claude-hub commit `aacf6a4`)
-**Verdict:** ⏸ BLOCK — plan returned to Sonnet for v2 rewrite
+**Verdict:** ✅ APPROVED — v2 rewrite (heatpump commit `ab438b5`) resolves all v1 findings
 
 ### Context
 
@@ -529,17 +529,17 @@ during the v2 review.
 | Severity | Count | Status |
 |----------|-------|--------|
 | CRITICAL | 0     | — |
-| HIGH     | 2     | ⏸ pending rewrite |
-| MEDIUM   | 1     | ⏸ pending rewrite |
-| LOW      | 4     | ⏸ pending rewrite |
+| HIGH     | 2     | ✅ resolved in v2 (`ab438b5`) |
+| MEDIUM   | 1     | ✅ resolved in v2 |
+| LOW      | 4     | ✅ resolved in v2 |
 
 ---
 
 ## Approval
 
-**Status:** ⏸ Pending — awaiting v2 rewrite and re-review
-**Approved by:** —
-**Clarifications confirmed:** Default D/P fallback is the agreed approach (no flat-rate fallback). M7 hybrid removal is in scope. Display footnote references the electricity Ofgem cap only; gas costs are framed as historical.
+**Status:** ✅ Approved — 2026-04-29
+**Approved by:** Rhiannon (via Opus review of v2 rewrite)
+**Clarifications confirmed:** Default D/P fallback (D=2.2, P=12) is the agreed approach — no flat-rate fallback. M7 hybrid removal in scope. Display footnote references electricity Ofgem cap only; gas costs framed as historical. Sonnet's v2 rewrite extended hybrid-removal scope beyond the brief to include `test-m8.mjs` (T4b, T10b) and `test-m9.mjs` (hybrid keys throughout) — accepted as a thoroughness improvement, not a deviation.
 
 ---
 
