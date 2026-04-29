@@ -1,9 +1,9 @@
 # ui-design-m10c-what-if — "What If" section
 
 **Date:** 2026-04-29
-**Status:** Awaiting approval — review via claude.ai before implementation begins.
+**Status:** ⚠ Approved with edits — apply Edits 1–7 below before implementing (2026-04-29)
 **Design doc:** `design/ui-design-m10c-what-if.md`
-**Implements:** sequence 6 of 6 (after ui-design-m10b)
+**Implements:** sequence 5 of 6 (after ui-design-m10b). ui-fixes-2 is parallel to the main stream and not counted in the linear sequence.
 
 ---
 
@@ -553,25 +553,168 @@ the analysis first."
 
 ---
 
-## Claude.ai Review — yyyy-mm-dd
+## Design Review
 
 **Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Date:** 2026-04-29
+**Review type:** Plan review (pre-implementation)
+**Authoritative design:** `design/ui-design-m10c-what-if.md` (praxis-claude-hub commit `3d015ca`)
+**Verdict:** ⚠ APPROVED WITH EDITS — apply the seven edits below to the plan body before implementing, commit the amended plan (`plan amend: m10c-what-if — apply review edits`), then proceed to implementation.
 
-**Overall verdict:** [Approved / Approved with clarifications / Revise and resubmit]
+### Context
 
-### What is solid
+Plan reviewed against the m10c-what-if design (latest commit `3d015ca`).
+Architecture, scope, file targets, and step ordering all align. The
+threshold-COP computation question Sonnet flagged for review is resolved
+(proportional scaling is exact, not approximate, under uniform COP scalar).
+One MEDIUM (redundant Recalculate button left over from COP relocation) and
+several smaller items, all bounded enough for inline edits rather than full
+rewrite.
 
-### Clarifications required before implementation
+### Threshold-COP question — resolved
 
-### Minor observations (not blockers)
+Sonnet flagged in research findings: confirm full M6→M7→M8→M9 chain vs
+proportional scaling. **Proportional scaling is exact for uniform COP scaling**:
+
+- M6's COP slider is a uniform multiplicative scalar: `COP[i] = scalar × baseCOP[i]` for all i.
+- Therefore `elec_kwh[i] = heat_demand[i] / COP[i] = baseElecKwh[i] / scalar` — uniform inverse scaling.
+- Smart-scenario dispatch (post `smart-scenario-fixes-1` greedy LP) ranks HHs
+  by cost = `elec_rate[i] / COP[i] = elec_rate[i] / (scalar × baseCOP[i])`.
+  Scalar cancels in the ranking — dispatch order is invariant.
+- HP capacity constraint is on thermal kWh per HH, with HP capacity =
+  HTC × ΔT / 1000 — independent of COP. Constraint unchanged.
+- Daily heat budget B_d is anchored to observed (`Σ heating_kwh × η`) —
+  independent of COP.
+
+Net: total elec scales by 1/scalar exactly; M8/M9 outputs scale linearly
+from there. Use proportional scaling without accuracy hedge — covered in
+Edit 2 below.
+
+### Edits to apply before implementing
+
+**Edit 1 (MEDIUM) — Remove the redundant `#btn-recalculate-hp-model` from the methodology card.**
+
+Step 2 currently says "update `#btn-recalculate-hp-model` label to 'Recalculate'". Change to: remove the button entirely. The COP slider has relocated to the What If tile; the methodology card has no slider context, so a recalculate control there is confusing duplication of `#btn-recalc-cop-what-if`.
+
+- In Step 2 (index.html section): remove the entire `#hp-model-controls` block, including the recalculate button (not just the slider).
+- In Step 4 (DOM refs): remove the `btnRecalcHpModel` DOM reference and its event listener (`btnRecalcHpModel.addEventListener(...)` at app.js:1419 per research findings).
+- Step 8 wiring is unaffected — `btnRecalcCopWhatIf` already runs the same M6→M7→M8→M9 chain.
+- Confirm by grep that no other code references `btnRecalcHpModel` after removal.
+
+**Edit 2 — Threshold-COP wording: drop the "approximation" hedge.**
+
+In research findings (the "Threshold COP computation" paragraph) and Risk row 1: replace "lightweight M9-only recalculation"/"approximation" framing with the explicit statement that proportional scaling is **exact** under uniform COP scaling (rationale in the section above). Risk row 1 mitigation should read along the lines of: *"Proportional scaling — `elec_kwh[i] *= baseline_cop / scaled_cop`, then re-run M8 + M9 — is exact under uniform COP scaling because dispatch order, capacity, and B_d are all invariant. ~50× cheaper than full chain runs and produces the same threshold COP."*
+
+**Edit 3 — Make the `prepareRates` extension explicit.**
+
+In Step 5 (pricing param reads): the new `gas_rate_override_p_kwh` parameter is the third post-m8-patch extension to `prepareRates` (after `ofgem_cap_elec_p_kwh` and `agile_calibration`). Add a sentence calling this out: *"This adds a third optional parameter to `prepareRates` on top of `ofgem_cap_elec_p_kwh` and `agile_calibration` (added by m8-patch). Backwards-compatible: if `gas_rate_override_p_kwh` is null, `prepareRates` uses the tariff-derived rate as before."* So an implementer reading the plan understands they're amending m8-patch's contract, not creating a fresh function.
+
+**Edit 4 — Replace `2.91` magic number in COP live display.**
+
+Step 8 hardcodes `(scalar * 2.91).toFixed(1)` in the slider live-display formula. The `2.91` is the EoH field-trial median COP at 7°C used by M6. Replace with a named constant or read from the M6 baseline curve at module scope. Examples:
+
+- Add a constant in `app.js`: `const COP_BASELINE_AT_7C = 2.91;` (with a comment noting source: M6 EoH field-trial median).
+- Or expose via a helper from the M6 module if one exists (`getBaselineCopAt(7)` or similar).
+
+Display formula then reads: `(scalar * COP_BASELINE_AT_7C).toFixed(1)`.
+
+**Edit 5 — Verify `baseload_gas_annual_kwh` field at implementation time.**
+
+Step 9's `computeGasDisconnectDelta` reads `baseload?.baseload_gas_annual_kwh`. M3's design produces baseload as `baseload_kwh` per HH slot, not as an annual total field. Verify at implementation time:
+
+1. Grep `getBaseloadResult()` shape in app.js — does an `annual_*` field already exist?
+2. If yes, use it.
+3. If no, compute the annual total once: `const baseloadGasKwh = baseload.heating.reduce((s, h) => s + (h.baseload_kwh ?? 0), 0)` (or equivalent based on actual structure).
+
+Add a brief note in Step 9 documenting the resolution and the source of the value.
+
+**Edit 6 — Drop the stale `.three-up` paragraph from research findings.**
+
+Research findings includes a paragraph (lines 77-80) describing a `.three-up` CSS modifier for a 3-tile grid. The design has since collapsed to 2 tiles, and Step 1 correctly uses the standard `.section-tiles` from M10b without the modifier. Delete the paragraph entirely so research findings doesn't contradict the implementation.
+
+**Edit 7 — Make levy deltas editable inputs (replace hardcoded constants).**
+
+The "Full levy removal" preset uses two policy-shift values that should be user-adjustable rather than hardcoded constants. Default values: `2.0p/kWh` electricity reduction, `0.5p/kWh` gas increase.
+
+Concretely:
+
+- Remove the constants from Step 7:
+  ```js
+  // remove:
+  // const LEVY_ELEC_DELTA_P_PER_KWH = 2.0;
+  // const LEVY_GAS_DELTA_P_PER_KWH  = 0.5;
+  ```
+
+- Add two new inputs to the Policy Reform tile's existing `<details class="wi-finetune">` block (alongside the standing-charge inputs in Step 3):
+  ```html
+  <label for="wi-levy-elec-delta">Electricity levy reduction <span class="unit">p/kWh</span></label>
+  <input id="wi-levy-elec-delta" type="number" step="0.1" min="0" value="2.0">
+
+  <label for="wi-levy-gas-delta">Gas levy increase <span class="unit">p/kWh</span></label>
+  <input id="wi-levy-gas-delta" type="number" step="0.1" min="0" value="0.5">
+  ```
+
+- Add a short help line at the bottom of the fine-tune block:
+  ```html
+  <p class="field-hint">The "Full levy removal" preset moves these amounts off
+    your electricity unit rate and onto gas — adjust if you have a different
+    view of the policy shift.</p>
+  ```
+
+- Add DOM refs in Step 4:
+  ```js
+  const wiLevyElecDeltaInput = document.getElementById('wi-levy-elec-delta');
+  const wiLevyGasDeltaInput  = document.getElementById('wi-levy-gas-delta');
+  ```
+
+- Update the "Full levy removal" preset handler in Step 7 to read from the inputs at click time (not from constants), with safe fallbacks if input is empty/invalid:
+  ```js
+  // "Full levy removal"
+  const elecDelta = parseFloat(wiLevyElecDeltaInput.value);
+  const gasDelta  = parseFloat(wiLevyGasDeltaInput.value);
+  wiSvtRateInput.value = (OFGEM_CAP_ELEC_P_KWH - (Number.isFinite(elecDelta) ? elecDelta : 2.0)).toFixed(2);
+  wiGasRateInput.value = (OFGEM_CAP_GAS_P_KWH + (Number.isFinite(gasDelta)  ? gasDelta  : 0.5)).toFixed(2);
+  ```
+
+- If the user manually edits a levy delta after the preset has been clicked, the displayed rates do NOT auto-update — the rate inputs only refresh when the preset button is re-clicked. (Consistent with the existing "manual rate edit deselects preset" pattern.)
+
+### Plan-internal cleanup applied at amend time (reviewer-mode edits)
+
+- Section heading: `Claude.ai Review` → `Design Review` (template hygiene).
+- Status field: `Awaiting approval` → `⚠ Approved with edits — apply Edits 1–7 below before implementing (2026-04-29)`.
+- Sequence numbering: `sequence 6 of 6` → `sequence 5 of 6` (matches design;
+  ui-fixes-2 is parallel, not in the linear stream).
+
+### Sonnet protocol
+
+When picking up this plan for implementation:
+
+1. Apply Edits 1–7 to the plan body. Update Status to `⚠ Approved with edits — applied 2026-04-29`. Commit (`plan amend: m10c-what-if — apply review edits`).
+2. Then proceed with implementation against the amended plan.
+3. Implementation Deviations section (post-implementation) records any further deviations discovered while writing the code.
+
+### Note for future plans (not applied)
+
+Same systemic note as ui-fixes-2, patch-agile, m8-patch, and m10b: research findings and implementation steps reference specific line numbers (e.g. `app.js:186`, `app.js:1419`, `app.js:1701`). Acceptable here because surrounding function names are also given. Worth discouraging in future plans per the heatpump architect brief.
+
+## Review Summary
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| CRITICAL | 0     | — |
+| HIGH     | 0     | — |
+| MEDIUM   | 1     | Edit 1 — Sonnet to apply |
+| LOW      | 6     | Edits 2–7 + template hygiene — Sonnet to apply remaining; template hygiene applied at amend |
+
+Verdict: ⚠ APPROVED WITH EDITS — Sonnet applies Edits 1–7 to plan body before implementation; threshold-COP question resolved (proportional scaling is exact); levy deltas surfaced as editable inputs with 2.0/0.5 defaults.
 
 ---
 
 ## Approval
 
-**Status:** [pending]
-**Approved by:**
-**Clarifications confirmed:**
+**Status:** ⚠ Approved with edits — apply Edits 1–7 before implementing (2026-04-29)
+**Approved by:** Rhiannon (via Opus review)
+**Clarifications confirmed:** Threshold-COP proportional scaling is mathematically exact under uniform COP scalar (no full chain runs needed). Levy delta defaults locked at 2.0p/kWh electricity reduction and 0.5p/kWh gas increase, but exposed as editable inputs in the fine-tune block so users can adjust without code changes. Methodology card recalculate button removed entirely after COP slider relocation. `prepareRates` extension explicitly noted as third post-m8-patch optional parameter.
 
 ---
 
