@@ -1,9 +1,9 @@
 # ui-design-m10b — Layout restructure + "What drove this answer" tile
 
 **Date:** 2026-04-29
-**Status:** Awaiting approval — review via claude.ai before implementation begins.
+**Status:** ✅ Approved — 2026-04-29
 **Design doc:** `design/ui-design-m10b.md`
-**Implements:** sequence 5 of 6 (after m8-patch-gas-connection-retained; before ui-design-m10c-what-if)
+**Implements:** sequence 4 of 6 (after m8-patch-gas-connection-retained; before ui-design-m10c-what-if). ui-fixes-2 is parallel to the main stream and not counted in the linear sequence.
 
 ---
 
@@ -359,25 +359,91 @@ populateDroveTile(financialResult, heatLossResult, rateMetadata, primaryKey);
 
 ---
 
-## Claude.ai Review — yyyy-mm-dd
+## Design Review
 
 **Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Date:** 2026-04-29
+**Review type:** Plan review (pre-implementation)
+**Authoritative design:** `design/ui-design-m10b.md` (praxis-claude-hub commit `b6a26cb`)
+**Verdict:** ✅ APPROVED — implementation steps unchanged
 
-**Overall verdict:** [Approved / Approved with clarifications / Revise and resubmit]
+### Context
 
-### What is solid
+Plan reviewed against the m10b design (latest commit `b6a26cb` in praxis-hub).
+All 9 implementation steps map faithfully to design Sections A–E. One
+signature-style deviation in Step 8 (`populateDroveTile`) accepted on codebase
+grounds; six LOW findings (template hygiene + design-doc field-name drift)
+addressed at amend time.
 
-### Clarifications required before implementation
+### Substantive checks performed
 
-### Minor observations (not blockers)
+- **All 9 steps map to design Sections A–E line-for-line.** Container width,
+  `.section-tiles` grid, drove-card CSS spec, four section restructures,
+  banner rename, and `populateDroveTile` logic all align.
+- **`populateDroveTile` 4-param signature deviation accepted as
+  codebase-aligned.** Design specifies a 7-param explicit-dependency
+  signature; plan reduces to 4 params + module-scope accessor calls inside
+  the function (`getHeatPumpModelResult()`, `getExternalResult()`,
+  `readCapitalParams()`). Verified at review time that the 4-param pattern
+  matches the prevailing convention in `app.js`: existing display functions
+  use 1-param signatures; `buildAndDisplayVerdict` uses 3 params;
+  module-scope accessor calls (34 occurrences across app.js) are the
+  established pattern for cross-module data access. Plan's deviation
+  *aligns* the function to existing codebase conventions rather than
+  drifting from them. Accepted.
+- **`rateMetadata` scope at call site verified.** Step 9 calls
+  `populateDroveTile(financialResult, heatLossResult, rateMetadata,
+  primaryKey)` inside `buildAndDisplayVerdict`. Confirmed by grep that
+  `buildAndDisplayVerdict(financialResult, heatLossResult, rateMetadata)`
+  already takes `rateMetadata` as its third parameter (`app.js:1903`).
+  No threading required.
+- **`elec_hh_rate_by_hh` field name correctly used.** Plan resolves the
+  m10b design's stale `agile_rate_by_hh` reference to match the m8-patch
+  implementation's `elec_hh_rate_by_hh`. Architect has corrected the design
+  doc in the same commit pass — both `agile_rate_by_hh` references in
+  `design/ui-design-m10b.md` replaced with `elec_hh_rate_by_hh`.
+- **Sequence number corrected** in plan header (`5 of 6` → `4 of 6`) to
+  match the design's authoritative sequencing. ui-fixes-2 is parallel and
+  not in the linear stream.
+
+### Plan-internal cleanup applied at amend time
+
+- Section heading: `Claude.ai Review` → `Design Review` (template hygiene).
+- Status field: `Awaiting approval` → `✅ Approved — 2026-04-29`.
+- Sequence numbering corrected to `4 of 6`.
+
+### Note for future plans (not applied)
+
+Same systemic note as ui-fixes-2, patch-agile, and m8-patch: research
+findings and implementation steps reference specific line numbers
+(e.g. `app.js:229`, `app.js:1668`, `app.js:1996`). Acceptable here because
+implementation is imminent and surrounding function names are also given.
+Worth discouraging in future plans per the heatpump architect brief.
+
+## Review Summary
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| CRITICAL | 0     | — |
+| HIGH     | 0     | — |
+| MEDIUM   | 0     | — |
+| LOW      | 6     | All resolved (template hygiene applied at amend; design field-name fixed by architect; rateMetadata scope verified at review time) |
+
+Verdict: ✅ APPROVED — implementation steps unchanged; 4-param
+`populateDroveTile` signature accepted as codebase-aligned; design-doc
+field-name drift resolved by architect.
 
 ---
 
 ## Approval
 
-**Status:** [pending]
-**Approved by:**
-**Clarifications confirmed:**
+**Status:** ✅ Approved — 2026-04-29
+**Approved by:** Rhiannon (via Opus review)
+**Clarifications confirmed:** 4-param `populateDroveTile` signature accepted
+(matches prevailing `app.js` pattern: 1-param display functions, 3-param
+`buildAndDisplayVerdict`, module-scope accessors throughout). Design doc
+corrected in praxis-hub to use `elec_hh_rate_by_hh` field name (matches
+m8-patch implementation).
 
 ---
 
