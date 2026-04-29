@@ -46,14 +46,15 @@ function buildDumbHpScenario(heating, copByHh, eta) {
   for (let i = 0; i < heating.length; i++) {
     const h   = heating[i].heating_kwh;
     const cop = copByHh[i];
+    const baseload = heating[i].baseload_kwh ?? 0;
     if (h === null) { gas_kwh[i] = null; elec_kwh[i] = null; continue; }
-    if (h === 0)    { gas_kwh[i] = 0;    elec_kwh[i] = 0;    continue; }
+    if (h === 0)    { gas_kwh[i] = baseload; elec_kwh[i] = 0; continue; }
     nHeatingHh += 1;
     if (cop === null) {
-      gas_kwh[i] = h; elec_kwh[i] = 0;
+      gas_kwh[i] = h + baseload; elec_kwh[i] = 0;
       nFallbackHh += 1;
     } else {
-      gas_kwh[i]  = 0;
+      gas_kwh[i]  = baseload;
       elec_kwh[i] = h * eta / cop;
     }
   }
@@ -65,41 +66,8 @@ function buildDumbHpScenario(heating, copByHh, eta) {
   };
 }
 
-function buildHybridDumbScenario(heating, copByHh, eta, gasRateByHh, elecHhRateByHh) {
-  const gas_kwh  = new Array(heating.length);
-  const elec_kwh = new Array(heating.length);
-
-  for (let i = 0; i < heating.length; i++) {
-    const h = heating[i].heating_kwh;
-    if (h === null) { gas_kwh[i] = null; elec_kwh[i] = null; continue; }
-    if (h === 0)    { gas_kwh[i] = 0;    elec_kwh[i] = 0;    continue; }
-
-    const cop      = copByHh[i];
-    const gasRate  = gasRateByHh[i];
-    const elecRate = elecHhRateByHh[i];
-
-    if (cop === null || elecRate === null || gasRate === null) {
-      gas_kwh[i] = h; elec_kwh[i] = 0;
-      continue;
-    }
-
-    const hpUnitCost  = elecRate / cop;  // p per kWh of heat via HP
-    const gasUnitCost = gasRate  / eta;  // p per kWh of heat via gas
-
-    if (hpUnitCost < gasUnitCost) {
-      gas_kwh[i]  = 0;
-      elec_kwh[i] = h * eta / cop;
-    } else {
-      gas_kwh[i]  = h;
-      elec_kwh[i] = 0;
-    }
-  }
-
-  return { gas_kwh, elec_kwh, indoor_temp_c: heating.map(() => null) };
-}
-
 function allocateGreedyDay({
-  scenario, dayIndices, heating, eta, copByHh, gasRateByHh, elecHhRateByHh,
+  dayIndices, heating, eta, copByHh, gasRateByHh, elecHhRateByHh,
   hpCapKw, isAbsence, demandScale = 1.0,
 }) {
   const n = dayIndices.length;
@@ -124,25 +92,15 @@ function allocateGreedyDay({
   }
 
   // 2. Per-HH unit cost + cap
-  const isHybrid = scenario === 'hybrid_smart';
   const slots = [];
   for (let t = 0; t < n; t++) {
     const i        = dayIndices[t];
     const cop      = copByHh[i];
     const elecRate = elecHhRateByHh[i];
-    const gasRate  = gasRateByHh[i];
 
-    const hpCost  = (cop != null && elecRate != null) ? elecRate / cop : Infinity;
-    const gasCost = (isHybrid && gasRate != null)     ? gasRate / eta  : Infinity;
-
-    if (!isHybrid) {
-      if (hpCost === Infinity) continue;                       // ineligible
-      slots.push({ t, i, fuel: 'hp',  unitCost: hpCost,  capI: cap });
-    } else {
-      if (hpCost === Infinity && gasCost === Infinity) continue;
-      if (hpCost <= gasCost) slots.push({ t, i, fuel: 'hp',  unitCost: hpCost,  capI: cap });
-      else                   slots.push({ t, i, fuel: 'gas', unitCost: gasCost, capI: Infinity });
-    }
+    const hpCost = (cop != null && elecRate != null) ? elecRate / cop : Infinity;
+    if (hpCost === Infinity) continue;                         // ineligible
+    slots.push({ t, i, fuel: 'hp', unitCost: hpCost, capI: cap });
   }
 
   // 3. Sort cheapest first, deterministic tiebreak by HH index
@@ -160,9 +118,9 @@ function allocateGreedyDay({
     remaining -= Q;
   }
 
-  // 5. Undersized fallback (smart_hp_hh only — hybrid gas pool has no cap)
+  // 5. Undersized fallback — resistive backup at COP=1
   let hpUndersized = false;
-  if (remaining > 1e-9 && !isHybrid) {
+  if (remaining > 1e-9) {
     hpUndersized = true;
     // Resistive backup at COP=1 in cheapest eligible HH
     const target = slots[0];
@@ -206,7 +164,7 @@ function simulatePostHocTIndoor({
 }
 
 function buildSmartScenario({
-  scenario, heating, external, copByHh, hpCapKw,
+  heating, external, copByHh, hpCapKw,
   gasRateByHh, elecHhRateByHh, eta, isAbsence, demandScale = 1.0,
 }) {
   const days = buildDayHhIndices(heating);
@@ -222,13 +180,13 @@ function buildSmartScenario({
       continue;
     }
     const day = allocateGreedyDay({
-      scenario, dayIndices: indices, heating, eta,
+      dayIndices: indices, heating, eta,
       copByHh, gasRateByHh, elecHhRateByHh, hpCapKw, isAbsence, demandScale,
     });
     if (day.hpUndersized) anyHpUndersized = true;
     for (let k = 0; k < indices.length; k++) {
       const i = indices[k];
-      gas_kwh[i]   = day.gas_kwh_alloc[k];
+      gas_kwh[i]   = day.gas_kwh_alloc[k] + (heating[i].baseload_kwh ?? 0);
       elec_kwh[i]  = day.elec_kwh_alloc[k];
       q_thermal[i] = day.q_delivered_thermal_kwh[k];
     }
@@ -266,22 +224,21 @@ export function estimateScenarioConsumption({
     return {
       scenarios: {
         current: nullScenario, dumb_hp_svt: nullScenario, dumb_hp_hh: nullScenario,
-        hybrid_dumb: nullScenario, smart_hp_hh: nullScenario, hybrid_smart: nullScenario,
+        smart_hp_hh: nullScenario,
       },
       validation_status: { dumb: 'no_data', smart: computeValidationStatusSmart(heatLoss, heatPumpModel) },
       warnings: ['No gas heating detected — heat pump scenarios cannot be modelled against an existing gas baseline.'],
     };
   }
 
-  // Steps 1–3: dumb scenarios (unchanged)
-  const current    = buildCurrentScenario(heating);
-  const dumbHp     = buildDumbHpScenario(heating, copByHh, eta);
-  const hybridDumb = buildHybridDumbScenario(heating, copByHh, eta, gasRateByHh, elecHhRateByHh);
+  // Steps 1–2: current + dumb scenarios
+  const current = buildCurrentScenario(heating);
+  const dumbHp  = buildDumbHpScenario(heating, copByHh, eta);
   const dumbDiagnostics = dumbHp._diagnostics; delete dumbHp._diagnostics;
 
-  // Step 4: smart scenarios (greedy LP)
+  // Step 4: smart scenario (greedy LP)
   let smartStatus = computeValidationStatusSmart(heatLoss, heatPumpModel);
-  let smartHpHh, hybridSmart;
+  let smartHpHh;
 
   if (smartStatus === 'ok') {
     // hp_capacity_kw is guaranteed non-null here by computeValidationStatusSmart's
@@ -298,11 +255,7 @@ export function estimateScenarioConsumption({
       : 1.0;
 
     const sm = buildSmartScenario({
-      scenario: 'smart_hp_hh', heating, external, copByHh, hpCapKw: hpCap,
-      gasRateByHh, elecHhRateByHh, eta, isAbsence, demandScale,
-    });
-    const hb = buildSmartScenario({
-      scenario: 'hybrid_smart', heating, external, copByHh, hpCapKw: hpCap,
+      heating, external, copByHh, hpCapKw: hpCap,
       gasRateByHh, elecHhRateByHh, eta, isAbsence, demandScale,
     });
 
@@ -311,18 +264,13 @@ export function estimateScenarioConsumption({
       warnings.push('Heat pump capacity insufficient on some days at your current heating pattern; resistive backup applied at COP = 1.');
     }
 
-    // Post-hoc T_indoor sims (chronological, day-chained implicitly)
+    // Post-hoc T_indoor sim (chronological, day-chained implicitly)
     const smTinSim = simulatePostHocTIndoor({
       q_delivered_per_hh: sm.q_thermal, external, heatLoss,
       thermalChar: thermalCharacter, T_init: thermalCharacter?.setpoint_c ?? 20,
     });
-    const hbTinSim = simulatePostHocTIndoor({
-      q_delivered_per_hh: hb.q_thermal, external, heatLoss,
-      thermalChar: thermalCharacter, T_init: thermalCharacter?.setpoint_c ?? 20,
-    });
 
-    smartHpHh   = { gas_kwh: sm.gas_kwh, elec_kwh: sm.elec_kwh, indoor_temp_c: smTinSim.indoor_temp_c };
-    hybridSmart = { gas_kwh: hb.gas_kwh, elec_kwh: hb.elec_kwh, indoor_temp_c: hbTinSim.indoor_temp_c };
+    smartHpHh = { gas_kwh: sm.gas_kwh, elec_kwh: sm.elec_kwh, indoor_temp_c: smTinSim.indoor_temp_c };
 
     // Concentrated-heating note (design § 1.5): inspect post-hoc indoor for overshoot.
     // Filter to HH where heat was actually delivered. Without this filter, summer days
@@ -340,8 +288,7 @@ export function estimateScenarioConsumption({
     }
   } else {
     const nullArr = () => heating.map(() => null);
-    smartHpHh   = { gas_kwh: nullArr(), elec_kwh: nullArr(), indoor_temp_c: nullArr() };
-    hybridSmart = { gas_kwh: nullArr(), elec_kwh: nullArr(), indoor_temp_c: nullArr() };
+    smartHpHh = { gas_kwh: nullArr(), elec_kwh: nullArr(), indoor_temp_c: nullArr() };
   }
 
   return {
@@ -349,9 +296,7 @@ export function estimateScenarioConsumption({
       current,
       dumb_hp_svt: dumbHp,
       dumb_hp_hh:  dumbHp,        // shared ref preserved (T13)
-      hybrid_dumb: hybridDumb,
       smart_hp_hh: smartHpHh,
-      hybrid_smart: hybridSmart,
     },
     validation_status: {
       dumb:  computeValidationStatusDumb(dumbDiagnostics, baseloadMethod),

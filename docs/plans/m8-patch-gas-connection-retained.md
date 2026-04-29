@@ -545,4 +545,11 @@ during the v2 review.
 
 ## Implementation Deviations
 
-[To be completed post-implementation]
+**D1 — Duplicate `const scale` in `computeCosts`.**
+When adding the pre-loop `scale` constant for cost decomposition, the existing inner `const scale = 365 / rateMetadata.data_period_days` inside the `for (const name of SCENARIO_ORDER)` loop would have caused a `SyntaxError` (block-scoped redeclaration). The inner declaration was removed; the outer `const scale = 365 / (rateMetadata.data_period_days || 365)` is used throughout. The `|| 365` guard protects the zero-data path where the inner version had no guard. No plan deviation — this is a required code hygiene fix to make the plan's pre-loop placement work.
+
+**D2 — `.field-note` CSS class added alongside `.table-scroll-wrap`.**
+The plan specified `.table-scroll-wrap`. A companion `.field-note` class (0.8rem, 75% opacity) was also added to `styles.css` to style the two footnote paragraphs the plan required below the table. Without it the footnotes render at body font size and full opacity, visually competing with the table. Not a plan deviation — the plan specified footnotes; the class is the minimal styling needed.
+
+**D3 — Test-file hybrid cleanup extended beyond Step 1 brief.**
+Step 1 listed `test-m8.mjs` hybrid entries (T4b standing charge, T10b), and `test-m9.mjs` hybrid scenario keys. These were cleaned up as part of Step 1 execution. Accepted by Opus review as a thoroughness improvement.

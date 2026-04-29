@@ -15,7 +15,6 @@ const DEFAULT_PARAMS = {
   svt_rate_p_per_kwh:    24.50,
   svt_standing_charge_p: null,
   gas_standing_charge_p: null,
-  hh_overhead_p_per_kwh: 13.00,
 };
 
 const FLAT_GAS_W  = [{ valid_from: '2020-01-01T00:00:00Z', valid_to: null, rate_p_kwh: 7.0,  standing_p_day: 0 }];
@@ -41,7 +40,7 @@ function makeScenario(n, gas_kwh_val = 0, elec_kwh_val = 0) {
 
 function makeAllScenarios(n, gas_kwh = 0, elec_kwh = 0) {
   const s = makeScenario(n, gas_kwh, elec_kwh);
-  return { current: s, dumb_hp_svt: s, dumb_hp_hh: s, hybrid_dumb: s, smart_hp_hh: s, hybrid_smart: s };
+  return { current: s, dumb_hp_svt: s, dumb_hp_hh: s, smart_hp_hh: s };
 }
 
 function makeScenarioResult(scenarios, smartStatus = 'ok') {
@@ -71,10 +70,11 @@ console.log('\nT1: Time-varying gas tariff rate');
   assert(approx(rm.gas_rate_by_hh[1], 6.8), 'T1b: August timestamp → gas rate 6.8 p/kWh');
 }
 
-// ── T2: HH electricity rate construction ─────────────────────────────────────
+// ── T2: HH electricity rate construction (Agile D×W+P) ───────────────────────
 
 console.log('\nT2: HH electricity rate construction');
 {
+  // Timestamps at 00:00 and 00:30 UTC on 2025-06-01 = 01:00–01:30 BST → off-peak
   const consumption = [
     { timestamp: '2025-06-01T00:00:00' },
     { timestamp: '2025-06-01T00:30:00' },
@@ -83,10 +83,13 @@ console.log('\nT2: HH electricity rate construction');
   const rm = prepareRates(
     makeIngestion(consumption, FLAT_GAS_W, FLAT_ELEC_W),
     external,
-    { ...DEFAULT_PARAMS, hh_overhead_p_per_kwh: 13.0 },
+    DEFAULT_PARAMS,
+    // Default calibration: D=2.2, P=12
   );
-  assert(approx(rm.elec_hh_rate_by_hh[0], 18.0), 'T2a: wholesale=5 + overhead=13 → rate=18 p/kWh');
-  assert(approx(rm.elec_hh_rate_by_hh[1], 13.0), 'T2b: null wholesale → overhead-only rate=13 p/kWh');
+  // Off-peak: D × W = 2.2 × 5.0 = 11.0
+  assert(approx(rm.elec_hh_rate_by_hh[0], 11.0), 'T2a: off-peak wholesale=5, D=2.2 → rate=11.0 p/kWh');
+  // Null wholesale, off-peak → rate = 0
+  assert(approx(rm.elec_hh_rate_by_hh[1], 0.0), 'T2b: null wholesale, off-peak → rate=0 p/kWh');
   assert(rm.warnings.some(w => w.includes('no wholesale')), 'T2c: null wholesale triggers warning');
 }
 
@@ -94,16 +97,18 @@ console.log('\nT2: HH electricity rate construction');
 
 console.log('\nT3: Negative wholesale passthrough');
 {
+  // 2025-06-01T00:00:00 UTC = 01:00 BST → off-peak; D × (-5) = -11.0
   const consumption = [{ timestamp: '2025-06-01T00:00:00' }];
   const rm = prepareRates(
     makeIngestion(consumption, FLAT_GAS_W, FLAT_ELEC_W),
     [{ wholesale_p_kwh: -5.0 }],
-    { ...DEFAULT_PARAMS, hh_overhead_p_per_kwh: 13.0 },
+    DEFAULT_PARAMS,
   );
-  assert(approx(rm.elec_hh_rate_by_hh[0], 8.0), 'T3: wholesale=-5 + overhead=13 → rate=8 (not clamped to 13)');
+  assert(approx(rm.elec_hh_rate_by_hh[0], -11.0), 'T3: off-peak wholesale=-5, D=2.2 → rate=-11.0 (not clamped on lower end)');
 }
 
 // ── T4: Standing charge fuel supply logic ─────────────────────────────────────
+// All scenarios now include gas (HP scenarios retain gas connection for baseload).
 
 console.log('\nT4: Standing charge fuel supply logic');
 {
@@ -120,12 +125,11 @@ console.log('\nT4: Standing charge fuel supply logic');
     makeScenarioResult(makeAllScenarios(n, 0, 0)),
     { svt_rate_p_per_kwh: 24.5, svt_standing_charge_p: null, gas_standing_charge_p: null },
   );
-  // dumb_hp_svt: electricity only → standing = 60 × 365 / 100 = £219.00
-  assert(approx(result.scenarios.dumb_hp_svt.standing_charge_gbp, 60 * 365 / 100, 1e-4),
-    'T4a: dumb_hp_svt standing = £219 (electricity only, no gas standing charge)');
-  // hybrid_dumb: gas+elec → standing = (30+60) × 365 / 100 = £328.50
-  assert(approx(result.scenarios.hybrid_dumb.standing_charge_gbp, 90 * 365 / 100, 1e-4),
-    'T4b: hybrid_dumb standing = £328.50 (gas + electricity standing charges combined)');
+  // All scenarios: gas+elec → standing = (30+60) × 365 / 100 = £328.50
+  assert(approx(result.scenarios.dumb_hp_svt.standing_charge_gbp, 90 * 365 / 100, 1e-4),
+    'T4a: dumb_hp_svt standing = £328.50 (gas + electricity — retained gas connection)');
+  assert(approx(result.scenarios.current.standing_charge_gbp, 90 * 365 / 100, 1e-4),
+    'T4b: current standing = £328.50 (gas + electricity standing charges combined)');
 }
 
 // ── T5: dumb_hp_svt uses SVT flat rate ───────────────────────────────────────
@@ -133,55 +137,54 @@ console.log('\nT4: Standing charge fuel supply logic');
 console.log('\nT5: dumb_hp_svt uses SVT flat rate');
 {
   const consumption = [{ timestamp: '2025-06-01T00:00:00' }];
-  // wholesale=100 → elec_hh_rate=113; test that dumb_hp_svt ignores it and uses SVT=24.50
+  // wholesale=100 → Agile rate capped at 100p; dumb_hp_svt ignores HH rate and uses Ofgem cap
   const rm = prepareRates(
     makeIngestion(consumption, FLAT_GAS_W, FLAT_ELEC_W),
     [{ wholesale_p_kwh: 100.0 }],
-    { ...DEFAULT_PARAMS, hh_overhead_p_per_kwh: 13.0 },
+    { ...DEFAULT_PARAMS, ofgem_cap_elec_p_kwh: 24.67 },
   );
   const scenarios = {
-    current:      makeScenario(1, 0, 0),
-    dumb_hp_svt:  makeScenario(1, 0, 2.0),
-    dumb_hp_hh:   makeScenario(1, 0, 0),
-    hybrid_dumb:  makeScenario(1, 0, 0),
-    smart_hp_hh:  makeScenario(1, 0, 0),
-    hybrid_smart: makeScenario(1, 0, 0),
+    current:     makeScenario(1, 0, 0),
+    dumb_hp_svt: makeScenario(1, 0, 2.0),
+    dumb_hp_hh:  makeScenario(1, 0, 0),
+    smart_hp_hh: makeScenario(1, 0, 0),
   };
   const result = computeCosts(rm, makeScenarioResult(scenarios), {
     svt_rate_p_per_kwh: 24.50, svt_standing_charge_p: 0, gas_standing_charge_p: 0,
   });
-  // 2.0 kWh × 24.50 p/kWh / 100 = £0.49
-  assert(approx(result.scenarios.dumb_hp_svt.energy_cost_gbp, 0.49, 1e-9),
-    'T5: dumb_hp_svt 2.0 kWh × SVT 24.5 p/kWh = £0.49 (HH rate 113 p/kWh not used)');
+  // 2.0 kWh × 24.67 p/kWh / 100 = £0.4934
+  assert(approx(result.scenarios.dumb_hp_svt.energy_cost_gbp, 2.0 * 24.67 / 100, 1e-9),
+    'T5: dumb_hp_svt 2.0 kWh × Ofgem cap 24.67 p/kWh = £0.4934 (HH Agile rate ignored)');
 }
 
-// ── T6: dumb_hp_hh uses HH wholesale+overhead rate ────────────────────────────
+// ── T6: dumb_hp_hh uses Agile D×W+P HH rate ──────────────────────────────────
 
-console.log('\nT6: dumb_hp_hh uses HH rate');
+console.log('\nT6: dumb_hp_hh uses HH Agile rate');
 {
   const consumption = [{ timestamp: '2025-06-01T00:00:00' }];
-  // wholesale=5 → elec_hh_rate=18; SVT=24.50 → dumb_hp_hh cheaper than dumb_hp_svt
+  // Off-peak at 01:00 BST; wholesale=5, D=2.2 → elec_hh_rate=11.0; SVT cap=24.67 → dumb_hp_hh cheaper
   const rm = prepareRates(
     makeIngestion(consumption, FLAT_GAS_W, FLAT_ELEC_W),
     [{ wholesale_p_kwh: 5.0 }],
-    { ...DEFAULT_PARAMS, hh_overhead_p_per_kwh: 13.0 },
+    { ...DEFAULT_PARAMS, ofgem_cap_elec_p_kwh: 24.67 },
   );
   const scenarios = {
-    current:      makeScenario(1, 0, 0),
-    dumb_hp_svt:  makeScenario(1, 0, 2.0),
-    dumb_hp_hh:   makeScenario(1, 0, 2.0),
-    hybrid_dumb:  makeScenario(1, 0, 0),
-    smart_hp_hh:  makeScenario(1, 0, 0),
-    hybrid_smart: makeScenario(1, 0, 0),
+    current:     makeScenario(1, 0, 0),
+    dumb_hp_svt: makeScenario(1, 0, 2.0),
+    dumb_hp_hh:  makeScenario(1, 0, 2.0),
+    smart_hp_hh: makeScenario(1, 0, 0),
   };
   const result = computeCosts(rm, makeScenarioResult(scenarios), {
     svt_rate_p_per_kwh: 24.50, svt_standing_charge_p: 0, gas_standing_charge_p: 0,
   });
-  // 2.0 kWh × 18 p/kWh / 100 = £0.36
-  assert(approx(result.scenarios.dumb_hp_hh.energy_cost_gbp, 0.36, 1e-9),
-    'T6a: dumb_hp_hh 2.0 kWh × HH rate 18 p/kWh = £0.36');
+  // 2.0 kWh × 11.0 p/kWh / 100 = £0.22
+  assert(approx(result.scenarios.dumb_hp_hh.energy_cost_gbp, 0.22, 1e-9),
+    'T6a: dumb_hp_hh 2.0 kWh × Agile rate 11.0 p/kWh = £0.22');
+  // dumb_hp_svt uses Ofgem cap 24.67p: 2.0 × 24.67 / 100 = £0.4934
+  assert(approx(result.scenarios.dumb_hp_svt.energy_cost_gbp, 2.0 * 24.67 / 100, 1e-9),
+    'T6b: dumb_hp_svt uses Ofgem cap rate 24.67p/kWh');
   assert(result.scenarios.dumb_hp_hh.energy_cost_gbp < result.scenarios.dumb_hp_svt.energy_cost_gbp,
-    'T6b: HH rate (18 p/kWh) < SVT (24.5 p/kWh) → dumb_hp_hh cost < dumb_hp_svt cost');
+    'T6c: Agile rate (11.0 p/kWh) < Ofgem cap (24.67 p/kWh) → dumb_hp_hh cost < dumb_hp_svt cost');
 }
 
 // ── T7: Annual scaling ────────────────────────────────────────────────────────
@@ -197,12 +200,10 @@ console.log('\nT7: Annual scaling (300-day window)');
   const gasW = [{ valid_from: '2020-01-01T00:00:00Z', valid_to: null, rate_p_kwh: 10.0, standing_p_day: 0 }];
   const rm = prepareRates(makeIngestion(consumption, gasW, FLAT_ELEC_W), makeExternal(n, 5.0), DEFAULT_PARAMS);
   const scenarios = {
-    current:      makeScenario(n, 1.0, 0),
-    dumb_hp_svt:  makeScenario(n, 0, 0),
-    dumb_hp_hh:   makeScenario(n, 0, 0),
-    hybrid_dumb:  makeScenario(n, 0, 0),
-    smart_hp_hh:  makeScenario(n, 0, 0),
-    hybrid_smart: makeScenario(n, 0, 0),
+    current:     makeScenario(n, 1.0, 0),
+    dumb_hp_svt: makeScenario(n, 0, 0),
+    dumb_hp_hh:  makeScenario(n, 0, 0),
+    smart_hp_hh: makeScenario(n, 0, 0),
   };
   const result = computeCosts(rm, makeScenarioResult(scenarios), {
     svt_rate_p_per_kwh: 24.5, svt_standing_charge_p: 0, gas_standing_charge_p: 0,
@@ -231,12 +232,10 @@ console.log('\nT8: Monthly sum = annual unscaled');
   const elecW = [{ valid_from: '2020-01-01T00:00:00Z', valid_to: null, rate_p_kwh: 24.5, standing_p_day: 10.0 }];
   const rm = prepareRates(makeIngestion(entries, gasW, elecW), makeExternal(n, 5.0), DEFAULT_PARAMS);
   const scenarios = {
-    current:      makeScenario(n, 0.5, 0),
-    dumb_hp_svt:  makeScenario(n, 0, 0),
-    dumb_hp_hh:   makeScenario(n, 0, 0),
-    hybrid_dumb:  makeScenario(n, 0, 0),
-    smart_hp_hh:  makeScenario(n, 0, 0),
-    hybrid_smart: makeScenario(n, 0, 0),
+    current:     makeScenario(n, 0.5, 0),
+    dumb_hp_svt: makeScenario(n, 0, 0),
+    dumb_hp_hh:  makeScenario(n, 0, 0),
+    smart_hp_hh: makeScenario(n, 0, 0),
   };
   const result = computeCosts(rm, makeScenarioResult(scenarios), {
     svt_rate_p_per_kwh: 24.5, svt_standing_charge_p: null, gas_standing_charge_p: null,
@@ -298,9 +297,8 @@ console.log('\nT10: Null passthrough for smart = insufficient_data');
     { svt_rate_p_per_kwh: 24.5, svt_standing_charge_p: 0, gas_standing_charge_p: 0 },
   );
   assert(result.scenarios.smart_hp_hh.annual_cost_gbp  === null, 'T10a: smart_hp_hh.annual_cost_gbp = null');
-  assert(result.scenarios.hybrid_smart.annual_cost_gbp === null, 'T10b: hybrid_smart.annual_cost_gbp = null');
-  assert(result.scenarios.current.annual_cost_gbp      !== null, 'T10c: current unaffected by smart=insufficient_data');
-  assert(result.scenarios.dumb_hp_hh.annual_cost_gbp   !== null, 'T10d: dumb_hp_hh unaffected by smart=insufficient_data');
+  assert(result.scenarios.current.annual_cost_gbp      !== null, 'T10b: current unaffected by smart=insufficient_data');
+  assert(result.scenarios.dumb_hp_hh.annual_cost_gbp   !== null, 'T10c: dumb_hp_hh unaffected by smart=insufficient_data');
 }
 
 // ── Summary ───────────────────────────────────────────────────────────────────

@@ -3,7 +3,6 @@
 
 export const FA_CONFIG = {
   INSTALLATION_FULL_HP_DEFAULT_GBP: 12_500,
-  INSTALLATION_HYBRID_DEFAULT_GBP:  10_000,
   BUS_GRANT_DEFAULT_GBP:             7_500,
   AVOIDED_AC_DEFAULT_GBP:                0,
   GAS_MULTIPLIERS:  [0.7, 0.85, 1.0, 1.2, 1.5],
@@ -12,8 +11,7 @@ export const FA_CONFIG = {
   AVOIDED_AC_LARGE_FRACTION: 0.5,
 };
 
-const HP_SCENARIOS    = ['dumb_hp_svt', 'dumb_hp_hh', 'smart_hp_hh', 'hybrid_dumb', 'hybrid_smart'];
-const FULL_HP_SCENARIOS = ['dumb_hp_svt', 'dumb_hp_hh', 'smart_hp_hh'];
+const HP_SCENARIOS = ['dumb_hp_svt', 'dumb_hp_hh', 'smart_hp_hh'];
 
 // ===== State =====
 
@@ -27,12 +25,10 @@ export function analyseFinancials(pricingResult, rateMetadata, scenarioResult, p
   const warnings = [];
 
   // Step A — Net investment
-  const { installation_cost_full_hp_gbp, installation_cost_hybrid_gbp,
-          bus_grant_gbp, avoided_ac_cost_gbp } = params;
+  const { installation_cost_full_hp_gbp, bus_grant_gbp, avoided_ac_cost_gbp } = params;
 
   const deductions  = bus_grant_gbp + avoided_ac_cost_gbp;
   const net_full_hp = Math.max(0, installation_cost_full_hp_gbp - deductions);
-  const net_hybrid  = Math.max(0, installation_cost_hybrid_gbp  - deductions);
 
   if (avoided_ac_cost_gbp > installation_cost_full_hp_gbp * FA_CONFIG.AVOIDED_AC_LARGE_FRACTION) {
     warnings.push(
@@ -41,8 +37,8 @@ export function analyseFinancials(pricingResult, rateMetadata, scenarioResult, p
     );
   }
 
-  function netInvestmentFor(scenario) {
-    return FULL_HP_SCENARIOS.includes(scenario) ? net_full_hp : net_hybrid;
+  function netInvestmentFor(_scenario) {
+    return net_full_hp;
   }
 
   // Step B — Per-scenario saving and payback
@@ -241,7 +237,6 @@ export function analyseFinancials(pricingResult, rateMetadata, scenarioResult, p
     break_even,
     inputs_used: {
       installation_cost_full_hp_gbp,
-      installation_cost_hybrid_gbp,
       bus_grant_gbp,
       avoided_ac_cost_gbp,
     },

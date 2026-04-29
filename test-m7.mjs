@@ -95,42 +95,6 @@ function buildInputs({
   assert(dumb.elec_kwh[0] === 0,   'T2b', `elec_kwh = 0  when cop=null (got ${dumb.elec_kwh[0]})`);
 }
 
-// ===== T3 — Hybrid dispatch HP wins =====
-// h=1.0, η=0.9, cop=3.5, elec=10p, gas=7p
-// hpCost  = 10/3.5 = 2.857
-// gasCost = 7/0.9  = 7.778
-// HP cheaper → elec = 1.0 × 0.9 / 3.5 = 0.2571
-{
-  const { heating, external, cop_by_hh } = buildSimpleDay({ tempC: 10, cop: 3.5 });
-  heating[0] = hh(ts(0, 0), 1.0);
-  const result = estimateScenarioConsumption(buildInputs({
-    heating, external, cop_by_hh,
-    gasRateByHh:    new Array(48).fill(7),
-    elecHhRateByHh: new Array(48).fill(10),
-  }));
-  const hyb = result.scenarios.hybrid_dumb;
-  assert(Math.abs(hyb.elec_kwh[0] - 0.2571) < 0.001, 'T3a', `Hybrid: HP wins, elec ≈ 0.2571 (got ${hyb.elec_kwh[0]?.toFixed(4)})`);
-  assert(hyb.gas_kwh[0] === 0,                       'T3b', `Hybrid: HP wins, gas = 0 (got ${hyb.gas_kwh[0]})`);
-}
-
-// ===== T4 — Hybrid dispatch gas wins =====
-// Same parameters but elec=30p
-// hpCost  = 30/3.5 = 8.571
-// gasCost = 7/0.9  = 7.778
-// Gas cheaper → gas=1.0, elec=0
-{
-  const { heating, external, cop_by_hh } = buildSimpleDay({ tempC: 10, cop: 3.5 });
-  heating[0] = hh(ts(0, 0), 1.0);
-  const result = estimateScenarioConsumption(buildInputs({
-    heating, external, cop_by_hh,
-    gasRateByHh:    new Array(48).fill(7),
-    elecHhRateByHh: new Array(48).fill(30),
-  }));
-  const hyb = result.scenarios.hybrid_dumb;
-  assert(hyb.gas_kwh[0]  === 1.0, 'T4a', `Hybrid: gas wins, gas = 1.0 (got ${hyb.gas_kwh[0]})`);
-  assert(hyb.elec_kwh[0] === 0,   'T4b', `Hybrid: gas wins, elec = 0 (got ${hyb.elec_kwh[0]})`);
-}
-
 // ===== T5 / T6 — RC formula spec verification =====
 // `requiredQDelivered` and `computeStepEnergetics` feed simulatePostHocTIndoor.
 // Formulas re-derived from spec (scenario-consumption.js) and verified against
@@ -426,37 +390,6 @@ function _spec_requiredQ(T_cur, T_next, C, heatLossKwh, solarGainKwh) {
   const hasWarn = result.warnings.some(w => w.toLowerCase().includes('insufficient') || w.toLowerCase().includes('undersized'));
   assert(hasWarn, 'T18b',
     `Warning surfaced for undersized HP (warnings: ${JSON.stringify(result.warnings)})`);
-}
-
-// ===== T19 — hybrid_smart prefers HP at cheap HP HH, gas at expensive HP HH =====
-// HH 0-3: cheap elec (1p) → HP unit cost = 0.33p < gas unit cost = 7.78p → HP
-// HH 4-47: expensive elec (50p) → HP unit cost = 16.7p > gas unit cost = 7.78p → gas
-// B_d = 48 × 0.6 × 0.9 = 25.92 kWh; HP cap per HH = 5 kWh
-// Greedy fills: 4 HP slots (4×5=20 kWh) + gas slots for remaining 5.92 kWh
-{
-  const heating = [], external = [], cop_by_hh_arr = [];
-  for (let i = 0; i < 48; i++) {
-    heating.push(hh(ts(0, i), 0.6));
-    external.push(ext(5));
-    cop_by_hh_arr.push(3.0);
-  }
-
-  const elecRates = new Array(48);
-  for (let i = 0; i < 48; i++) elecRates[i] = (i < 4) ? 1 : 50;
-
-  const result = estimateScenarioConsumption(buildInputs({
-    heating,
-    external,
-    cop_by_hh: cop_by_hh_arr,
-    gasRateByHh:    new Array(48).fill(7),   // gas cost = 7/0.9 = 7.78p
-    elecHhRateByHh: elecRates,
-  }));
-
-  const hyb = result.scenarios.hybrid_smart;
-  assert((hyb.elec_kwh[0] ?? 0) > 0, 'T19a', `hybrid_smart HH 0 (cheap elec): HP used, elec_kwh > 0 (got ${hyb.elec_kwh[0]?.toFixed(4)})`);
-  assert((hyb.gas_kwh[0]  ?? 0) === 0, 'T19b', `hybrid_smart HH 0 (cheap elec): gas not used (got ${hyb.gas_kwh[0]?.toFixed(4)})`);
-  assert((hyb.gas_kwh[4]  ?? 0) > 0, 'T19c', `hybrid_smart HH 4 (expensive elec): gas used (got ${hyb.gas_kwh[4]?.toFixed(4)})`);
-  assert((hyb.elec_kwh[4] ?? 0) === 0, 'T19d', `hybrid_smart HH 4 (expensive elec): HP not used (got ${hyb.elec_kwh[4]?.toFixed(4)})`);
 }
 
 // ===== Summary =====

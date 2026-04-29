@@ -408,6 +408,18 @@ input:focus {
   border-bottom: none;
 }
 
+.table-scroll-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.field-note {
+  font-size: 0.8rem;
+  color: var(--colour-dark);
+  opacity: 0.75;
+  margin-top: 0.5rem;
+}
+
 /* ===== Utility ===== */
 .hidden { display: none; }
 

@@ -74,6 +74,11 @@ import {
   FA_CONFIG,
 } from './financial.js';
 
+// ===== Ofgem cap constants (Q2 2026) =====
+const OFGEM_CAP_ELEC_P_KWH  = 24.67;
+const OFGEM_CAP_GAS_P_KWH   = 5.70;
+const OFGEM_CAP_VALID_FROM  = '2026-04-01';
+
 // ===== Module 3 — Label maps =====
 
 const BASELOAD_METHOD_LABELS = {
@@ -206,7 +211,6 @@ const financialResults     = document.getElementById('financial-results');
 const financialStatus      = document.getElementById('financial-status');
 const financialSummary     = document.getElementById('financial-summary');
 const installFullHpInput   = document.getElementById('install-full-hp');
-const installHybridInput   = document.getElementById('install-hybrid');
 const busGrantInput        = document.getElementById('bus-grant');
 const avoidedAcInput       = document.getElementById('avoided-ac');
 const btnRecalcFinancial   = document.getElementById('btn-recalculate-financial');
@@ -220,7 +224,6 @@ const pricingSummary     = document.getElementById('pricing-summary');
 const svtRateInput       = document.getElementById('svt-rate');
 const elecStandingInput  = document.getElementById('elec-standing-charge');
 const gasStandingInput   = document.getElementById('gas-standing-charge');
-const hhOverheadInput    = document.getElementById('hh-overhead');
 const btnRecalcPricing   = document.getElementById('btn-recalculate-pricing');
 
 // Verdict card DOM references
@@ -270,16 +273,15 @@ function readRateParams() {
     svt_rate_p_per_kwh:    parseRate(svtRateInput,      PE_CONFIG.SVT_RATE_DEFAULT_P),
     svt_standing_charge_p: parseRate(elecStandingInput, PE_CONFIG.ELEC_STANDING_DEFAULT_P_DAY),
     gas_standing_charge_p: parseRate(gasStandingInput,  PE_CONFIG.GAS_STANDING_DEFAULT_P_DAY),
-    hh_overhead_p_per_kwh: parseRate(hhOverheadInput,   PE_CONFIG.HH_OVERHEAD_DEFAULT_P),
+    ofgem_cap_elec_p_kwh:  OFGEM_CAP_ELEC_P_KWH,
   };
 }
 
 function readCapitalParams() {
   return {
     installation_cost_full_hp_gbp: parseRate(installFullHpInput, FA_CONFIG.INSTALLATION_FULL_HP_DEFAULT_GBP),
-    installation_cost_hybrid_gbp:  parseRate(installHybridInput,  FA_CONFIG.INSTALLATION_HYBRID_DEFAULT_GBP),
-    bus_grant_gbp:                 parseRate(busGrantInput,        FA_CONFIG.BUS_GRANT_DEFAULT_GBP),
-    avoided_ac_cost_gbp:           parseRate(avoidedAcInput,       FA_CONFIG.AVOIDED_AC_DEFAULT_GBP),
+    bus_grant_gbp:                 parseRate(busGrantInput,       FA_CONFIG.BUS_GRANT_DEFAULT_GBP),
+    avoided_ac_cost_gbp:           parseRate(avoidedAcInput,      FA_CONFIG.AVOIDED_AC_DEFAULT_GBP),
   };
 }
 
@@ -1493,12 +1495,10 @@ function buildRateArrays(consumption, external, tariffRates) {
 }
 
 const SCENARIO_LABELS = {
-  current:      'Your current boiler',
-  dumb_hp_svt:  'Heat pump — flat-rate tariff',
-  dumb_hp_hh:   'Heat pump — half-hourly tariff',
-  hybrid_dumb:  'Hybrid — half-hourly tariff',
-  smart_hp_hh:  'Smart heat pump — half-hourly tariff',
-  hybrid_smart: 'Smart hybrid — half-hourly tariff',
+  current:     'Your current boiler',
+  dumb_hp_svt: 'Heat pump — flat-rate tariff',
+  dumb_hp_hh:  'Heat pump — half-hourly tariff',
+  smart_hp_hh: 'Smart heat pump — half-hourly tariff',
 };
 
 function displayScenarioResults(result) {
@@ -1536,7 +1536,7 @@ function displayScenarioResults(result) {
     const elecKwh = totalKwh(sc.elec_kwh);
     let notes = '';
 
-    if (key === 'smart_hp_hh' || key === 'hybrid_smart') {
+    if (key === 'smart_hp_hh') {
       if (validation_status.smart === 'hp_undersized') {
         notes = 'HP undersized — resistive backup applied';
       } else if (validation_status.smart !== 'ok') {
@@ -1623,12 +1623,10 @@ btnRecalcScenario.addEventListener('click', async () => {
 // ===== Module 8: Pricing Engine =====
 
 const SCENARIO_DISPLAY_NAMES = {
-  current:      'Your current boiler',
-  dumb_hp_svt:  'Heat pump — flat-rate tariff',
-  dumb_hp_hh:   'Heat pump — half-hourly tariff',
-  hybrid_dumb:  'Hybrid — half-hourly tariff',
-  smart_hp_hh:  'Smart heat pump — half-hourly tariff',
-  hybrid_smart: 'Smart hybrid — half-hourly tariff',
+  current:     'Your current boiler',
+  dumb_hp_svt: 'Heat pump — flat-rate tariff',
+  dumb_hp_hh:  'Heat pump — half-hourly tariff',
+  smart_hp_hh: 'Smart heat pump — half-hourly tariff',
 };
 
 function prefillRateInputs(tariffRates) {
@@ -1643,42 +1641,56 @@ function displayPricingResults(pricingResult) {
   pricingStatus.innerHTML  = '';
 
   const rateMetadata = getRateMetadata();
-  const scale = rateMetadata && rateMetadata.data_period_days > 0
-    ? 365 / rateMetadata.data_period_days : 1;
 
-  const displayOrder = ['current', 'dumb_hp_svt', 'dumb_hp_hh', 'hybrid_dumb', 'smart_hp_hh', 'hybrid_smart'];
   const fmtGbp = (v) => {
-    if (v === null || v === undefined) return '—';
-    return '£' + v.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    if (v === null || v === undefined || v === 0) return '—';
+    return '£' + Math.round(v).toLocaleString('en-GB');
   };
 
   let hasNullSmart = false;
-  const rows = displayOrder.map(key => {
-    const sc = pricingResult.scenarios[key];
-    if (sc.annual_cost_gbp === null) hasNullSmart = true;
-    const annualEnergy   = sc.energy_cost_gbp    !== null ? sc.energy_cost_gbp    * scale : null;
-    const annualStanding = sc.standing_charge_gbp !== null ? sc.standing_charge_gbp * scale : null;
+  const rows = ['current', 'dumb_hp_svt', 'dumb_hp_hh', 'smart_hp_hh'].map(key => {
+    const sc     = pricingResult.scenarios[key];
+    const isNull = sc.annual_cost_gbp === null;
+    if (isNull) hasNullSmart = true;
+    const total = isNull ? null
+                : (sc.heating_gas_gbp     ?? 0)
+                + (sc.heating_elec_gbp    ?? 0)
+                + (sc.non_heating_gas_gbp  ?? 0)
+                + (sc.non_heating_elec_gbp ?? 0);
     return `<tr>
       <td>${escapeHtml(SCENARIO_DISPLAY_NAMES[key])}</td>
-      <td>${fmtGbp(annualEnergy)}</td>
-      <td>${fmtGbp(annualStanding)}</td>
-      <td>${fmtGbp(sc.annual_cost_gbp)}</td>
+      <td>${fmtGbp(sc.heating_gas_gbp)}</td>
+      <td>${fmtGbp(sc.heating_elec_gbp)}</td>
+      <td>${fmtGbp(sc.non_heating_gas_gbp)}</td>
+      <td>${fmtGbp(sc.non_heating_elec_gbp)}</td>
+      <td>${fmtGbp(total)}</td>
     </tr>`;
   }).join('');
 
+  const calibrationWarning = rateMetadata?.calibration_source === 'default'
+    ? `<p class="status-msg warning">Couldn't fetch live Agile rates for your region — using typical UK averages (D=2.2, P=12p/kWh peak). Numbers are indicative; your actual Agile rate will differ.</p>`
+    : '';
+
   pricingSummary.innerHTML = `
-    <table class="energy-summary-table">
-      <thead>
-        <tr>
-          <th>Scenario</th>
-          <th>Annual energy cost</th>
-          <th>Standing charges (£/yr)</th>
-          <th>Total (£/yr)</th>
-        </tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>
-    ${hasNullSmart ? '<p class="status-msg info" style="margin-top:0.75rem;">Insufficient data for smart scenarios — wholesale price data required.</p>' : ''}
+    ${calibrationWarning}
+    <div class="table-scroll-wrap">
+      <table class="energy-summary-table">
+        <thead>
+          <tr>
+            <th>Scenario</th>
+            <th>Heating gas (£/yr)</th>
+            <th>Heating elec (£/yr)</th>
+            <th>Non-heating gas (£/yr)</th>
+            <th>Non-heating elec (£/yr)</th>
+            <th>Total (£/yr)</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <p class="field-note">All heat pump scenarios retain the gas connection. Non-heating gas includes the gas standing charge and any baseload gas use.</p>
+    <p class="field-note">Heat pump scenario electricity costs use the current Ofgem price cap rate (electricity: ${OFGEM_CAP_ELEC_P_KWH}p/kWh). Gas costs (for the retained connection and baseload) and your current boiler costs use your actual historical tariff rates.</p>
+    ${hasNullSmart ? '<p class="status-msg info" style="margin-top:0.75rem;">Smart HP scenario unavailable — insufficient heat loss or heat pump capacity data.</p>' : ''}
   `;
 
   for (const w of (rateMetadata?.warnings ?? [])) {
@@ -1717,12 +1729,20 @@ async function runPricingEngine(showProgressFn, showStatusFn) {
   }
 
   showProgressFn('Computing tariff rates…');
-  const params       = readRateParams();
-  const rateMetadata = prepareRates(ingestion, external, params);
+  const baseloadResult   = getBaseloadResult();
+  const agileCalibration = getExternalResult()?.external_metadata?.agile_calibration ?? null;
+  const params = {
+    ...readRateParams(),
+    agile_calibration: agileCalibration,
+  };
+  const rateMetadata = prepareRates(ingestion, external.external, params);
   setRateMetadata(rateMetadata);
 
   showProgressFn('Computing scenario costs…');
-  const pricingResult = computeCosts(rateMetadata, scenarioResult, params);
+  const pricingResult = computeCosts(
+    rateMetadata, scenarioResult, params,
+    baseloadResult?.heating ?? null,
+  );
   setPricingResult(pricingResult);
 
   displayPricingResults(pricingResult);
@@ -1751,15 +1771,13 @@ btnRecalcPricing.addEventListener('click', async () => {
 // ===== Module 9: Financial Analysis =====
 
 const FINANCIAL_DISPLAY_NAMES = {
-  current:      'Your current boiler',
-  dumb_hp_svt:  'Heat pump — flat-rate tariff',
-  dumb_hp_hh:   'Heat pump — half-hourly tariff',
-  hybrid_dumb:  'Hybrid — half-hourly tariff',
-  smart_hp_hh:  'Smart heat pump — half-hourly tariff',
-  hybrid_smart: 'Smart hybrid — half-hourly tariff',
+  current:     'Your current boiler',
+  dumb_hp_svt: 'Heat pump — flat-rate tariff',
+  dumb_hp_hh:  'Heat pump — half-hourly tariff',
+  smart_hp_hh: 'Smart heat pump — half-hourly tariff',
 };
 
-const FINANCIAL_DISPLAY_ORDER = ['current', 'dumb_hp_svt', 'dumb_hp_hh', 'hybrid_dumb', 'smart_hp_hh', 'hybrid_smart'];
+const FINANCIAL_DISPLAY_ORDER = ['current', 'dumb_hp_svt', 'dumb_hp_hh', 'smart_hp_hh'];
 
 function fmtGbpSaving(v) {
   if (v === null || v === undefined) return '—';
@@ -1844,12 +1862,10 @@ function displayFinancialResults(result) {
 // ===== Module 10a: Verdict Block =====
 
 const VERDICT_CHART_LABELS = {
-  current:      'Current boiler',
-  dumb_hp_svt:  'HP — flat rate',
-  dumb_hp_hh:   'HP — half-hourly',
-  hybrid_dumb:  'Hybrid — HH',
-  smart_hp_hh:  'Smart HP — HH',
-  hybrid_smart: 'Smart hybrid — HH',
+  current:     'Current boiler',
+  dumb_hp_svt: 'HP — flat rate',
+  dumb_hp_hh:  'HP — half-hourly',
+  smart_hp_hh: 'Smart HP — HH',
 };
 
 function buildVerdictStatusMessage(financialResult) {
@@ -2037,7 +2053,7 @@ methodology section below. The figures in the tables are rough estimates only.`;
   // Step 16g — scenario bar chart
   if (verdictChart) verdictChart.destroy();
 
-  const scenarioOrder = ['current', 'dumb_hp_svt', 'dumb_hp_hh', 'hybrid_dumb', 'smart_hp_hh', 'hybrid_smart'];
+  const scenarioOrder = ['current', 'dumb_hp_svt', 'dumb_hp_hh', 'smart_hp_hh'];
   const chartData = scenarioOrder
     .filter(k => financialResult.scenarios[k].annual_cost_gbp !== null)
     .map(k => ({
