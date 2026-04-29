@@ -10,12 +10,15 @@
 ## Task description
 
 Replace the "Adjust the assumptions" section (Section 5) with a new "What If" section
-containing three equal tiles: Policy Reform, Wait for Technology, and Get Your Quotes.
-All inputs from the old section migrate into the appropriate tile; nothing is lost. The
-old `pricing-params-card` and `financial-params-card` (and their banner) are removed
-from the HTML. The COP scalar slider relocates from the hp-model methodology card to the
-Wait for Technology tile. Live auto-update where the recalculation chain is cheap (M8→M9
-or M9-only); explicit Recalculate button where the chain is expensive (M6→M7→M8→M9).
+containing two equal tiles: (1) Policy Reform + Wait for Technology combined in one card,
+(2) Get Your Quotes. All inputs from the old section migrate into the appropriate tile;
+nothing is lost. The old `pricing-params-card` and `financial-params-card` (and their
+banner) are removed from the HTML. The COP scalar slider relocates from the hp-model
+methodology card to the Wait for Technology sub-section within tile 1. Live auto-update
+where the recalculation chain is cheap (M8→M9 or M9-only); explicit Recalculate button
+where the chain is expensive (M6→M7→M8→M9). Get Your Quotes tile includes a "Disconnect
+gas" toggle that, when enabled, shows a DHW/other split slider and computes the net annual
+benefit of removing the gas connection.
 
 ---
 
@@ -94,14 +97,11 @@ the 2-up breakpoint; the design doc specifies `≤767px` for three-up).
 
 Append:
 ```css
-/* ===== Three-up tile grid ===== */
-.section-tiles.three-up {
-  grid-template-columns: repeat(3, 1fr);
-}
-@media (max-width: 767px) {
-  .section-tiles.three-up {
-    grid-template-columns: 1fr;
-  }
+/* ===== Tile divider (within a combined card) ===== */
+.tile-divider {
+  border: none;
+  border-top: 1px solid var(--colour-border);
+  margin: 1.5rem 0;
 }
 
 /* ===== Preset buttons ===== */
@@ -128,7 +128,44 @@ Append:
   color: #fff;
 }
 .preset-btn:hover:not(.active) { background: #f0f7f7; }
+
+/* ===== Info popout (Avoided AC and future fields) ===== */
+.info-popout {
+  display: inline-block;
+  position: relative;
+  margin-left: 0.35rem;
+}
+.info-icon {
+  cursor: pointer;
+  list-style: none;
+  color: var(--colour-teal);
+  font-size: 0.95rem;
+  font-weight: 600;
+  user-select: none;
+}
+.info-icon::-webkit-details-marker { display: none; }
+.info-popout[open] .info-icon { color: var(--colour-coral); }
+.info-content {
+  position: absolute;
+  top: 1.6rem;
+  left: 0;
+  z-index: 10;
+  width: 22rem;
+  max-width: 90vw;
+  padding: 0.75rem 0.9rem;
+  background: #fff;
+  border: 1px solid var(--colour-border);
+  border-radius: var(--radius);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--colour-dark);
+  font-weight: normal;
+}
 ```
+
+**No `.section-tiles.three-up` class.** The What If section uses the standard 2-column
+`.section-tiles` from M10b — no new grid modifier is needed.
 
 ### Step 2 — COP slider relocation: remove from hp-model-card (index.html)
 
@@ -150,10 +187,12 @@ In `#hp-model-card` (index.html:260-281), remove the `#hp-model-controls` block 
 <div class="section-banner hidden" id="section-banner-what-if">
   <h2 class="section-heading">What If</h2>
 </div>
-<div class="section-tiles three-up hidden" id="what-if-tiles">
+<div class="section-tiles hidden" id="what-if-tiles">
 
-  <!-- Tile 1: Policy Reform -->
-  <div class="card" id="tile-policy-reform">
+  <!-- Tile 1: Policy Reform + Wait for Technology (combined card) -->
+  <div class="card" id="tile-policy-and-tech">
+
+    <!-- B1. Policy Reform -->
     <h3>Policy Reform</h3>
     <p class="card-intro">HP running costs above use the April 2026 Ofgem cap rates —
       what you'd pay if you installed today. See how further policy change, or your
@@ -179,25 +218,26 @@ In `#hp-model-card` (index.html:260-281), remove the `#hp-model-controls` block 
       </div>
     </details>
     <div class="wi-output" id="policy-output"></div>
-  </div>
 
-  <!-- Tile 2: Wait for Technology -->
-  <div class="card" id="tile-wait-for-tech">
+    <hr class="tile-divider">
+
+    <!-- B2. Wait for Technology -->
     <h3>Wait for Technology</h3>
     <p class="card-intro">Heat pump efficiency (COP) has improved from ~2.5 to ~3.4
       over the past decade. This analysis uses a field-trial median. Adjust the slider
       to see how better — or worse — real-world performance changes your payback.</p>
     <label for="cop-scalar-what-if">Performance vs field-trial median</label>
     <input type="range" id="cop-scalar-what-if" min="0.6" max="1.5" step="0.05" value="1.0">
-    <span id="cop-scalar-what-if-display">1.0× (COP 2.9 at 7°C)</span>
+    <span id="cop-scalar-display">1.0× (COP 2.9 at 7°C)</span>
     <button class="btn btn-primary" id="btn-recalc-cop-what-if">Recalculate</button>
     <div class="wi-output" id="cop-output">
       <p id="cop-payback-line"></p>
       <p id="cop-threshold-line"></p>
     </div>
+
   </div>
 
-  <!-- Tile 3: Get Your Quotes -->
+  <!-- Tile 2: Get Your Quotes -->
   <div class="card" id="tile-get-quotes">
     <h3>Get Your Quotes</h3>
     <p class="card-intro">Installation costs vary from £8,000 to £18,000 depending on
@@ -213,10 +253,36 @@ In `#hp-model-card` (index.html:260-281), remove the `#hp-model-controls` block 
       <input id="wi-install-cost" type="number" step="100" min="0" value="12500">
       <label for="wi-grant">Grant / subsidy <span class="unit">£</span></label>
       <input id="wi-grant" type="number" step="100" min="0" value="7500">
-      <label for="wi-avoided-ac">Avoided AC cost <span class="unit">£</span></label>
+      <label>
+        Avoided AC cost <span class="unit">£</span>
+        <details class="info-popout">
+          <summary class="info-icon" aria-label="More information">ⓘ</summary>
+          <div class="info-content">
+            Some heat pump systems (particularly air-to-air) can provide cooling,
+            removing the need for a separate AC installation. Enter the avoided upfront
+            cost here. AC running costs are not modelled — heat pumps have no efficiency
+            advantage over conventional AC when used for cooling.
+          </div>
+        </details>
+      </label>
       <input id="wi-avoided-ac" type="number" step="100" min="0" value="0">
     </div>
     <div class="wi-output" id="quotes-output"></div>
+    <label class="field-group" style="margin-top:0.75rem;display:flex;gap:0.5rem;align-items:center;">
+      <input type="checkbox" id="disconnect-gas-toggle">
+      Disconnect gas connection entirely
+    </label>
+    <div id="gas-split-group" hidden>
+      <label for="gas-split-slider">How is your non-heating gas used?</label>
+      <div class="slider-labels" style="display:flex;justify-content:space-between;font-size:0.8rem;">
+        <span>Hot water (HP-integrated DHW)</span>
+        <span>Other (cooking / immersion)</span>
+      </div>
+      <input type="range" id="gas-split-slider" min="0" max="100" step="5" value="70">
+      <span id="gas-split-display">70% hot water · 30% other</span>
+      <p class="field-hint">If you plan to use an immersion heater rather than
+        HP-integrated hot water, slide fully to Other.</p>
+    </div>
     <p class="card-intro" style="margin-top:0.75rem;font-size:0.85rem;">
       The BUS grant (£7,500) applies to standalone air-source or ground-source heat pump
       installations. Other schemes (e.g. £2,500 for air-to-air units) can be entered in
@@ -248,7 +314,7 @@ const wiGasStandingInput     = document.getElementById('wi-gas-standing');
 const policyOutput           = document.getElementById('policy-output');
 // Wait for Technology
 const copScalarWhatIfInput   = document.getElementById('cop-scalar-what-if');
-const copScalarWhatIfDisplay = document.getElementById('cop-scalar-what-if-display');
+const copScalarDisplay       = document.getElementById('cop-scalar-display');   // note: not 'cop-scalar-what-if-display'
 const btnRecalcCopWhatIf     = document.getElementById('btn-recalc-cop-what-if');
 const copPaybackLine         = document.getElementById('cop-payback-line');
 const copThresholdLine       = document.getElementById('cop-threshold-line');
@@ -257,6 +323,11 @@ const wiInstallCostInput     = document.getElementById('wi-install-cost');
 const wiGrantInput           = document.getElementById('wi-grant');
 const wiAvoidedAcInput       = document.getElementById('wi-avoided-ac');
 const quotesOutput           = document.getElementById('quotes-output');
+// Disconnect gas
+const disconnectGasToggle    = document.getElementById('disconnect-gas-toggle');
+const gasSplitGroup          = document.getElementById('gas-split-group');
+const gasSplitSlider         = document.getElementById('gas-split-slider');
+const gasSplitDisplay        = document.getElementById('gas-split-display');
 ```
 
 Update `copScalarInput` reference (app.js:186) to point to the new element:
@@ -344,7 +415,7 @@ When "Ofgem cap (base)" is active: "Same as the results above — this is the ba
 copScalarWhatIfInput.addEventListener('input', () => {
   const scalar = parseFloat(copScalarWhatIfInput.value);
   const copAt7 = (scalar * 2.91).toFixed(1);
-  copScalarWhatIfDisplay.textContent = `${scalar.toFixed(2)}× (COP ${copAt7} at 7°C)`;
+  copScalarDisplay.textContent = `${scalar.toFixed(2)}× (COP ${copAt7} at 7°C)`;
 });
 ```
 
@@ -355,11 +426,10 @@ existing `btnRecalcHpModel` handler already reads from the correct input — wir
 `copPaybackLine` and `copThresholdLine`.
 
 Update `copScalarValue` display reference: `copScalarValue` (app.js:187) pointed to
-`#cop-scalar-value` in the old methodology card. After removal of that element, either
-remove this reference entirely or redirect it. Since the new tile has
-`#cop-scalar-what-if-display` for the live display, `copScalarValue` reference can be
-removed. At implementation time, search for all uses of `copScalarValue` in app.js and
-update them.
+`#cop-scalar-value` in the old methodology card. After removal of that element, this
+reference must be removed or redirected. The live display is now `copScalarDisplay`
+(pointing to `#cop-scalar-display` in the What If tile). At implementation time, search
+for all uses of `copScalarValue` in app.js and update or remove them.
 
 **Threshold COP line:** Computed once after `runFinancialAnalysis` completes on the main
 pipeline run. Iterate COP scalar from 0.6 to 1.5 in 0.05 steps — see "Flag for review"
@@ -375,8 +445,9 @@ Grant preset buttons pre-fill `wiGrantInput`:
 - "No grant" → 0
 - "Enhanced — £10,000 (proposed)" → 10000
 
-Auto-update on any input change: call `runFinancialAnalysis()` (M9-only — no pipeline
-re-run needed). Update `quotesOutput` with condensed payback table:
+Auto-update on any input change (installation cost, grant, avoided AC): call
+`runFinancialAnalysis()` (M9-only — no pipeline re-run needed). Update `quotesOutput`
+with condensed payback table:
 
 ```
 Full HP (smart HH):   X years   [or em-dash if no_data]
@@ -384,6 +455,62 @@ Full HP (SVT):        Y years
 ```
 
 Positive-verdict rows in bold.
+
+**Disconnect gas toggle and slider:**
+
+```js
+disconnectGasToggle.addEventListener('change', () => {
+  gasSplitGroup.hidden = !disconnectGasToggle.checked;
+  updateQuotesOutput();
+});
+
+gasSplitSlider.addEventListener('input', () => {
+  const hw = parseInt(gasSplitSlider.value);
+  gasSplitDisplay.textContent = `${hw}% hot water · ${100 - hw}% other`;
+  updateQuotesOutput();
+});
+```
+
+**Disconnect gas delta calculation** (UI-level arithmetic — no M8/M9 rerun):
+
+```js
+function computeGasDisconnectDelta() {
+  if (!disconnectGasToggle.checked) return 0;
+
+  const COP_DHW   = 2.5;  // HP-integrated hot water
+  const COP_OTHER = 1.0;  // immersion heater / cooking
+
+  const baseload = getBaseloadResult();
+  const baseloadGasKwh = baseload?.baseload_gas_annual_kwh ?? null;
+  if (baseloadGasKwh === null) return 0;
+
+  const gasRateP  = parseFloat(wiGasRateInput.value)      || OFGEM_CAP_GAS_P_KWH;
+  const gasScP    = parseFloat(wiGasStandingInput.value)  || 0;
+  const elecRateP = parseFloat(wiSvtRateInput.value)      || OFGEM_CAP_ELEC_P_KWH;
+
+  const gasSaving = (baseloadGasKwh * gasRateP / 100) + (gasScP * 365 / 100);
+
+  const hwFraction    = parseInt(gasSplitSlider.value) / 100;
+  const otherFraction = 1 - hwFraction;
+  const dhwElecKwh    = baseloadGasKwh * hwFraction    / COP_DHW;
+  const otherElecKwh  = baseloadGasKwh * otherFraction / COP_OTHER;
+  const elecAdded     = (dhwElecKwh + otherElecKwh) * elecRateP / 100;
+
+  return gasSaving - elecAdded;
+}
+```
+
+**Output when disconnect gas is off:** single payback column as above.
+
+**Output when disconnect gas is on:** two-column table (Gas retained | Gas disconnected),
+each computed as `net_investment / (base_annual_saving + gasDisconnectDelta)`. Below table:
+```
+Disconnecting gas saves £X/year in gas costs; adds £Y/year in electricity.
+Net annual benefit: £Z.
+```
+If `gasDisconnectDelta` is negative: "Disconnecting gas would add £Z/year at these rates."
+If `baseloadGasKwh` is null: disable the toggle, show tooltip "Gas usage data needed — run
+the analysis first."
 
 ---
 
@@ -393,17 +520,18 @@ Positive-verdict rows in bold.
 |------|-----------|
 | Threshold COP computation — 19 full M6→M7→M8→M9 chain runs on page load may take ~15s | Design doc says "M9-only using pre-existing M7/M8 outputs" — implement proportional scaling approximation; flag for Rhiannon to verify accuracy is acceptable |
 | Historical rate field path in ingestion result — exact field name not confirmed | Flag at implementation time: search for where SVT and gas rates are stored in `getIngestionResult()`; the `_ingestionResult.tariff_rates` or similar structure |
-| `copScalarValue` DOM reference (old `#cop-scalar-value`) — used in live display; after COP slider removal from methodology card, this ref must be cleaned up | Grep `copScalarValue` in app.js; confirm all uses updated or removed |
+| `copScalarValue` DOM reference (old `#cop-scalar-value`) — used in live display; after COP slider removal from methodology card, this ref must be cleaned up | Grep `copScalarValue` in app.js; confirm all uses updated or removed; new display ref is `copScalarDisplay` pointing to `#cop-scalar-display` |
 | "Adjust the assumptions" section removal — `btnRecalcPricing` and `btnRecalcFinancial` are currently defined as visible inside those cards; after card removal the DOM refs will be null | Remove the card DOM elements in index.html; the `btnRecalcPricing` and `btnRecalcFinancial` buttons inside those sections are also removed. The What If auto-update replaces their function — check whether any other code reveals or manipulates these buttons and update accordingly |
 | Gas rate for Octopus users — currently no single gas unit rate is surfaced in the UI (it comes from tariff data); the Policy Reform tile adds an explicit gas rate input; this is the first time Octopus users see a gas rate input | Pre-fill from `OFGEM_CAP_GAS_P_KWH` as the default (m8-patch uses this as the base rate for HP scenarios); label clearly as the base rate |
-| Three-up grid at 768px exact — `.section-tiles.three-up` collapses at ≤767px while 2-up collapses at ≤768px; at exactly 768px, 3-up shows 3 columns while 2-up shows 1 | Intentional per breakpoint spec; test at 768px to confirm visual coherence |
+| Info popout `position: absolute` panel — may overflow the card boundary on narrow tiles (~520px) | Set `max-width: 90vw`; at narrow widths the 22rem panel clips to viewport width; acceptable; test at 520px tile width |
+| Disconnect gas: `baseload_gas_annual_kwh` null path — toggle must be disabled gracefully | Wrap toggle interaction in a guard: check `getBaseloadResult()?.baseload_gas_annual_kwh != null` before enabling; show tooltip if null |
 
 ---
 
 ## Success criteria
 
 - [ ] "What If" section appears as Section 5; old "Adjust assumptions" section is gone — no duplicate rate or installation inputs elsewhere
-- [ ] Three tiles display side by side at desktop; stack at ≤767px without horizontal overflow
+- [ ] Two tiles display side by side at desktop; stack at ≤768px without horizontal overflow; Policy Reform and Wait for Technology share tile 1 separated by a divider line
 - [ ] Policy Reform: "Ofgem cap (base)" pre-fills cap constants; output reads "Same as results above"
 - [ ] Policy Reform: "Full levy removal" adjusts rates by `LEVY_ELEC_DELTA` and `LEVY_GAS_DELTA`
 - [ ] Policy Reform: "Your historical rates" fills from ingestion result
@@ -415,7 +543,11 @@ Positive-verdict rows in bold.
 - [ ] Wait for Technology: Threshold line appears on initial render; correct wording for both found/not-found cases
 - [ ] Get Your Quotes: Grant presets fill the grant input; "Enhanced" shows "(proposed)" label
 - [ ] Get Your Quotes: Changing any input updates condensed payback table immediately
-- [ ] Get Your Quotes: Avoided AC input present (moved from old Installation card)
+- [ ] Get Your Quotes: Avoided AC input present (moved from old Installation card); info popout (ⓘ) opens and displays explainer text
+- [ ] Get Your Quotes: "Disconnect gas" toggle off — single payback column shown
+- [ ] Get Your Quotes: "Disconnect gas" toggle on — two-column table (gas retained / gas disconnected) appears; split slider visible; net benefit line shown below table
+- [ ] Get Your Quotes: Slider at 70/30 default — gas saving and electricity added arithmetic match hand calculation; slider at 100% Other applies full baseload at COP 1.0 only
+- [ ] Get Your Quotes: Disconnect gas toggle disabled if `baseload_gas_annual_kwh` is null
 - [ ] No `#install-hybrid` input anywhere in the page
 - [ ] No console errors after any combination of tile interactions
 

@@ -41,6 +41,9 @@ the same function (Step 16i).
   (the Agile D×W+P rates). For the average, compute mean of non-null values in this array.
   SVT rate is `rateMetadata.svt_rate_p_per_kwh`. `agile_calibration.gsp_region` comes from
   `getExternalResult().agile_calibration` (m8-patch adds this to the external result).
+  **Field name note:** the m10b design doc calls this array `agile_rate_by_hh` — that is an
+  older draft name. Use `elec_hh_rate_by_hh` to match the m8-patch plan, which uses that
+  name throughout `prepareRates`.
 - Stat 4 (installation): `readCapitalParams()` returns `{ installation_cost_full_hp_gbp,
   bus_grant_gbp, ... }` (app.js:272). Call directly from `populateDroveTile`.
 - `primaryKey` is computed inside `buildAndDisplayVerdict` at line 1823 and must be passed
@@ -240,6 +243,12 @@ const droveCard = document.getElementById('drove-card');
 Add new function `populateDroveTile(financialResult, heatLossResult, rateMetadata, primaryKey)`.
 Additional data obtained directly within the function via module-level accessors:
 `getHeatPumpModelResult()`, `getExternalResult()`, `readCapitalParams()`.
+
+**Design doc deviation:** the m10b design doc specifies a 7-param signature
+`populateDroveTile(financialResult, heatLossResult, hpModelResult, externalResult,
+rateMetadata, capitalParams, primaryKey)`. This plan consolidates to 4 external params and
+calls the accessors internally — these functions are already imported at module scope and
+calling them inside the function reduces call-site complexity without loss of testability.
 
 ```js
 function populateDroveTile(financialResult, heatLossResult, rateMetadata, primaryKey) {
