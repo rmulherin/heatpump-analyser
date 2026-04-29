@@ -172,37 +172,69 @@
       </div>
     </section>
 
-    <!-- Verdict Card -->
-    <section class="card verdict-card hidden" id="verdict-card">
-      <div class="verdict-headline" id="verdict-headline"></div>
-      <div class="verdict-status hidden" id="verdict-status"></div>
-      <div class="verdict-chart-wrap">
-        <canvas id="verdict-chart"></canvas>
-      </div>
-      <p class="verdict-quality" id="verdict-quality"></p>
-    </section>
+    <div class="section-tiles" id="results-tiles">
+      <!-- Verdict Card -->
+      <section class="card verdict-card hidden" id="verdict-card">
+        <div class="verdict-headline" id="verdict-headline"></div>
+        <div class="verdict-status hidden" id="verdict-status"></div>
+        <div class="verdict-chart-wrap">
+          <canvas id="verdict-chart"></canvas>
+        </div>
+        <p class="verdict-quality" id="verdict-quality"></p>
+      </section>
+
+      <!-- Drove Card -->
+      <aside class="card drove-card hidden" id="drove-card">
+        <h3 class="drove-title">What drove this answer</h3>
+        <div class="drove-stats">
+          <div class="drove-stat" id="drove-heat-loss">
+            <span class="drove-label">Heat loss</span>
+            <span class="drove-value" id="drove-heat-loss-value">—</span>
+            <span class="drove-context" id="drove-heat-loss-context"></span>
+          </div>
+          <div class="drove-stat" id="drove-hp-size">
+            <span class="drove-label">Heat pump size</span>
+            <span class="drove-value" id="drove-hp-size-value">—</span>
+            <span class="drove-context" id="drove-hp-size-context"></span>
+          </div>
+          <div class="drove-stat" id="drove-electricity">
+            <span class="drove-label" id="drove-electricity-label">Electricity</span>
+            <span class="drove-value" id="drove-electricity-value">—</span>
+            <span class="drove-context" id="drove-electricity-context"></span>
+          </div>
+          <div class="drove-stat" id="drove-install">
+            <span class="drove-label">Installation</span>
+            <span class="drove-value" id="drove-install-value">—</span>
+            <span class="drove-context" id="drove-install-context"></span>
+          </div>
+        </div>
+      </aside>
+    </div>
 
     <!-- Section Banner: Your home -->
     <div class="section-banner hidden" id="section-banner-your-home">
       <h2 class="section-heading">Your home</h2>
     </div>
 
-    <!-- Results Summary -->
-    <section class="card hidden" id="results-card">
-      <h2>Your data</h2>
-      <div class="results-summary" id="results-summary"></div>
-    </section>
+    <div class="section-tiles">
+      <!-- Results Summary -->
+      <section class="card hidden" id="results-card">
+        <h2>Your data</h2>
+        <div class="results-summary" id="results-summary"></div>
+      </section>
 
-    <!-- Module 3: Energy Summary -->
-    <section class="card hidden" id="energy-summary-card">
-      <h2>How you use energy</h2>
-      <div id="energy-summary-content"></div>
-    </section>
+      <!-- Module 3: Energy Summary -->
+      <section class="card hidden" id="energy-summary-card">
+        <h2>How you use energy</h2>
+        <div id="energy-summary-content"></div>
+      </section>
+    </div>
 
     <!-- Methodology Disclosure -->
     <details class="methodology-disclosure hidden" id="methodology-disclosure">
       <summary class="methodology-summary">Show methodology</summary>
 
+      <div class="section-tiles">
       <!-- Module 4: Heat Loss Estimation -->
       <section class="card hidden" id="heat-loss-card">
         <h2>Heat loss</h2>
@@ -276,6 +308,7 @@
         </div>
         <button class="btn btn-primary" id="btn-recalculate-thermal-char">Recalculate</button>
       </section>
+      </div>
 
       <!-- Module 5b: Underheat diagnostic (shown after thermal character runs) -->
       <section class="card hidden" id="underheat-card">
@@ -293,6 +326,7 @@
         </div>
       </section>
 
+      <div class="section-tiles">
       <!-- Module 6: Heat Pump Model -->
       <section class="card hidden" id="hp-model-card">
         <h2>Heat pump sizing</h2>
@@ -351,12 +385,13 @@
 
         <button class="btn btn-primary" id="btn-recalculate-scenario">Recalculate scenarios</button>
       </section>
+      </div>
 
     </details>
 
-    <!-- Section Banner: The verdict -->
-    <div class="section-banner hidden" id="section-banner-verdict">
-      <h2 class="section-heading">The verdict</h2>
+    <!-- Section Banner: Cost breakdown -->
+    <div class="section-banner hidden" id="section-banner-cost-breakdown">
+      <h2 class="section-heading">Cost breakdown</h2>
     </div>
 
     <!-- Module 8: Pricing Results -->

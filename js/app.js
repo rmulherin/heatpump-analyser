@@ -231,11 +231,12 @@ const verdictCard      = document.getElementById('verdict-card');
 const verdictHeadline  = document.getElementById('verdict-headline');
 const verdictStatus    = document.getElementById('verdict-status');
 const verdictQuality   = document.getElementById('verdict-quality');
+const droveCard        = document.getElementById('drove-card');
 
 // Section banner DOM references
-const bannerYourHome    = document.getElementById('section-banner-your-home');
-const bannerVerdict     = document.getElementById('section-banner-verdict');
-const bannerAssumptions = document.getElementById('section-banner-assumptions');
+const bannerYourHome      = document.getElementById('section-banner-your-home');
+const bannerCostBreakdown = document.getElementById('section-banner-cost-breakdown');
+const bannerAssumptions   = document.getElementById('section-banner-assumptions');
 
 // Methodology disclosure DOM reference
 const methodologyDisclosure = document.getElementById('methodology-disclosure');
@@ -1710,7 +1711,7 @@ function displayPricingResults(pricingResult) {
   pricingCard.classList.remove('hidden');
   pricingParamsCard.classList.remove('hidden');
   btnRecalcPricing.classList.remove('hidden');
-  bannerVerdict.classList.remove('hidden');
+  bannerCostBreakdown.classList.remove('hidden');
   bannerAssumptions.classList.remove('hidden');
 }
 
@@ -1916,6 +1917,71 @@ function buildVerdictStatusMessage(financialResult) {
   return null;
 }
 
+function populateDroveTile(financialResult, heatLossResult, rateMetadata, primaryKey) {
+  if (!financialResult) return;
+
+  const hpModel     = getHeatPumpModelResult();
+  const externalRes = getExternalResult();
+  const capitalP    = readCapitalParams();
+
+  // Stat 1 — Heat loss
+  const htcVal = document.getElementById('drove-heat-loss-value');
+  const htcCtx = document.getElementById('drove-heat-loss-context');
+  if (heatLossResult?.htc_w_per_k != null) {
+    htcVal.textContent = `${Math.round(heatLossResult.htc_w_per_k)} W/K`;
+    htcCtx.textContent = HEAT_LOSS_RATING_DISPLAY[heatLossResult.rating] ?? '';
+  } else {
+    htcVal.textContent = 'Not available';
+    htcCtx.textContent = "Heat loss couldn't be estimated from your data";
+  }
+
+  // Stat 2 — Heat pump size
+  const hpVal = document.getElementById('drove-hp-size-value');
+  const hpCtx = document.getElementById('drove-hp-size-context');
+  if (hpModel?.hp_capacity_kw != null) {
+    hpVal.textContent = `${hpModel.hp_capacity_kw.toFixed(1)} kW`;
+    hpCtx.textContent = `Running at average COP ${hpModel.annual_mean_cop?.toFixed(1) ?? '—'}`;
+  } else {
+    hpVal.textContent = 'Not available';
+    hpCtx.textContent = 'Sizing requires a heat-loss estimate';
+  }
+
+  // Stat 3 — Electricity context
+  const elecLabel = document.getElementById('drove-electricity-label');
+  const elecVal   = document.getElementById('drove-electricity-value');
+  const elecCtx   = document.getElementById('drove-electricity-context');
+  if (primaryKey === 'smart_hp_hh' || primaryKey === 'dumb_hp_hh') {
+    const hhRates   = rateMetadata?.elec_hh_rate_by_hh?.filter(r => r !== null) ?? [];
+    const avgHhRate = hhRates.length > 0
+      ? hhRates.reduce((s, r) => s + r, 0) / hhRates.length
+      : null;
+    elecLabel.textContent = 'Electricity (half-hourly)';
+    elecVal.textContent   = avgHhRate != null ? `${avgHhRate.toFixed(1)} p/kWh average` : 'Not available';
+    const region = externalRes?.external_metadata?.agile_calibration?.gsp_region ?? 'regional pricing';
+    elecCtx.textContent   = `Agile tariff — region ${region}`;
+  } else if (primaryKey === 'dumb_hp_svt') {
+    elecLabel.textContent = 'Electricity (flat rate)';
+    elecVal.textContent   = `${(rateMetadata?.svt_rate_p_per_kwh ?? 0).toFixed(1)} p/kWh`;
+    elecCtx.textContent   = 'Standard variable tariff';
+  } else {
+    elecLabel.textContent = 'Electricity';
+    elecVal.textContent   = 'Not available';
+    elecCtx.textContent   = 'Pricing data limited';
+  }
+
+  // Stat 4 — Installation
+  const instVal = document.getElementById('drove-install-value');
+  const instCtx = document.getElementById('drove-install-context');
+  const install = capitalP.installation_cost_full_hp_gbp;
+  const grant   = capitalP.bus_grant_gbp;
+  instVal.textContent = `£${(install / 1000).toFixed(1)}k`;
+  instCtx.textContent = grant > 0
+    ? `Less £${(grant / 1000).toFixed(1)}k BUS grant`
+    : 'No grant applied';
+
+  droveCard.classList.remove('hidden');
+}
+
 function buildAndDisplayVerdict(financialResult, heatLossResult, rateMetadata) {
   const sc = (key) => financialResult.scenarios[key];
 
@@ -2099,6 +2165,9 @@ methodology section below. The figures in the tables are rough estimates only.`;
 
   // Step 16h — reveal verdict card
   verdictCard.classList.remove('hidden');
+
+  // Step 16i — drove tile
+  populateDroveTile(financialResult, heatLossResult, rateMetadata, primaryKey);
 }
 
 async function runFinancialAnalysis(showProgressFn, showStatusFn) {

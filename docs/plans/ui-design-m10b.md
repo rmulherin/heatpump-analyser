@@ -449,4 +449,8 @@ m8-patch implementation).
 
 ## Implementation Deviations
 
-[To be completed post-implementation]
+**D1 — `agile_calibration` path correction in `populateDroveTile`.**
+The plan's Step 8 code uses `externalRes?.agile_calibration?.gsp_region`. The actual shape of `getExternalResult()` is `{ external, external_metadata }`, with `agile_calibration` nested inside `external_metadata`. Corrected to `externalRes?.external_metadata?.agile_calibration?.gsp_region`. The plan's research findings section correctly describes the path as `getExternalResult().agile_calibration` — a minor drift between research and the Step 8 code. Fixed at implementation time.
+
+**D2 — `underheat-card` preserved between methodology grid rows.**
+The plan's Step 4 states "four cards inside `<details>`" and shows a 2×2 grid. `underheat-card` (added by M5b, not part of the original four) is placed between the two `.section-tiles` rows as a full-width section. This is the only layout that keeps it contextually adjacent to `thermal-char-card` without disrupting the 2×2 grid. No functional change.
