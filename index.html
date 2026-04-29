@@ -32,16 +32,16 @@
       <!-- Octopus Tab -->
       <div class="tab-panel active" id="tab-octopus">
         <div class="form-group">
+          <label for="account-number">Account Number</label>
+          <input type="text" id="account-number" autocomplete="off"
+                 placeholder="A-1234ABCD">
+        </div>
+
+        <div class="form-group">
           <label for="api-key">API Key</label>
           <input type="password" id="api-key" autocomplete="off"
                  placeholder="Your Octopus API key">
           <p class="form-hint">Find yours at <a href="https://octopus.energy/dashboard/new/accounts/personal-details/api-access" target="_blank" rel="noopener">octopus.energy/dashboard</a></p>
-        </div>
-
-        <div class="form-group">
-          <label for="account-number">Account Number</label>
-          <input type="text" id="account-number" autocomplete="off"
-                 placeholder="A-1234ABCD">
         </div>
 
         <button class="btn btn-primary btn-full" id="btn-fetch">Fetch Data</button>
@@ -61,7 +61,8 @@
               Summer (<span id="gas-check-summer-month"></span>): <span id="gas-check-summer">—</span> &middot;
               Winter (<span id="gas-check-winter-month"></span>): <span id="gas-check-winter">—</span>
             </p>
-            <p>If these values look wrong in kWh terms, your meter may read in cubic metres — toggle the option below.</p>
+            <p>We've estimated your meter unit from your data. Check the values above look
+               reasonable and adjust the toggle below if needed.</p>
             <div class="toggle-wrap">
               <input type="checkbox" id="gas-m3-toggle">
               <label for="gas-m3-toggle">My meter reads in cubic metres (m&sup3;)</label>
@@ -78,8 +79,16 @@
           </div>
         </div>
 
+        <!-- Region display (populated after fetch) -->
+        <p class="field-readonly hidden" id="gsp-region-readonly">
+          Region: <strong id="gsp-region-display"></strong> (from your Octopus account)
+        </p>
+
         <!-- Status messages -->
-        <div class="status-area" id="status-area"></div>
+        <details class="status-details hidden" id="status-details">
+          <summary class="status-summary" id="status-summary">0 notices</summary>
+          <div class="status-area" id="status-area"></div>
+        </details>
       </div>
 
       <!-- CSV Tab -->
@@ -94,6 +103,31 @@
           <label for="csv-postcode">Postcode</label>
           <input type="text" id="csv-postcode" placeholder="CV35 0AA">
           <p class="form-hint">Used to look up local weather data. Not stored or transmitted.</p>
+        </div>
+
+        <div class="field-group">
+          <label for="gsp-region">Your electricity region</label>
+          <select id="gsp-region" name="gsp-region">
+            <option value="">— select your region —</option>
+            <option value="A">Eastern England</option>
+            <option value="B">East Midlands</option>
+            <option value="C">London</option>
+            <option value="D">North Wales &amp; Merseyside</option>
+            <option value="E">West Midlands</option>
+            <option value="F">North East England</option>
+            <option value="G">North West England</option>
+            <option value="H">Southern England</option>
+            <option value="J">South East England</option>
+            <option value="K">South West England</option>
+            <option value="L">South Wales</option>
+            <option value="M">Yorkshire</option>
+            <option value="N">South Scotland</option>
+            <option value="P">North Scotland</option>
+          </select>
+          <p class="field-hint">Used to fetch half-hourly electricity prices for your area.
+            If unsure, check your electricity bill or
+            <a href="https://www.energyguide.org.uk/whereismyelectricitysupplied/"
+               target="_blank" rel="noopener">look up your region</a>.</p>
         </div>
 
         <div class="form-row">
@@ -131,17 +165,20 @@
         </div>
 
         <!-- CSV status messages -->
-        <div class="status-area" id="csv-status-area"></div>
+        <details class="status-details hidden" id="csv-status-details">
+          <summary class="status-summary" id="csv-status-summary">0 notices</summary>
+          <div class="status-area" id="csv-status-area"></div>
+        </details>
       </div>
     </section>
 
     <!-- Verdict Card -->
     <section class="card verdict-card hidden" id="verdict-card">
       <div class="verdict-headline" id="verdict-headline"></div>
+      <div class="verdict-status hidden" id="verdict-status"></div>
       <div class="verdict-chart-wrap">
         <canvas id="verdict-chart"></canvas>
       </div>
-      <p class="verdict-cooling hidden" id="verdict-cooling"></p>
       <p class="verdict-quality" id="verdict-quality"></p>
     </section>
 
@@ -196,7 +233,7 @@
         </div>
         <div id="heat-loss-results" class="hidden">
           <div class="status-area" id="heat-loss-status"></div>
-          <dl id="heat-loss-summary"></dl>
+          <dl id="heat-loss-summary" class="summary-dl"></dl>
         </div>
       </section>
 
@@ -235,7 +272,7 @@
         </div>
         <div id="thermal-char-results" class="hidden">
           <div class="status-area" id="thermal-char-status"></div>
-          <dl id="thermal-char-summary"></dl>
+          <dl id="thermal-char-summary" class="summary-dl"></dl>
         </div>
         <button class="btn btn-primary" id="btn-recalculate-thermal-char">Recalculate</button>
       </section>
@@ -270,7 +307,7 @@
         </div>
         <div id="hp-model-results" class="hidden">
           <div class="status-area" id="hp-model-status"></div>
-          <dl id="hp-model-summary"></dl>
+          <dl id="hp-model-summary" class="summary-dl"></dl>
           <h3>COP at reference temperatures</h3>
           <table id="hp-cop-table">
             <thead><tr><th>Outdoor temperature (°C)</th><th>COP</th></tr></thead>

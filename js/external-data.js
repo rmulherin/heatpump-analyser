@@ -17,6 +17,9 @@ const EXTERNAL_CONFIG = {
   RETRY_DELAY_MS: 2000,
 };
 
+const AGILE_REFORM_DATE  = new Date('2026-04-01T00:00:00Z');
+const AGILE_PRODUCT_CODE = 'AGILE-24-10-01';
+
 // ===== Shared state =====
 
 let _externalResult = null;
@@ -36,6 +39,22 @@ function dateOnly(isoString) {
 
 function roundCoord(value) {
   return Math.round(value * 10000) / 10000;
+}
+
+function median(arr) {
+  const sorted = [...arr].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[mid - 1] + sorted[mid]) / 2
+    : sorted[mid];
+}
+
+function isUkPeakHour(ts) {
+  const fmt = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/London', hour: 'numeric', hour12: false
+  });
+  const hour = parseInt(fmt.format(ts), 10);
+  return hour >= 16 && hour < 19;
 }
 
 async function fetchWithRetry(url, label) {
@@ -352,9 +371,82 @@ export function alignExternalData(consumption, weatherMap, priceLookup) {
 }
 
 
+// ===== Step 8b: Agile calibration =====
+
+export async function fetchAgileCalibration(gsp_region) {
+  if (!gsp_region) return null;
+
+  const now            = new Date();
+  const thisMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const prevMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+  const calibStart     = prevMonthStart >= AGILE_REFORM_DATE ? prevMonthStart : AGILE_REFORM_DATE;
+  const calibEnd       = prevMonthStart >= AGILE_REFORM_DATE ? thisMonthStart : now;
+  const isPartial      = prevMonthStart < AGILE_REFORM_DATE;
+
+  if (calibEnd <= calibStart) return null;
+
+  try {
+    const tariffPath = `E-1R-${AGILE_PRODUCT_CODE}-${gsp_region}`;
+    let url = `https://api.octopus.energy/v1/products/${AGILE_PRODUCT_CODE}`
+            + `/electricity-tariffs/${tariffPath}/standard-unit-rates/`
+            + `?period_from=${calibStart.toISOString()}&period_to=${calibEnd.toISOString()}&page_size=1500`;
+    const agileRates = [];
+    while (url) {
+      const res  = await fetchWithRetry(url, 'Agile rates');
+      const data = await res.json();
+      agileRates.push(...(data.results ?? []));
+      url = data.next ?? null;
+    }
+    if (agileRates.length === 0) return null;
+
+    const agileMap = new Map();
+    for (const r of agileRates) {
+      agileMap.set(new Date(r.valid_from).toISOString(), r.value_inc_vat);
+    }
+
+    const { priceLookup } = await fetchWholesalePrices(
+      calibStart.toISOString(), calibEnd.toISOString(), () => {}
+    );
+
+    const D_samples = [];
+    const P_samples = [];
+    for (const [ts, wholesale] of priceLookup) {
+      if (wholesale === null || wholesale <= 1.0) continue;
+      const tsDate   = new Date(ts);
+      const agileVal = agileMap.get(tsDate.toISOString());
+      if (agileVal === undefined || agileVal === null) continue;
+      if (isUkPeakHour(tsDate)) {
+        P_samples.push({ agile: agileVal, wholesale });
+      } else {
+        D_samples.push(agileVal / wholesale);
+      }
+    }
+    if (D_samples.length === 0) return null;
+
+    const D = median(D_samples);
+    const P_computed = P_samples.map(s => s.agile - D * s.wholesale);
+    const P = P_computed.length > 0 ? median(P_computed) : 0;
+
+    if (D < 1.5 || D > 3.0) console.warn(`Agile calibration D=${D.toFixed(3)} outside expected range 1.5–3.0`);
+    if (P < 5 || P > 20)    console.warn(`Agile calibration P=${P.toFixed(2)} outside expected range 5–20 p/kWh`);
+
+    const monthNames = ['January','February','March','April','May','June',
+                        'July','August','September','October','November','December'];
+    const calibPeriod = isPartial
+      ? `${monthNames[calibStart.getUTCMonth()]} ${calibStart.getUTCFullYear()} (partial)`
+      : `${monthNames[calibStart.getUTCMonth()]} ${calibStart.getUTCFullYear()}`;
+
+    return { D, P_peak_p_kwh: P, calibration_period: calibPeriod, gsp_region };
+
+  } catch (err) {
+    console.error('Agile calibration fetch failed:', err);
+    return null;
+  }
+}
+
 // ===== Step 9: Metadata assembly =====
 
-export function buildExternalMetadata(latitude, longitude, elevation, weatherSource, priceSource, priceWarnings) {
+export function buildExternalMetadata(latitude, longitude, elevation, weatherSource, priceSource, priceWarnings, agile_calibration) {
   return {
     latitude,
     longitude,
@@ -363,5 +455,6 @@ export function buildExternalMetadata(latitude, longitude, elevation, weatherSou
     price_source: priceSource,
     price_alignment_warnings: priceWarnings,
     fetch_timestamp: new Date().toISOString(),
+    agile_calibration,
   };
 }

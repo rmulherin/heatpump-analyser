@@ -25,6 +25,7 @@ import {
   buildExpectedHours,
   alignExternalData,
   buildExternalMetadata,
+  fetchAgileCalibration,
   setExternalResult,
   getExternalResult,
 } from './external-data.js';
@@ -127,7 +128,9 @@ const btnFetch = document.getElementById('btn-fetch');
 const progressArea = document.getElementById('progress-area');
 const progressText = document.getElementById('progress-text');
 const progressBar = document.getElementById('progress-bar');
-const statusArea = document.getElementById('status-area');
+const statusArea       = document.getElementById('status-area');
+const statusDetails    = document.getElementById('status-details');
+const statusSummary    = document.getElementById('status-summary');
 const propertySelection = document.getElementById('property-selection');
 const propertyList = document.getElementById('property-list');
 const btnConfirmProperty = document.getElementById('btn-confirm-property');
@@ -152,7 +155,9 @@ const btnCsvAnalyse = document.getElementById('btn-csv-analyse');
 const csvPostcodeNote = document.getElementById('csv-postcode-note');
 const csvProgressArea = document.getElementById('csv-progress-area');
 const csvProgressText = document.getElementById('csv-progress-text');
-const csvStatusArea = document.getElementById('csv-status-area');
+const csvStatusArea    = document.getElementById('csv-status-area');
+const csvStatusDetails = document.getElementById('csv-status-details');
+const csvStatusSummary = document.getElementById('csv-status-summary');
 
 // Energy summary DOM references
 const energySummaryCard = document.getElementById('energy-summary-card');
@@ -221,7 +226,7 @@ const btnRecalcPricing   = document.getElementById('btn-recalculate-pricing');
 // Verdict card DOM references
 const verdictCard      = document.getElementById('verdict-card');
 const verdictHeadline  = document.getElementById('verdict-headline');
-const verdictCooling   = document.getElementById('verdict-cooling');
+const verdictStatus    = document.getElementById('verdict-status');
 const verdictQuality   = document.getElementById('verdict-quality');
 
 // Section banner DOM references
@@ -311,10 +316,16 @@ function showStatus(message, type) {
   div.className = `status-msg ${type}`;
   div.textContent = message;
   statusArea.appendChild(div);
+  const count = statusArea.children.length;
+  statusSummary.textContent = `${count} notice${count === 1 ? '' : 's'}`;
+  statusDetails.classList.remove('hidden');
 }
 
 function clearStatus() {
   statusArea.innerHTML = '';
+  statusSummary.textContent = '0 notices';
+  statusDetails.classList.add('hidden');
+  statusDetails.removeAttribute('open');
 }
 
 function setFetchEnabled(enabled) {
@@ -462,6 +473,11 @@ async function continueWithProperty(apiKey) {
       if (gasResult.metersStitched) metersStitched = true;
       serialsUsed.push(...gasResult.serialsUsed);
       if (gasResult.gasUnitSource) detectedGasUnitSource = gasResult.gasUnitSource;
+      if (gasResult.detectedUnit === 'm3') {
+        gasM3Toggle.checked = true;
+      } else if (gasResult.detectedUnit === 'kwh') {
+        gasM3Toggle.checked = false;
+      }
     }
 
     // Fall back to single-meter fetch for fuels that didn't need stitching
@@ -619,10 +635,23 @@ async function continueWithProperty(apiKey) {
     serials_used: serialsUsed.length > 0 ? serialsUsed : undefined,
   };
 
+  const GSP_NAMES = {
+    A: 'Eastern England',        B: 'East Midlands',         C: 'London',
+    D: 'North Wales & Merseyside', E: 'West Midlands',       F: 'North East England',
+    G: 'North West England',     H: 'Southern England',      J: 'South East England',
+    K: 'South West England',     L: 'South Wales',           M: 'Yorkshire',
+    N: 'South Scotland',         P: 'North Scotland',
+  };
+  const gspDisplayEl = document.getElementById('gsp-region-display');
+  if (gspDisplayEl) gspDisplayEl.textContent = GSP_NAMES[prop.gsp_region] ?? prop.gsp_region ?? 'Unknown';
+  const gspReadonly = document.getElementById('gsp-region-readonly');
+  if (gspReadonly && prop.gsp_region) gspReadonly.classList.remove('hidden');
+
   setIngestionResult({
     consumption: normalised.consumption,
     tariff_rates: tariffRates,
     metadata: fullMetadata,
+    gsp_region: prop.gsp_region ?? null,
   });
   prefillRateInputs(tariffRates);
 
@@ -784,7 +813,7 @@ async function runExternalData(showProgressFn, showStatusFn) {
   const [weatherResult, priceResult] = await Promise.allSettled([
     fetchWeather(latitude, longitude, metadata.data_start, metadata.data_end),
     fetchWholesalePrices(metadata.data_start, metadata.data_end,
-      (pct) => showProgressFn(`Fetching price data… ${pct}%`)),
+      (pct) => showProgress(`Fetching price data… ${pct}%`, pct)),
   ]);
 
   // Step 3: Handle results with asymmetric rejection
@@ -841,15 +870,19 @@ async function runExternalData(showProgressFn, showStatusFn) {
   showProgressFn('Aligning external data…');
   const external = alignExternalData(consumption, weatherMap, priceLookup);
 
-  // Step 6: Build metadata
+  // Step 6: Agile calibration
+  const ingestion = getIngestionResult();
+  const agileCalibration = await fetchAgileCalibration(ingestion?.gsp_region ?? null);
+
+  // Step 7: Build metadata
   const externalMetadata = buildExternalMetadata(
-    latitude, longitude, elevation_m, weatherSource, priceSource, priceWarnings
+    latitude, longitude, elevation_m, weatherSource, priceSource, priceWarnings, agileCalibration
   );
 
-  // Step 7: Store result
+  // Step 8: Store result
   setExternalResult({ external, external_metadata: externalMetadata });
 
-  // Step 8: Show summary
+  // Step 9: Show summary
   const weatherCount = external.filter(e => e.temp_c !== null).length;
   const priceCount = external.filter(e => e.wholesale_p_kwh !== null).length;
   const gapCount = external.filter(e => e.temp_c === null).length;
@@ -1731,7 +1764,7 @@ const FINANCIAL_DISPLAY_ORDER = ['current', 'dumb_hp_svt', 'dumb_hp_hh', 'hybrid
 function fmtGbpSaving(v) {
   if (v === null || v === undefined) return '—';
   const abs = Math.abs(v).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  if (v > 0) return `+£${abs}`;
+  if (v > 0) return `£${abs}`;
   if (v < 0) return `−£${abs}`;
   return '£0.00';
 }
@@ -1783,6 +1816,10 @@ function displayFinancialResults(result) {
       <tbody>${rows}</tbody>
     </table>
     ${breakEvenHtml}
+    <p class="card-intro" style="margin-top:0.75rem;">
+      Note: the Boiler Upgrade Scheme grant (£7,500) applies to standalone heat pump
+      installations only.
+    </p>
   `;
 
   for (const w of result.warnings) {
@@ -1814,6 +1851,54 @@ const VERDICT_CHART_LABELS = {
   smart_hp_hh:  'Smart HP — HH',
   hybrid_smart: 'Smart hybrid — HH',
 };
+
+function buildVerdictStatusMessage(financialResult) {
+  const sc = k => financialResult.scenarios[k];
+
+  // Condition A — smart HP unavailable but dumb HH available (thermal-mass data missing)
+  const smart  = sc('smart_hp_hh');
+  const dumbHh = sc('dumb_hp_hh');
+  if (smart?.payback_status === 'no_data'
+      && dumbHh != null
+      && dumbHh.payback_status !== 'no_data') {
+    return {
+      html: `Smart heat pump results are unavailable — thermal mass data is needed.
+        <button class="fix-link">Provide that input ↓</button>`,
+      fixHandler: () => {
+        const disclosure = document.getElementById('methodology-disclosure');
+        disclosure.open = true;
+        const targetCard = document.getElementById('thermal-char-card');
+        targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        setTimeout(() => {
+          const tauBucket  = document.getElementById('tau-bucket');
+          const tAtRestart = document.getElementById('t-at-restart');
+          let target = null;
+          if (tauBucket && tauBucket.value === '') target = tauBucket;
+          else if (tAtRestart && tAtRestart.value === '') target = tAtRestart;
+          else target = tauBucket || tAtRestart;
+          if (target) {
+            target.focus();
+            target.classList.add('highlight-flash');
+            setTimeout(() => target.classList.remove('highlight-flash'), 1500);
+          }
+        }, 400);
+      },
+    };
+  }
+
+  // Condition B — all HH scenarios unavailable (price data missing); SVT still available
+  const hhKeys = ['dumb_hp_hh', 'smart_hp_hh'];
+  const allHhMissing = hhKeys.every(k => sc(k)?.payback_status === 'no_data');
+  const svtAvailable = sc('dumb_hp_svt')?.payback_status !== 'no_data';
+  if (allHhMissing && svtAvailable) {
+    return {
+      html: `Half-hourly price data could not be loaded — results use flat-rate tariff figures only.`,
+      fixHandler: null,
+    };
+  }
+
+  return null;
+}
 
 function buildAndDisplayVerdict(financialResult, heatLossResult, rateMetadata) {
   const sc = (key) => financialResult.scenarios[key];
@@ -1863,12 +1948,12 @@ At current installation costs, payback would be roughly <strong>${payback}</stro
     if (svtAvailable) {
       const svtSaving = sc('dumb_hp_svt').annual_saving_gbp;
       if (svtSaving <= 0) {
-        headlineHtml += `<br><br>On a standard flat-rate tariff, a heat pump would cost slightly more to
-run than your current boiler. The economics depend heavily on switching to a half-hourly tariff.`;
+        headlineHtml += `<br><br>On a standard flat-rate tariff, however, the picture is different — a heat pump
+would cost slightly more than your current boiler at current rates. The savings
+above depend on switching to a half-hourly tariff.`;
       } else {
         headlineHtml += `<br><br>On a standard flat-rate tariff, the saving falls to about
-<strong>${fmtGbpVerdict(svtSaving)}</strong> per year — close to break-even. The difference comes down
-largely to tariff choice and how well your home holds heat.`;
+<strong>${fmtGbpVerdict(svtSaving)}</strong> per year — close to break-even. The additional saving from a half-hourly tariff comes from shifting heating to cheaper overnight periods.`;
       }
     }
 
@@ -1902,8 +1987,7 @@ Payback is roughly <strong>${payback}</strong> at current installation costs.`;
     const saving = fmtGbpVerdict(sc(primaryKey).annual_saving_gbp);
     headlineHtml = `Based on your data, the best heat pump scenario saves around <strong>${saving}</strong>
 per year — roughly break-even against your current boiler. Whether it makes sense depends on
-factors beyond running costs: the reliability of your existing boiler, the cooling capability a
-heat pump adds, and future energy prices. Use the assumptions panel below to explore.`;
+factors beyond running costs: the reliability of your existing boiler and future energy prices. Use the assumptions panel below to explore.`;
 
   } else if (verdictType === 'negative') {
     const absSaving = fmtGbpVerdict(Math.abs(sc(primaryKey).annual_saving_gbp ?? 0));
@@ -1936,13 +2020,18 @@ methodology section below. The figures in the tables are rough estimates only.`;
   }
   verdictQuality.textContent = qualityText;
 
-  // Step 16f — cooling note
-  const avoidedAc = readCapitalParams().avoided_ac_cost_gbp ?? 0;
-  if (avoidedAc === 0) {
-    verdictCooling.textContent = 'A heat pump also provides cooling in summer. If you\'d otherwise buy or replace an air-conditioning unit, enter the estimated cost in "Adjust the assumptions" below to improve the payback figure.';
-    verdictCooling.classList.remove('hidden');
+  // Step 16e-ii — verdict status line
+  const statusMsg = buildVerdictStatusMessage(financialResult);
+  if (statusMsg) {
+    verdictStatus.innerHTML = statusMsg.html;
+    verdictStatus.classList.remove('hidden');
+    if (statusMsg.fixHandler) {
+      const link = verdictStatus.querySelector('.fix-link');
+      if (link) link.addEventListener('click', statusMsg.fixHandler);
+    }
   } else {
-    verdictCooling.classList.add('hidden');
+    verdictStatus.classList.add('hidden');
+    verdictStatus.innerHTML = '';
   }
 
   // Step 16g — scenario bar chart
@@ -2053,10 +2142,16 @@ function showCsvStatus(message, type) {
   div.className = `status-msg ${type}`;
   div.textContent = message;
   csvStatusArea.appendChild(div);
+  const count = csvStatusArea.children.length;
+  csvStatusSummary.textContent = `${count} notice${count === 1 ? '' : 's'}`;
+  csvStatusDetails.classList.remove('hidden');
 }
 
 function clearCsvStatus() {
   csvStatusArea.innerHTML = '';
+  csvStatusSummary.textContent = '0 notices';
+  csvStatusDetails.classList.add('hidden');
+  csvStatusDetails.removeAttribute('open');
 }
 
 // ===== CSV Orchestration (Step 12) =====
@@ -2215,6 +2310,7 @@ btnCsvAnalyse.addEventListener('click', async () => {
       consumption: normalised.consumption,
       tariff_rates: tariffRates,
       metadata: fullMetadata,
+      gsp_region: document.getElementById('gsp-region')?.value || null,
     });
     prefillRateInputs(tariffRates);
 

@@ -22,6 +22,8 @@ export const CONFIG = {
   HH_INTERVAL_MS: 30 * 60 * 1000,
 };
 
+const VALID_GSP_REGIONS = ['A','B','C','D','E','F','G','H','J','K','L','M','N','P'];
+
 // ===== Shared state =====
 let _ingestionResult = null;
 export function setIngestionResult(result) { _ingestionResult = result; }
@@ -109,6 +111,15 @@ export async function fetchAccount(apiKey, accountNumber) {
       elecAgreements = elecPoint.agreements || [];
     }
 
+    let gsp_region = null;
+    if (elecAgreements.length > 0) {
+      const latestAgreement = elecAgreements.reduce((best, a) =>
+        (new Date(a.valid_from) > new Date(best.valid_from)) ? a : best
+      );
+      const lastChar = (latestAgreement.tariff_code ?? '').slice(-1).toUpperCase();
+      gsp_region = VALID_GSP_REGIONS.includes(lastChar) ? lastChar : null;
+    }
+
     let mprn = null, gasSerial = null, gasMeters = [], gasAgreements = [];
     if (gasPoint) {
       mprn = gasPoint.mprn;
@@ -131,6 +142,7 @@ export async function fetchAccount(apiKey, accountNumber) {
       address: prop.address_line_1 || prop.postcode || 'Unknown address',
       elecAgreements,
       gasAgreements,
+      gsp_region,
     });
   }
 
@@ -615,11 +627,23 @@ export async function fetchConsumptionStitched(apiKey, mpan, mprn, meters, fuelT
       const sorted = [...newestData.results].sort(
         (a, b) => new Date(a.interval_start) - new Date(b.interval_start)
       );
+      if (fuelType === 'gas') {
+        const { unit } = inferGasUnit(sorted);
+        console.info(`Tier 1 meter (gas): unit=${unit}`);
+        return {
+          records: sorted,
+          serialsUsed: [newestMeter.serial_number],
+          metersStitched: false,
+          gasUnitSource: null,
+          detectedUnit: unit,
+        };
+      }
       return {
         records: sorted,
         serialsUsed: [newestMeter.serial_number],
         metersStitched: false,
         gasUnitSource: null,
+        detectedUnit: null,
       };
     }
   }

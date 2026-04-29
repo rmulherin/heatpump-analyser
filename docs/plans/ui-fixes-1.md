@@ -403,4 +403,4 @@ Verdict: ⚠ APPROVED WITH EDITS — Fix 6 made forward-compatible with `m8-patc
 
 ## Implementation Deviations
 
-[To be completed post-implementation]
+None.

@@ -403,4 +403,4 @@ Verdict: ✅ APPROVED — implementation steps unchanged; template hygiene appli
 
 ## Implementation Deviations
 
-[To be completed post-implementation]
+D1: Step 4 specified `<p class="field-readonly" id="gsp-region-readonly">` directly. Implementation wraps this in a `hidden` class and reveals it only when `prop.gsp_region` is non-null, preventing "Region:  (from your Octopus account)" showing when region detection fails.

@@ -483,15 +483,6 @@ details[open] .methodology-summary::before {
   padding-top: 0.75rem;
 }
 
-.verdict-cooling {
-  font-size: 0.9rem;
-  background: var(--colour-light-grey);
-  border-left: 3px solid var(--colour-teal);
-  border-radius: 0 var(--radius) var(--radius) 0;
-  padding: 0.6rem 0.85rem;
-  margin-top: 0.75rem;
-  color: var(--colour-dark);
-}
 
 /* ===== Underheat diagnostic ===== */
 .underheat-light {
@@ -527,3 +518,58 @@ details[open] .methodology-summary::before {
   .card { padding: 1rem; }
   .btn { padding: 0.5rem 1rem; font-size: 0.9rem; }
 }
+
+/* ===== Summary DL (methodology cards) ===== */
+.summary-dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.25rem 1rem;
+  font-size: 0.9rem;
+  margin-top: 0.5rem;
+}
+.summary-dl dt { font-weight: 600; color: var(--colour-navy); }
+.summary-dl dd { color: var(--colour-dark); }
+
+/* ===== Verdict status line ===== */
+.verdict-status {
+  margin: 0.75rem 0 0.25rem;
+  padding: 0.65rem 0.9rem;
+  background: #FFF8E1;
+  color: #8B5A00;
+  border-left: 3px solid #F57F17;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+.verdict-status .fix-link {
+  color: var(--colour-teal);
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: inherit;
+  font-family: inherit;
+  margin-left: 0.25rem;
+}
+.verdict-status .fix-link:hover { color: #2A6566; }
+.highlight-flash {
+  outline: 2px solid var(--colour-coral);
+  outline-offset: 2px;
+  transition: outline 0.3s ease;
+}
+
+/* ===== Status notices collapse ===== */
+.status-details { margin-top: 0.75rem; }
+.status-summary {
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--colour-navy);
+  list-style: none;
+  padding: 0.4rem 0;
+}
+.status-summary::-webkit-details-marker { display: none; }
+.status-summary::before { content: '▶ '; font-size: 0.75rem; }
+details[open] .status-summary::before { content: '▼ '; }

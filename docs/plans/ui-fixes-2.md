@@ -326,4 +326,4 @@ Verdict: ✅ APPROVED — implementation steps unchanged; Risk 2 strengthened to
 
 ## Implementation Deviations
 
-[To be completed post-implementation]
+D1: Plan referred to functions `addStatus`/`clearStatus`/`addCsvStatus`/`clearCsvStatus` but actual function names in app.js are `showStatus`/`clearStatus`/`showCsvStatus`/`clearCsvStatus`. Changes applied to the correct existing function names.
