@@ -1,7 +1,7 @@
 # m8-patch-gas-connection-retained — Gas retained; Agile D×W+P; Ofgem cap rates
 
 **Date:** 2026-04-29
-**Status:** ⏸ Blocked — pending rewrite per Design Review v1 (2026-04-29)
+**Status:** Awaiting re-review — rewrite v2
 **Design doc:** `design/m8-patch-gas-connection-retained.md`
 **Implements:** sequence 4 of 6 (after patch-agile-region-calibration; before ui-design-m10b)
 
@@ -20,7 +20,9 @@ M7/M8's cost model in ways that are only coherent as a set:
    electricity (not the user's historical rates, which predate the April 2026 reform).
 
 Also removes hybrid scenarios (`hybrid_dumb`, `hybrid_smart`) from the entire tool —
-they show no meaningful benefit and are ineligible for BUS.
+they show no meaningful benefit and are ineligible for BUS. Removal spans all layers:
+M7 (`scenario-consumption.js` + `test-m7.mjs`), M8 (`pricing-engine.js` +
+`test-m8.mjs`), M9 (`financial.js` + `test-m9.mjs`), and the display layer in `app.js`.
 
 The display layer gains a new 5-column cost breakdown table and supporting footnotes.
 
@@ -58,7 +60,9 @@ line 58) is used at lines 84 (null wholesale fallback: `hh_overhead`) and 90 (ma
 `wholesale + hh_overhead`). Replace both with the Agile D×W+P formula. The
 `agile_calibration` object (`{ D, P_peak_p_kwh, ... }`) comes from
 `getExternalResult().agile_calibration`. When `agile_calibration` is null, fall back
-to flat SVT rate for HH scenarios.
+to default D/P constants (`D_DEFAULT = 2.2`, `P_DEFAULT_PEAK_P_KWH = 12`) defined in
+`pricing-engine.js` — the same D×W+P formula applies with no separate code branch;
+`calibration.source === 'default'` triggers the fallback warning in the display layer.
 
 **isPeak helper:** Reuse the same IANA `Europe/London` approach as in
 `patch-agile-region-calibration`. Add `isPeakHour(ts)` to pricing-engine.js or import
@@ -75,12 +79,22 @@ Pass `OFGEM_CAP_ELEC_P_KWH` into `prepareRates` as a new param `ofgem_cap_elec_p
 `prepareRates` uses this for `dumb_hp_svt` scenario SVT electricity rate only; HH
 scenarios use Agile D×W+P regardless; `current` uses historical rate unchanged.
 
-**Hybrid removal:** `SCENARIO_ORDER` at pricing-engine.js:32; `SCENARIO_FUELS` at
-line 14; `SCENARIO_ELEC_RATE_TYPE` at line 23; display order arrays and label maps
-in app.js (lines 1467, 1597, 1616, 1725, 1729, 1951). Remove `hybrid_dumb` and
-`hybrid_smart` from all of these. Also remove from `displayPricingResults` and
-`displayFinancialResults` table rows. The financial.js `HP_SCENARIOS` (line 15) and
-`FULL_HP_SCENARIOS` (line 16) — remove hybrid entries.
+**Hybrid removal:** Spans all layers.
+- M7: `estimateScenarioConsumption` in `scenario-consumption.js` produces `hybrid_dumb`
+  and `hybrid_smart` scenario arrays — remove both. In `test-m7.mjs`, remove T3
+  ("Hybrid dispatch HP wins"), T4 ("Hybrid dispatch gas wins"), and T19 ("hybrid_smart
+  prefers HP at cheap HP HH") — all three test removed scenarios.
+- M8: `SCENARIO_ORDER` at pricing-engine.js:32; `SCENARIO_FUELS` line 14;
+  `SCENARIO_ELEC_RATE_TYPE` line 23. Also remove hybrid keys from `test-m8.mjs`
+  helper `makeAllScenarios` and from T4b, T10b.
+- M9: `HP_SCENARIOS` (financial.js:15) and `FULL_HP_SCENARIOS` (financial.js:16).
+  Grep `financial.js` for `hybrid_` and remove all matches; verify zero remaining.
+  In `test-m9.mjs`, remove hybrid keys from `buildPricing`, T1b, T2b, T4, T5, T7,
+  T8, T9 (all confirmed by grep above — remove and re-verify pass count).
+- Display: `VERDICT_CHART_LABELS` (~app.js:1467); label map at ~1597;
+  `FINANCIAL_DISPLAY_ORDER` (~1729); `buildAndDisplayVerdict` scenario order (~1951).
+  Also remove from `displayPricingResults` and `displayFinancialResults` table rows.
+  Grep `app.js` for `hybrid_dumb` and `hybrid_smart` after editing; confirm zero.
 
 **5-column display table:** `displayPricingResults` in app.js currently builds a
 pricing table. Replace with the new 5-column table as specced. The scenario rows are
@@ -92,9 +106,12 @@ now four: `current`, `dumb_hp_svt`, `dumb_hp_hh`, `smart_hp_hh`.
 
 | Action | File | Purpose |
 |--------|------|---------|
-| MODIFY | `js/scenario-consumption.js` | HP scenarios use `baseload_kwh` for `gas_kwh` (not zero) |
-| MODIFY | `js/pricing-engine.js` | SCENARIO_FUELS, SCENARIO_ORDER, Agile D×W+P, cost decomposition, hybrid removal |
+| MODIFY | `js/scenario-consumption.js` | Remove hybrid scenarios; HP scenarios use `baseload_kwh` for `gas_kwh` (not zero) |
+| MODIFY | `test-m7.mjs` | Remove T3, T4, T19 (all test removed hybrid scenarios) |
+| MODIFY | `js/pricing-engine.js` | D_DEFAULT/P_DEFAULT constants, SCENARIO_FUELS, SCENARIO_ORDER, Agile D×W+P with default calibration fallback, cost decomposition, hybrid removal |
+| MODIFY | `test-m8.mjs` | Remove hybrid_dumb/hybrid_smart from makeAllScenarios helper and T4b, T10b |
 | MODIFY | `js/financial.js` | Remove hybrid from HP_SCENARIOS, FULL_HP_SCENARIOS |
+| MODIFY | `test-m9.mjs` | Remove hybrid keys from buildPricing helper and all affected test cases |
 | MODIFY | `js/app.js` | Ofgem constants, updated `prepareRates` params, display updates, hybrid removal from all display arrays |
 | MODIFY | `index.html` | Remove `hh_overhead` input field from Pricing assumptions card |
 | MODIFY | `css/styles.css` | Add `.table-scroll-wrap` |
@@ -103,7 +120,20 @@ now four: `current`, `dumb_hp_svt`, `dumb_hp_hh`, `smart_hp_hh`.
 
 ## Implementation steps
 
-### Step 1 — Remove hybrid scenarios from constants and display (surgical first)
+### Step 1 — Remove hybrid scenarios from all layers (surgical first)
+
+**scenario-consumption.js (`estimateScenarioConsumption`):**
+- Remove the `hybrid_dumb` and `hybrid_smart` branches entirely — do not produce
+  those scenario arrays.
+- After editing, confirm the function only produces:
+  `{ current, dumb_hp_svt, dumb_hp_hh, smart_hp_hh }`.
+
+**test-m7.mjs:**
+- Delete T3 ("Hybrid dispatch HP wins") — tests `result.scenarios.hybrid_dumb`
+- Delete T4 ("Hybrid dispatch gas wins") — tests `result.scenarios.hybrid_dumb`
+- Delete T19 ("hybrid_smart prefers HP at cheap HP HH, gas at expensive HP HH") —
+  tests `result.scenarios.hybrid_smart`
+- After deletion, run `node test-m7.mjs` and confirm all remaining tests pass.
 
 **pricing-engine.js:**
 - `SCENARIO_ORDER` (line 32): Remove `'hybrid_dumb'`, `'hybrid_smart'`
@@ -111,9 +141,21 @@ now four: `current`, `dumb_hp_svt`, `dumb_hp_hh`, `smart_hp_hh`.
 - `SCENARIO_ELEC_RATE_TYPE` (line 23): Remove `hybrid_dumb` and `hybrid_smart` entries
 
 **financial.js:**
-- `HP_SCENARIOS` (line 15): Remove hybrid entries
-- `FULL_HP_SCENARIOS` (line 16): Remove hybrid entries (or confirm these only contain
-  full-HP scenarios already — if so no change needed)
+- Grep `financial.js` for `hybrid_` and remove all matches.
+- Verify zero remaining occurrences post-edit.
+
+**test-m8.mjs:**
+- Remove `hybrid_dumb` and `hybrid_smart` from `makeAllScenarios` helper (line 44)
+- Remove T4b (tests `hybrid_dumb.standing_charge_gbp`)
+- Remove T10b (tests `hybrid_smart.annual_cost_gbp`)
+- Run `node test-m8.mjs` and confirm pass.
+
+**test-m9.mjs:**
+- Remove `hybrid_dumb` and `hybrid_smart` from `buildPricing` names array (line 29)
+- Update all test case input objects that include hybrid keys: T1, T2, T3, T4, T5,
+  T7, T8, T9 — remove the hybrid entries from each `buildPricing` call and scenario
+  map. T1b and T2b specifically test hybrid net investment — delete those assertions.
+- Run `node test-m9.mjs` and confirm pass.
 
 **app.js — remove hybrid from all label maps and display order arrays:**
 - `VERDICT_CHART_LABELS` (~line 1467): remove `hybrid_dumb`, `hybrid_smart`
@@ -121,6 +163,7 @@ now four: `current`, `dumb_hp_svt`, `dumb_hp_hh`, `smart_hp_hh`.
 - `FINANCIAL_DISPLAY_ORDER` (~line 1729): remove hybrids
 - Scenario order in `buildAndDisplayVerdict` (~line 1951): remove hybrids
 - Any other display arrays or switches that reference hybrid keys — search and remove
+- After all edits: grep `app.js` for `hybrid_dumb` and `hybrid_smart`; confirm zero.
 
 ### Step 2 — M7: HP scenarios retain gas baseload (scenario-consumption.js)
 
@@ -184,30 +227,45 @@ function isPeakHour(ts) {
 }
 ```
 
+Add default-calibration constants near the top of `pricing-engine.js` (with other
+module-level constants):
+```js
+const D_DEFAULT            = 2.2;   // mid of typical UK regional D range (2.0–2.4)
+const P_DEFAULT_PEAK_P_KWH = 12;    // mid of typical UK P range (8–16 p/kWh)
+```
+
 In `prepareRates`, accept `agile_calibration` as a new optional param. Replace the
-`hh_overhead`-based HH rate construction:
+`hh_overhead`-based HH rate construction with the Agile formula. Build an effective
+calibration object so the same formula path applies whether calibration is real or
+default — no separate fallback branch:
 
 ```js
-// For HH scenario slots:
-if (agile_calibration) {
-  const { D, P_peak_p_kwh } = agile_calibration;
-  const ts        = new Date(consumption[i].timestamp);
-  const wholesale = wholesale_prices[i];
-  if (wholesale === null) {
-    elec_hh_rate_by_hh[i] = isPeakHour(ts) ? P_peak_p_kwh : 0;
-  } else {
-    const base = D * wholesale;
-    elec_hh_rate_by_hh[i] = Math.min(
-      isPeakHour(ts) ? base + P_peak_p_kwh : base,
-      100
-    );
-    // Negative wholesale → negative rate: correct, do not clamp
-  }
+// Build effective calibration: real if available, default otherwise.
+const calibration = agile_calibration ?? {
+  D:            D_DEFAULT,
+  P_peak_p_kwh: P_DEFAULT_PEAK_P_KWH,
+  source:       'default',
+};
+
+const { D, P_peak_p_kwh } = calibration;
+
+// Per HH slot:
+const ts        = new Date(consumption[i].timestamp);
+const wholesale = wholesale_prices[i];
+if (wholesale === null) {
+  elec_hh_rate_by_hh[i] = isPeakHour(ts) ? P_peak_p_kwh : 0;
+  // No wholesale signal — rate is floor of peak uplift only; zero off-peak
 } else {
-  // Fallback: flat SVT rate (agile_calibration unavailable)
-  elec_hh_rate_by_hh[i] = svtRate;
+  elec_hh_rate_by_hh[i] = isPeakHour(ts)
+    ? Math.min(D * wholesale + P_peak_p_kwh, 100)
+    : Math.min(D * wholesale, 100);
+  // Negative wholesale → negative rate: correct, do not clamp on lower end
 }
 ```
+
+The `rateMetadata` returned from `prepareRates` should expose `calibration_source`
+(either `'fetched'` or `'default'`) so the display layer can surface the fallback
+warning without re-checking `agile_calibration`.
 
 Remove the `hh_overhead_p_per_kwh` parameter from `prepareRates` signature and all
 references to `PE_CONFIG.HH_OVERHEAD_DEFAULT_P` for the HH rate calculation.
@@ -262,9 +320,18 @@ Formatting rules:
 - Wrap table in `<div class="table-scroll-wrap">` for horizontal scroll on mobile
 
 Footnotes (below table, above or replacing existing footnotes):
-1. Gas-connection-retained assumption note
-2. Ofgem cap rates note — inject `OFGEM_CAP_ELEC_P_KWH` and `OFGEM_CAP_GAS_P_KWH`
-   values from constants (not hardcoded)
+1. Gas-connection-retained assumption note.
+2. Ofgem cap rates note — inject only `OFGEM_CAP_ELEC_P_KWH` (not
+   `OFGEM_CAP_GAS_P_KWH` — gas baseload uses historical M1 rates throughout).
+   Exact wording from design Section E:
+   ```
+   Heat pump scenario electricity costs use the current Ofgem price cap rate
+   (electricity: [OFGEM_CAP_ELEC_P_KWH]p/kWh). Gas costs (for the retained
+   connection and baseload) and your current boiler costs use your actual
+   historical tariff rates.
+   ```
+   Inject the value from `OFGEM_CAP_ELEC_P_KWH` at runtime so a constant update
+   propagates automatically.
 
 **css/styles.css:** Add:
 ```css
@@ -274,10 +341,10 @@ Footnotes (below table, above or replacing existing footnotes):
 }
 ```
 
-If Agile calibration was unavailable, add a warning above the table:
+If `rateMetadata.calibration_source === 'default'`, add a warning above the table:
 ```
-"Half-hourly tariff rates could not be fetched for your region — HH scenarios use
-a flat rate estimate."
+"Couldn't fetch live Agile rates for your region — using typical UK averages
+(D=2.2, P=12p/kWh peak). Numbers are indicative; your actual Agile rate will differ."
 ```
 
 ---
@@ -289,7 +356,7 @@ a flat rate estimate."
 | Hybrid removal leaves stale references in app.js | Step 1 specifically targets all hybrid references; grep for `hybrid_dumb` and `hybrid_smart` after implementation and confirm zero matches |
 | Cost decomposition — baseline electricity split requires `supplementary_loads.electric_heating_kwh_estimate`; this may be null for no-gas or CSV paths | Treat null as 0; baseline = observed total; current scenario heating_elec = 0. Document as acceptable |
 | Gas baseload in HP scenarios — `heating[i].baseload_kwh` may be null for no-gas path | Use `?? 0`; existing null-passthrough behaviour for null inputs continues |
-| `agile_calibration` null → HH fallback to flat SVT rate — user may not notice they're getting a degraded rate | A warning is displayed (Step 7); no silent degradation |
+| `agile_calibration` null → HH rates use default D/P constants — numbers are indicative only; scenarios remain numerically distinct | Warning visible above pricing table per design F2; `dumb_hp_hh` and `smart_hp_hh` still differ from each other and from `dumb_hp_svt` because intra-day wholesale spread is preserved |
 | Ofgem constants need quarterly update — hardcoded in app.js | Constants are named with `OFGEM_CAP_VALID_FROM`; easy to find and update. Accept this as the maintenance pattern |
 | `computeCosts` monthly breakdown — the four new components would ideally have monthly equivalents too | Design doc only requires annual decomposition; monthly decomposition deferred. Do not extend monthly breakdown with new components unless explicitly requested |
 
@@ -312,8 +379,10 @@ a flat rate estimate."
 - [ ] Off-peak HH rate = D × wholesale; peak (16–19h) = D × wholesale + P (spot-check one each)
 - [ ] Negative wholesale produces negative HH rate (not clamped to zero)
 - [ ] `hh_overhead` input field is gone from the Pricing assumptions UI
-- [ ] Agile fetch failure: warning visible; HH scenarios fall back to flat SVT rate
+- [ ] Agile fetch failure (or `gsp_region` unavailable): warning visible above pricing table; HH scenarios compute via default D/P fallback (D=2.2, P=12); `dumb_hp_hh` total differs numerically from `dumb_hp_svt` total (price spread preserved, not flat); `smart_hp_hh` total < `dumb_hp_hh` total (smart optimiser still benefits from intra-day variation)
 - [ ] `dumb_hp_svt` uses Ofgem cap rate (24.67p/kWh), not historical rate
+- [ ] The pricing card Ofgem note reads: "Heat pump scenario electricity costs use the current Ofgem price cap rate (electricity: 24.67p/kWh). Gas costs (for the retained connection and baseload) and your current boiler costs use your actual historical tariff rates." Gas rate is explicitly framed as historical, not Ofgem cap
+- [ ] M7 produces no `hybrid_dumb` or `hybrid_smart` scenario arrays; T3, T4, and T19 removed from `test-m7.mjs`; test suite still passes
 - [ ] No console errors on any path
 
 ---
@@ -429,16 +498,31 @@ during the v2 review.
 
 ### Resolution of review changes
 
-*To be filled by Sonnet during v2 rewrite — one line per numbered finding
-above describing how it was addressed in the rewritten plan.*
-
-1. *(pending — Sonnet to fill)*
-2. *(pending)*
-3. *(pending)*
-4. *(pending)*
-5. *(pending)*
-6. *(pending)*
-7. *(pending)*
+1. **M7 hybrid removal** — Step 1 extended with a `scenario-consumption.js` sub-section
+   (remove hybrid branches from `estimateScenarioConsumption`) and a `test-m7.mjs`
+   sub-section (delete T3, T4, T19). Task description, Research findings, and Files
+   table updated accordingly. `test-m8.mjs` and `test-m9.mjs` hybrid cleanup also
+   added to Step 1 since the grep above confirmed extensive hybrid references in both.
+2. **Default D/P fallback** — Step 5 rewritten: `D_DEFAULT = 2.2` and
+   `P_DEFAULT_PEAK_P_KWH = 12` constants added to `pricing-engine.js`; single
+   `agile_calibration ?? { D, P_peak_p_kwh, source: 'default' }` pattern with no
+   separate fallback branch; `calibration.source === 'default'` exposes the warning
+   flag via `rateMetadata.calibration_source`. Research findings and Risks updated.
+   Warning text updated to match design F2.
+3. **Footnote text** — Step 7 footnote 2 rewritten: only `OFGEM_CAP_ELEC_P_KWH`
+   injected; exact wording from design Section E used verbatim; `OFGEM_CAP_GAS_P_KWH`
+   removed from this note. Success criterion updated to verify gas is framed as
+   historical.
+4. **Step 1 hedge removed** — `financial.js` `FULL_HP_SCENARIOS` entry rewritten as
+   a grep instruction ("Grep `financial.js` for `hybrid_` and remove all matches.
+   Verify zero remaining occurrences post-edit.") with no hedge.
+5. **Section heading** — Already applied by Opus when writing the review block;
+   heading reads `## Design Review v1`. No further change needed.
+6. **Status field** — Updated to `Awaiting re-review — rewrite v2`.
+7. **Success criteria** — "Agile fetch failure: HH scenarios fall back to flat SVT
+   rate" criterion replaced with the combined fallback + distinguishability criterion.
+   Added: M7 hybrid arrays criterion (no hybrid arrays produced; T3/T4/T19 removed;
+   suite passes). Ofgem note criterion added (electricity cap only; gas historical).
 
 ## Review Summary
 
