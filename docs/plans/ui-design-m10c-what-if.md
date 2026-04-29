@@ -1,7 +1,7 @@
 # ui-design-m10c-what-if — "What If" section
 
 **Date:** 2026-04-29
-**Status:** ⚠ Approved with edits — apply Edits 1–7 below before implementing (2026-04-29)
+**Status:** ⚠ Approved with edits — applied 2026-04-29
 **Design doc:** `design/ui-design-m10c-what-if.md`
 **Implements:** sequence 5 of 6 (after ui-design-m10b). ui-fixes-2 is parallel to the main stream and not counted in the linear sequence.
 
@@ -53,16 +53,14 @@ benefit of removing the gas connection.
   `btnRecalcFinancial` at app.js). Update `readCapitalParams` to read new IDs.
 
 **Threshold COP computation (Wait for Technology):** The design doc specifies iterating
-0.6–1.5× in 0.05 steps (19 values) using "a lightweight M9-only recalculation using
-the pre-existing M7/M8 outputs." Literal interpretation: hold `_scenarioResult` and
-`_rateMetadata` fixed; for each COP scalar, scale HP electricity consumption
+0.6–1.5× in 0.05 steps (19 values) using proportional scaling. Hold `_scenarioResult`
+and `_rateMetadata` fixed; for each COP scalar, scale HP electricity consumption
 proportionally (`elec_kwh[i] *= baseline_cop / scaled_cop`), re-run `computeCosts`,
-re-run `analyseFinancials`. This avoids the full RC model re-simulation (M7 chain) for
-19 iterations. Implementation note: this is an approximation — COP changes affect HP
-electricity non-linearly (the RC model dispatches differently at different COPs).
-**Flag for review:** confirm whether true M6→M7→M8→M9 chain per step is required for
-accuracy, or whether the proportional scaling approximation is acceptable for the
-threshold display.
+re-run `analyseFinancials`. **This is mathematically exact (not approximate) under
+uniform COP scaling:** dispatch order, capacity constraint, and daily heat budget B_d
+are all invariant to the scalar (scalar cancels in the rank function `elec_rate[i] /
+(scalar × baseCOP[i])`). ~50× cheaper than full chain runs and produces the same
+threshold COP. Use `COP_BASELINE_AT_7C` (defined in Step 8) for the live display.
 
 **`OFGEM_CAP_ELEC_P_KWH` and `OFGEM_CAP_GAS_P_KWH`:** These constants are added to
 app.js by m8-patch. Policy Reform tile "Ofgem cap (base)" preset uses these constants
@@ -73,11 +71,6 @@ are new constants added by this plan.
 `getIngestionResult()` — tariff rates stored in the ingestion result. At implementation
 time, identify the exact field names for historical SVT electricity rate and gas rate
 in the ingestion result.
-
-**`section-tiles.three-up` CSS:** Extend the `.section-tiles` class from M10b with a
-`.three-up` modifier. The base `.section-tiles` uses 2-column — `.three-up` overrides
-to 3-column. Mobile collapse at ≤767px (note: 767px not 768px to avoid overlap with
-the 2-up breakpoint; the design doc specifies `≤767px` for three-up).
 
 ---
 
@@ -169,9 +162,11 @@ Append:
 
 ### Step 2 — COP slider relocation: remove from hp-model-card (index.html)
 
-In `#hp-model-card` (index.html:260-281), remove the `#hp-model-controls` block entirely:
-- `<label for="cop-scalar">` and its `<input id="cop-scalar">`, `<output id="cop-scalar-value">`, and the `.control-help` paragraph.
-- The "Recalculate with updated COP setting" button label change: update `#btn-recalculate-hp-model` label to "Recalculate" (it continues to trigger M6→M7→M8→M9 chain, now reading COP from the new `#cop-scalar-what-if` input in the What If tile).
+In `#hp-model-card`, remove the `#hp-model-controls` block entirely — all of:
+- `<label for="cop-scalar">`, `<input id="cop-scalar">`, `<output id="cop-scalar-value">`, the `.control-help` paragraph.
+- The `#btn-recalculate-hp-model` button (removed entirely — no slider context remains in the methodology card; `#btn-recalc-cop-what-if` in the What If tile owns this chain).
+
+Confirm by grep that no other code references `btnRecalcHpModel` after removal.
 
 ### Step 3 — index.html: Replace Section 5 with "What If"
 
@@ -215,7 +210,14 @@ In `#hp-model-card` (index.html:260-281), remove the `#hp-model-controls` block 
         <input id="wi-elec-standing" type="number" step="0.01" min="0">
         <label for="wi-gas-standing">Gas standing charge <span class="unit">p/day</span></label>
         <input id="wi-gas-standing" type="number" step="0.01" min="0">
+        <label for="wi-levy-elec-delta">Electricity levy reduction <span class="unit">p/kWh</span></label>
+        <input id="wi-levy-elec-delta" type="number" step="0.1" min="0" value="2.0">
+        <label for="wi-levy-gas-delta">Gas levy increase <span class="unit">p/kWh</span></label>
+        <input id="wi-levy-gas-delta" type="number" step="0.1" min="0" value="0.5">
       </div>
+      <p class="field-hint">The "Full levy removal" preset moves these amounts off
+        your electricity unit rate and onto gas — adjust if you have a different
+        view of the policy shift.</p>
     </details>
     <div class="wi-output" id="policy-output"></div>
 
@@ -299,7 +301,8 @@ Remove old references:
 ```js
 // Remove: references to svtRateInput, hhOverheadInput, elecStandingInput,
 //         gasStandingInput, installFullHpInput, installHybridInput,
-//         busGrantInput, avoidedAcInput
+//         busGrantInput, avoidedAcInput, btnRecalcPricing, btnRecalcFinancial,
+//         btnRecalcHpModel (and its event listener — COP chain now on btnRecalcCopWhatIf)
 ```
 
 Add new references:
@@ -328,6 +331,9 @@ const disconnectGasToggle    = document.getElementById('disconnect-gas-toggle');
 const gasSplitGroup          = document.getElementById('gas-split-group');
 const gasSplitSlider         = document.getElementById('gas-split-slider');
 const gasSplitDisplay        = document.getElementById('gas-split-display');
+// Levy delta inputs (Fine-tune block)
+const wiLevyElecDeltaInput   = document.getElementById('wi-levy-elec-delta');
+const wiLevyGasDeltaInput    = document.getElementById('wi-levy-gas-delta');
 ```
 
 Update `copScalarInput` reference (app.js:186) to point to the new element:
@@ -352,7 +358,10 @@ Update wherever pricing params are read for `prepareRates` to use new IDs:
 - `svt_standing_charge_p`: from `wiElecStandingInput`
 - `gas_standing_charge_p`: from `wiGasStandingInput`
 - Gas rate: from `wiGasRateInput` — pass to `prepareRates` as a new `gas_rate_override_p_kwh`
-  param (if null, `prepareRates` uses the tariff-derived rate as before)
+  param (if null, `prepareRates` uses the tariff-derived rate as before). This is the third
+  optional extension to `prepareRates` after `ofgem_cap_elec_p_kwh` and `agile_calibration`
+  added by m8-patch — backwards-compatible: when `gas_rate_override_p_kwh` is null,
+  existing tariff-windowing logic in `prepareRates` runs unchanged.
 
 ### Step 6 — app.js: Section reveal
 
@@ -371,11 +380,8 @@ Also pre-fill the What If inputs when the analysis first completes:
 
 ### Step 7 — app.js: Policy Reform tile logic
 
-Add new constants (alongside `OFGEM_CAP_*` added by m8-patch):
-```js
-const LEVY_ELEC_DELTA_P_PER_KWH = 2.0;
-const LEVY_GAS_DELTA_P_PER_KWH  = 0.5;
-```
+No `LEVY_*` constants — levy deltas are read from the `#wi-levy-elec-delta` and
+`#wi-levy-gas-delta` inputs (added by Edit 7; defaults 2.0 and 0.5 set in HTML).
 
 **Preset button wiring:**
 ```js
@@ -383,9 +389,11 @@ const LEVY_GAS_DELTA_P_PER_KWH  = 0.5;
 wiSvtRateInput.value = OFGEM_CAP_ELEC_P_KWH;
 wiGasRateInput.value = OFGEM_CAP_GAS_P_KWH;
 
-// "Full levy removal"
-wiSvtRateInput.value = OFGEM_CAP_ELEC_P_KWH - LEVY_ELEC_DELTA_P_PER_KWH;
-wiGasRateInput.value = OFGEM_CAP_GAS_P_KWH + LEVY_GAS_DELTA_P_PER_KWH;
+// "Full levy removal" — read levy deltas from inputs at click time
+const elecDelta = parseFloat(wiLevyElecDeltaInput.value);
+const gasDelta  = parseFloat(wiLevyGasDeltaInput.value);
+wiSvtRateInput.value = (OFGEM_CAP_ELEC_P_KWH - (Number.isFinite(elecDelta) ? elecDelta : 2.0)).toFixed(2);
+wiGasRateInput.value = (OFGEM_CAP_GAS_P_KWH  + (Number.isFinite(gasDelta)  ? gasDelta  : 0.5)).toFixed(2);
 
 // "Your historical rates"
 // Read from ingestion result — identify field at implementation time
@@ -410,11 +418,16 @@ When "Ofgem cap (base)" is active: "Same as the results above — this is the ba
 
 ### Step 8 — app.js: Wait for Technology tile logic
 
+Add a named constant alongside the `OFGEM_CAP_*` constants:
+```js
+const COP_BASELINE_AT_7C = 2.91;  // EoH field-trial median COP at 7°C (M6 baseline)
+```
+
 **COP slider live display:**
 ```js
 copScalarWhatIfInput.addEventListener('input', () => {
   const scalar = parseFloat(copScalarWhatIfInput.value);
-  const copAt7 = (scalar * 2.91).toFixed(1);
+  const copAt7 = (scalar * COP_BASELINE_AT_7C).toFixed(1);
   copScalarDisplay.textContent = `${scalar.toFixed(2)}× (COP ${copAt7} at 7°C)`;
 });
 ```
@@ -480,9 +493,13 @@ function computeGasDisconnectDelta() {
   const COP_DHW   = 2.5;  // HP-integrated hot water
   const COP_OTHER = 1.0;  // immersion heater / cooking
 
+  // `getBaseloadResult()` shape: { heating: [...{ baseload_kwh }], ... }
+  // No pre-computed annual total — sum from per-HH array.
   const baseload = getBaseloadResult();
-  const baseloadGasKwh = baseload?.baseload_gas_annual_kwh ?? null;
-  if (baseloadGasKwh === null) return 0;
+  const baseloadGasKwh = baseload?.heating
+    ? baseload.heating.reduce((s, h) => s + (h.baseload_kwh ?? 0), 0)
+    : null;
+  if (baseloadGasKwh === null || baseloadGasKwh === 0) return 0;
 
   const gasRateP  = parseFloat(wiGasRateInput.value)      || OFGEM_CAP_GAS_P_KWH;
   const gasScP    = parseFloat(wiGasStandingInput.value)  || 0;
@@ -518,7 +535,7 @@ the analysis first."
 
 | Risk | Mitigation |
 |------|-----------|
-| Threshold COP computation — 19 full M6→M7→M8→M9 chain runs on page load may take ~15s | Design doc says "M9-only using pre-existing M7/M8 outputs" — implement proportional scaling approximation; flag for Rhiannon to verify accuracy is acceptable |
+| Threshold COP computation — 19 iterations on page load | Proportional scaling — `elec_kwh[i] *= baseline_cop / scaled_cop`, then re-run M8 + M9 — is exact under uniform COP scaling because dispatch order, capacity, and B_d are all invariant. ~50× cheaper than full chain runs and produces the same threshold COP. |
 | Historical rate field path in ingestion result — exact field name not confirmed | Flag at implementation time: search for where SVT and gas rates are stored in `getIngestionResult()`; the `_ingestionResult.tariff_rates` or similar structure |
 | `copScalarValue` DOM reference (old `#cop-scalar-value`) — used in live display; after COP slider removal from methodology card, this ref must be cleaned up | Grep `copScalarValue` in app.js; confirm all uses updated or removed; new display ref is `copScalarDisplay` pointing to `#cop-scalar-display` |
 | "Adjust the assumptions" section removal — `btnRecalcPricing` and `btnRecalcFinancial` are currently defined as visible inside those cards; after card removal the DOM refs will be null | Remove the card DOM elements in index.html; the `btnRecalcPricing` and `btnRecalcFinancial` buttons inside those sections are also removed. The What If auto-update replaces their function — check whether any other code reveals or manipulates these buttons and update accordingly |
