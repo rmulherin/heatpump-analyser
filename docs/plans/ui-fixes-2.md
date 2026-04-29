@@ -1,7 +1,7 @@
 # ui-fixes-2 — Post-launch corrections (batch 2)
 
 **Date:** 2026-04-29
-**Status:** Awaiting approval — review via claude.ai before implementation begins.
+**Status:** ✅ Approved — 2026-04-29
 **Design doc:** `design/ui-fixes-2.md`
 
 ---
@@ -237,7 +237,7 @@ details[open] .status-summary::before { content: '▼ '; }
 | Risk | Mitigation |
 |------|-----------|
 | Fix 2: `inferGasUnit` needs summer data to be reliable; Tier 1 with no summer records returns `unit: 'kwh'` | `inferGasUnit` at data-ingestion.js:571 already returns `{ unit: 'kwh', ... }` when `summerRecs < 48` — toggle defaults to unchecked (kWh), same as current behaviour; no regression |
-| Fix 3: `<details>` wrapping `statusArea` changes DOM structure — any code that references `statusArea.parentElement` or similar relative navigation may break | Grep for `statusArea.parentElement` and `csvStatusArea.parentElement` before implementing; expect none |
+| Fix 3: `<details>` wrapping `statusArea` changes DOM structure — JS code referencing `statusArea.parentElement` or CSS rules using adjacent/sibling selectors against `.status-area` may break | Grep `js/app.js` for `statusArea.parentElement` and `csvStatusArea.parentElement`; grep `css/styles.css` for `.status-area +` and `.status-area ~` adjacent/sibling selectors. Expect none in either; if found, audit individually before implementing. |
 | Fix 4: Removing `verdictCooling` DOM ref — if any other function references it after removal, runtime error | `verdictCooling` referenced only at lines 224 (ref), 1942 (text), 1943 (classList.remove), 1945 (classList.add); all four must be removed together |
 | Fix 4: ui-fixes-1 Fix 6 adds `buildVerdictStatusMessage` which is called after Step 16f — the cooling note removal (Step 16f) happens in this plan; if ui-fixes-2 is applied before ui-fixes-1, Step 16g chart construction references may shift | Implement ui-fixes-1 first, then ui-fixes-2 — confirmed order |
 
@@ -256,25 +256,71 @@ details[open] .status-summary::before { content: '▼ '; }
 
 ---
 
-## Claude.ai Review — yyyy-mm-dd
+## Design Review
 
 **Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Date:** 2026-04-29
+**Review type:** Plan review (pre-implementation)
+**Authoritative design:** `design/ui-fixes-2.md` (praxis-claude-hub commit `8476c58`)
 
-**Overall verdict:** [Approved / Approved with clarifications / Revise and resubmit]
+### Context
 
-### What is solid
+Plan reviewed against `design/ui-fixes-2.md` (committed 2026-04-29 in
+praxis-claude-hub, `8476c58`). All four fixes (Account-No-before-API-Key
+order, Tier-1 gas-unit detection, status-notice collapse, cooling note
+removal) are correctly mapped to the design. Dependencies are well-stated:
+must follow ui-fixes-1 (shared verdict-card edits — ui-fixes-1 inserts
+`buildVerdictStatusMessage` above Step 16f; ui-fixes-2 deletes Step 16f);
+must precede m10b (m10b assumes cooling note removed); parallel-safe with
+the agile + m8-patch streams. No CRITICAL, HIGH, or MEDIUM findings.
 
-### Clarifications required before implementation
+### Required changes for implementation
 
-### Minor observations (not blockers)
+None — implementation steps are unchanged.
+
+### Plan-internal cleanup applied at amend time
+
+**1. Risk 2 strengthened (LOW).**
+
+Original mitigation only flagged JS-level references to
+`statusArea.parentElement`. Wrapping `#status-area` in `<details>` also
+reparents it for CSS adjacent/sibling-selector purposes
+(`.status-area + h2`, `.status-area ~ section`). Mitigation expanded to
+include a grep of `css/styles.css` for these patterns before implementing.
+
+**2. Section heading renamed (LOW).**
+
+`## Claude.ai Review` → `## Design Review` per the heatpump CLAUDE.md
+substitution table for the FX EA review template.
+
+### Note for future plans (not applied)
+
+Plan's Research findings and Implementation steps reference specific line
+numbers (e.g. `data-ingestion.js:618-623`, `app.js:1939-1946`). The
+heatpump architect brief explicitly says plans should reference function
+names rather than line numbers because files drift between sessions.
+Acceptable here because implementation is imminent and most line refs
+are paired with surrounding function names so Sonnet can find the right
+locations even if numbers shift. Worth discouraging in future plans.
+
+## Review Summary
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| CRITICAL | 0     | — |
+| HIGH     | 0     | — |
+| MEDIUM   | 0     | — |
+| LOW      | 3     | 1 + 2 ✅ resolved; 3 noted for future |
+
+Verdict: ✅ APPROVED — implementation steps unchanged; Risk 2 strengthened to include CSS sibling-selector grep; section heading renamed.
 
 ---
 
 ## Approval
 
-**Status:** [pending]
-**Approved by:**
-**Clarifications confirmed:**
+**Status:** ✅ Approved — 2026-04-29
+**Approved by:** Rhiannon (via Opus review)
+**Clarifications confirmed:** None substantive — implementation matches design as written.
 
 ---
 
