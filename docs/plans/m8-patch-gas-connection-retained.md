@@ -1,7 +1,7 @@
 # m8-patch-gas-connection-retained — Gas retained; Agile D×W+P; Ofgem cap rates
 
 **Date:** 2026-04-29
-**Status:** Awaiting approval — review via claude.ai before implementation begins.
+**Status:** ⏸ Blocked — pending rewrite per Design Review v1 (2026-04-29)
 **Design doc:** `design/m8-patch-gas-connection-retained.md`
 **Implements:** sequence 4 of 6 (after patch-agile-region-calibration; before ui-design-m10b)
 
@@ -318,25 +318,144 @@ a flat rate estimate."
 
 ---
 
-## Claude.ai Review — yyyy-mm-dd
+## Design Review v1
 
 **Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Date:** 2026-04-29
+**Review type:** Plan review (pre-implementation)
+**Authoritative design:** `design/m8-patch-gas-connection-retained.md` (praxis-claude-hub commit `aacf6a4`)
+**Verdict:** ⏸ BLOCK — plan returned to Sonnet for v2 rewrite
 
-**Overall verdict:** [Approved / Approved with clarifications / Revise and resubmit]
+### Context
 
-### What is solid
+Plan reviewed against the m8-patch design (latest commit `aacf6a4` — Opus has
+applied review-driven updates to Sections F2, F3, E, Scope, and Test criteria
+in praxis-claude-hub). Two HIGH findings and one MEDIUM require substantive
+changes to plan body (new scope, rewritten code logic, rewritten copy). Per
+heatpump reviewer-mode discipline, the architect does not author plan body
+changes of this depth — the plan is returned to Sonnet for rewrite against
+the updated design + this brief.
 
-### Clarifications required before implementation
+**Architectural decisions stand:** gas-connection-retained, Agile D × W + P,
+Ofgem cap for HP electricity (not gas), hybrid removal across all layers,
+four-component cost decomposition. The rewrite is a fix to the
+specification of those decisions, not a redesign of them.
 
-### Minor observations (not blockers)
+### Required changes for the rewrite
+
+**1. HIGH — Extend hybrid removal to M7.**
+
+Current Step 1 covers M8 (`pricing-engine.js`), M9 (`financial.js`), and the
+display layer (`app.js`). It does NOT cover M7 (`scenario-consumption.js`).
+Without that, M7 keeps producing `hybrid_dumb` and `hybrid_smart` arrays that
+no consumer reads. Worse, `smart-scenario-fixes-1` Test 16
+("Hybrid_smart prefers HP at cheap HP HH") would either continue testing
+dead code or break silently if M7 logic is removed without test cleanup.
+
+Rewrite must include explicit steps for:
+- Removing `hybrid_dumb` and `hybrid_smart` from M7's scenario list and
+  computation in `js/scenario-consumption.js`.
+- Disposing of Test 16 in the M7 test suite (delete is fine — there is no
+  general "removed-scenario contract" pattern worth keeping).
+
+The design Scope (`aacf6a4`) now reflects this; the plan steps must follow.
+
+**2. HIGH — Replace agile-failure fallback with default D/P.**
+
+Current Step 5 fallback when `agile_calibration` is null:
+`elec_hh_rate_by_hh[i] = svtRate;` — a flat-rate fallback.
+
+Rejected. A flat-rate fallback (whether historical `svtRate` or
+`OFGEM_CAP_ELEC_P_KWH`) makes `dumb_hp_hh` and `smart_hp_hh` numerically
+identical to `dumb_hp_svt` — three identically-numbered scenarios with
+different labels. Worse UX than indicative-with-warning.
+
+Replace with the design's new F3 specification:
+- Define constants in `js/pricing-engine.js`:
+  `D_DEFAULT = 2.2`, `P_DEFAULT_PEAK_P_KWH = 12`.
+- Build an effective calibration object:
+  `agile_calibration ?? { D: D_DEFAULT, P_peak_p_kwh: P_DEFAULT_PEAK_P_KWH, source: 'default' }`.
+- Apply the same `D × W + P` formula to historical wholesale either way —
+  no separate fallback branch in the code.
+- Surface the warning text per design F2 when `calibration.source === 'default'`.
+
+**3. MEDIUM — Update display footnote text per revised design Section E.**
+
+Current Step 7 injects both `OFGEM_CAP_ELEC_P_KWH` AND `OFGEM_CAP_GAS_P_KWH`
+into the footnote, implying both rates are used in HP scenario costs. Only
+electricity is. Gas baseload across all scenarios (HP and current) uses the
+user's historical M1 rate.
+
+Use revised footnote text from design Section E:
+*"Heat pump scenario electricity costs use the current Ofgem price cap rate
+(electricity: 24.67p/kWh). Gas costs (for the retained connection and
+baseload) and your current boiler costs use your actual historical tariff
+rates."*
+
+Inject only `OFGEM_CAP_ELEC_P_KWH`. Drop `OFGEM_CAP_GAS_P_KWH` from this note.
+
+**4. LOW — Tighten Step 1 hedge.**
+
+Step 1 currently: *"FULL_HP_SCENARIOS (line 16): Remove hybrid entries
+(or confirm these only contain full-HP scenarios already — if so no change
+needed)"*. Replace the hedge with a definitive grep instruction:
+*"Grep `financial.js` for `hybrid_` and remove all matches. Verify zero
+remaining occurrences post-edit."*
+
+**5. LOW — Section heading rename.**
+
+`## Claude.ai Review` → `## Design Review` per the heatpump CLAUDE.md
+substitution table.
+
+**6. LOW — Status field protocol.**
+
+The plan currently sits at `⏸ Blocked — pending rewrite per Design Review v1
+(2026-04-29)`. After the v2 rewrite Sonnet sets it to
+`Awaiting re-review — rewrite v2`. Opus will set the final approved value
+during the v2 review.
+
+**7. LOW — Update success criteria.**
+
+- DROP the "If Agile fetch fails, warning visible AND HH scenarios fall back
+  to flat SVT rate" criterion (no longer the design intent).
+- ADD: *"Under default-calibration fallback (Agile fetch fails or `gsp_region`
+  unavailable), `dumb_hp_hh` total differs numerically from `dumb_hp_svt`
+  total (price spread preserved, not flat)."*
+- ADD: *"Under default-calibration fallback, `smart_hp_hh` total <
+  `dumb_hp_hh` total (smart optimiser still benefits from intra-day
+  variation)."*
+- ADD: *"M7 produces no `hybrid_dumb` or `hybrid_smart` arrays; Test 16 from
+  the smart-scenario-fixes-1 suite is removed."*
+
+### Resolution of review changes
+
+*To be filled by Sonnet during v2 rewrite — one line per numbered finding
+above describing how it was addressed in the rewritten plan.*
+
+1. *(pending — Sonnet to fill)*
+2. *(pending)*
+3. *(pending)*
+4. *(pending)*
+5. *(pending)*
+6. *(pending)*
+7. *(pending)*
+
+## Review Summary
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| CRITICAL | 0     | — |
+| HIGH     | 2     | ⏸ pending rewrite |
+| MEDIUM   | 1     | ⏸ pending rewrite |
+| LOW      | 4     | ⏸ pending rewrite |
 
 ---
 
 ## Approval
 
-**Status:** [pending]
-**Approved by:**
-**Clarifications confirmed:**
+**Status:** ⏸ Pending — awaiting v2 rewrite and re-review
+**Approved by:** —
+**Clarifications confirmed:** Default D/P fallback is the agreed approach (no flat-rate fallback). M7 hybrid removal is in scope. Display footnote references the electricity Ofgem cap only; gas costs are framed as historical.
 
 ---
 
