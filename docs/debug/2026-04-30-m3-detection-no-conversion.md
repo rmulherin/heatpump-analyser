@@ -196,4 +196,12 @@ Label is set by detection only — manual toggle does not update label text.
 - [ ] Label updates when user manually toggles the checkbox
 - [ ] No regression — kWh meter path still shows raw (kWh) values in panel
 
-## Status: Verification pending (browser)
+## Verification
+
+- [x] Panel shows correct kWh values when m³ detected (pre-ticked) — confirmed 2026-04-30
+- [x] Label reads "Yes, my meter reads in cubic metres (m³)" when pre-ticked — confirmed
+- [x] Label reads "No, my meter reads in cubic metres (m³)" when unticked — confirmed
+- [x] Label does not change on manual toggle — confirmed
+- [ ] kWh meter path (no detection) — untested, no suitable data available
+
+## Status: RESOLVED (2026-04-30)
