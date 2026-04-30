@@ -887,7 +887,6 @@ async function runExternalData(showProgressFn, showStatusFn) {
   const external = alignExternalData(consumption, weatherMap, priceLookup);
 
   // Step 6: Agile calibration
-  const ingestion = getIngestionResult();
   const agileCalibration = await fetchAgileCalibration(ingestion?.gsp_region ?? null);
 
   // Step 7: Build metadata

@@ -115,4 +115,10 @@ No other occurrences require changes.
 - [ ] API step completes successfully (Agile calibration runs, `gsp_region` resolves)
 - [ ] No regression in Agile calibration path
 
-## Status: Fix pending
+## Fix Applied
+
+**Commit:** see below
+**Change:** removed `const ingestion = getIngestionResult();` at app.js:890
+**Fix source:** Category A — own reasoning, direct from root cause
+
+## Status: Verification pending (browser)
