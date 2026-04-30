@@ -1,7 +1,7 @@
 # Agile Rate Robustness — implementation plan
 
 **Date:** 2026-04-30
-**Status:** Awaiting approval — review via claude.ai before implementation begins.
+**Status:** ⚠ Approved with edits — apply Edits 1–3 below before implementing (2026-04-30)
 **Parent design:** `~/Documents/git-repos/praxis-claude-hub/projects/tools/heatpump-analyser/design/agile-rate-robustness.md` (DRAFT — ready for Sonnet planning, 2026-04-30)
 **Related designs:** `design/external-data.md` (M2), `design/pricing-engine.md` (M8), `design/m8-patch-gas-connection-retained.md`, `design/patch-agile-region-calibration.md`
 **Supersedes:** `docs/plans/debug-agile-calibration-apx-switch.md` (rejected 2026-04-30 — kept as historical record of initial bug investigation)
@@ -449,15 +449,155 @@ Plan ships APX switch alone in commit 1, then waits on Rhiannon's "yes, cost ord
 
 ---
 
-## Claude.ai Review — yyyy-mm-dd
+## Design Review
 
-[To be filled by reviewer.]
+**Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Date:** 2026-04-30
+**Review type:** Plan review (pre-implementation)
+**Authoritative design:** `design/agile-rate-robustness.md` (praxis-claude-hub commit `69ccf2e`)
+**Verdict:** ⚠ APPROVED WITH EDITS — apply Edits 1–3 below before implementing, commit the amended plan (`plan amend: agile-rate-robustness — apply review edits`), then proceed to sub-step 1.
+
+### Context
+
+Strong plan. Sonnet correctly diagnosed two design gaps (`null_wholesale_fraction` placement should be in `app.js:runExternalData` not `fetchAgileCalibration`; default-object construction routes through `app.js` to ensure consistent shape) and proposed fixes that achieve design intent better than the design's literal specification. Sub-step gating with explicit verification criteria is structured well. "Design doc question for Opus" callouts used appropriately for Q1 (DOM spec) and Q2 (sub-step 1 hard gate).
+
+Three substantive items to apply before implementing:
+
+1. **(LOW from review)** Drop a redundant per-slot warning that doubles up with Section E's tier-2 coverage warning.
+2. **(New, from Rhiannon's pushback during review)** Replace full-year wholesale mean with preceding-7-day rolling mean — preserves seasonality.
+3. **(New, from Rhiannon's pushback during review)** Extend insufficient-data propagation beyond the pricing table to cover all downstream consumers via the existing `payback_status = 'no_data'` mechanism.
+
+Architectural decisions from the design stand: APX provider, default D=2.2/P=12, validation bands (D 1.5–3.0, P 5–20, sample counts 50/20), coverage thresholds 5%/25%, plausibility floor 0.85×cap, weighted-mean-vs-cap check on `dumb_hp_hh`. The edits sharpen execution, not the architecture.
+
+### Edits to apply before implementing
+
+**Edit 1 — Drop the per-slot null-wholesale warning push (sub-step 2.3).**
+
+Sub-step 2.3 currently includes:
+
+```js
+if (!warnedNullWholesale) {
+  warnings.push('Some HH periods have no wholesale price data — using a calibration-typical rate for affected periods.');
+  warnedNullWholesale = true;
+}
+```
+
+This duplicates Section E's tier-2 coverage warning, which fires above 5% null fraction with similar text. Two warnings for the same condition through different channels (warnings array vs DOM banner) is redundant; firing thresholds also don't match (per-slot fires at any null; Section E fires at 5% threshold).
+
+Resolution: remove the `warnings.push(...)` block and the `warnedNullWholesale` flag from sub-step 2.3. Section E's three-tier system in sub-step 3.1 is the user-visible signal. Sub-step 2.3 keeps the per-slot fallback behaviour without adding a separate warning channel.
+
+**Edit 2 — Replace full-year wholesale mean with preceding-7-day rolling mean (sub-step 2.3).**
+
+Current plan computes `wholesale_mean_known` once across the full-year wholesale array and uses that single global value for every null-wholesale slot. This smears summer wholesale into winter imputation (and vice versa), losing seasonality.
+
+Replace with a 7-day preceding-window mean per slot, with a three-tier fallback hierarchy:
+
+```js
+function imputeWholesaleForSlot(i, wholesale_array, global_mean_known, D, ofgem_cap) {
+  // Preceding 7 days × 48 HHs = 336 slots
+  const window_start = Math.max(0, i - 336);
+  const window_slots = wholesale_array.slice(window_start, i)
+                                       .filter(w => w !== null && w !== undefined);
+  const MIN_WINDOW_SAMPLES = 50;
+  if (window_slots.length >= MIN_WINDOW_SAMPLES) {
+    return window_slots.reduce((s, w) => s + w, 0) / window_slots.length;
+  }
+  // Fall back to global mean of known wholesale prices
+  if (global_mean_known !== null) return global_mean_known;
+  // Last resort: every slot is null → use cap/D so resulting rate ≈ Ofgem cap
+  return ofgem_cap / D;
+}
+```
+
+Three-tier fallback covers:
+
+- Slot has at least 50 non-null wholesale prices in the preceding 7 days → use that mean. Common case.
+- Preceding-week window has too few samples (early in dataset, or sustained outage) → global mean of all known wholesale prices.
+- All wholesale is null → `OFGEM_CAP_ELEC_P_KWH / D` (existing layer-4 last-resort).
+
+`global_mean_known` is computed once outside the per-HH loop. Implementation note: the per-slot rolling sum can be maintained incrementally during the iteration to avoid recomputing per null slot — optimisation is implementation-time concern, not architectural.
+
+The peak/off-peak shape is *not* preserved by the wholesale mean (the 7-day window averages across both peak and off-peak hours). The formula's `+ (peak ? P_peak_p_kwh : 0)` term restores time-of-day shape via P. This is correct — the shape comes from P, not from wholesale; preserving same-hour-of-day in the wholesale window would be over-engineering.
+
+Update sub-step 2.6 success criteria — replace the "rates use `wholesale_mean_known`" check with "rates use the preceding-week mean for the slot's date". Add a synthetic test injecting null slots in a winter month where summer/winter wholesale differs meaningfully, and confirm imputed rates reflect the seasonal context (winter slots get winter-ish mean, not year-mean).
+
+**Edit 3 — Extend insufficient-data propagation in sub-step 3.1.**
+
+Plan currently says: when `hhScenariosInsufficient = true`, the dumb_hp_hh and smart_hp_hh rows render em-dashes via `fmtGbp(null)`. That only covers the pricing card 5-column table. The HH scenarios are consumed by additional downstream paths:
+
+| Downstream consumer | Notes |
+|---|---|
+| Financial card savings/payback rows | likely already em-dash via `fmtGbp(null)`; verify during implementation |
+| Financial card sensitivity grid (5×5 gas/elec best-payback) | must exclude HH scenarios from "best payback per cell" selection when insufficient |
+| Verdict bar chart | should omit HH scenario bars (or annotate) when insufficient |
+| Verdict primary-scenario selection (`priority = ['smart_hp_hh', 'dumb_hp_hh', 'dumb_hp_svt']`) | falls through to `dumb_hp_svt` if HH scenarios' `payback_status = 'no_data'` — mechanism exists from smart-scenario-fixes-1 |
+| Verdict status line (Fix 6 from ui-fixes-1) | handles "smart absent, dumb_hp_hh available"; may need a sibling case for "all HH absent, dumb_hp_svt available" |
+| Drove card Stat 3 "Electricity (HH)" | adapts via primary-scenario branch; already handles the `dumb_hp_svt`-primary case |
+
+**The simplifying mechanism:** most consumers already handle "scenario absent / payback_status = no_data" through patterns established by `smart-scenario-fixes-1` and `ui-fixes-1`. The propagation reduces to **one specific edit**:
+
+When sub-step 3.1 sets `hhScenariosInsufficient = true`, also set
+- `financialResult.scenarios.dumb_hp_hh.payback_status = 'no_data'`
+- `financialResult.scenarios.smart_hp_hh.payback_status = 'no_data'`
+
+(and nullify the relevant cost-array fields for these scenarios) **before** the verdict, chart, financial card, and drove-tile rendering runs. The existing `payback_status === 'no_data'` handling in those consumers naturally treats the scenarios as unavailable.
+
+Specifically check during implementation:
+
+- **Verdict status line (Fix 6).** Does the existing trigger logic handle "all HH absent, dumb_hp_svt available" as a sibling case to its existing "smart absent" condition? If not, extend it with one new condition.
+- **Sensitivity grid.** Confirm the "best payback across scenarios" selection respects `payback_status = 'no_data'`. If not, add the filter.
+
+Update sub-step 3.1's success criteria to verify end-to-end:
+
+- Synthetic 26% null slots: HH rows em-dash in pricing AND financial cards; verdict bar chart omits HH bars (or annotates); verdict primary scenario falls back to `dumb_hp_svt`; drove tile electricity stat reflects SVT primary; sensitivity grid best-payback excludes HH scenarios.
+
+### Answers to Sonnet's questions
+
+**Q1 — DOM spec for `unusual-result-panel` and coverage warnings.** Sonnet's inference is acceptable. Confirmed:
+
+- Coverage warnings reuse `.status-msg.warning` / `.status-msg.info` (no new CSS).
+- `#unusual-result-panel` placed inside the pricing card above the cost table; hidden by default; title in `<strong>`, body in `<p>`; `.status-msg.info` styling.
+- HH-scenarios-insufficient marker via `payback_status = 'no_data'` + `fmtGbp(null)` returning em-dash. Per Edit 3, this propagation extends beyond the pricing table.
+
+If during implementation `.status-msg.info` looks insufficient for the unusual-result panel (it is a structural finding, not a passing note), add a small `.unusual-result-panel` rule with a left-border accent. Implementation-time decision; no Opus input needed.
+
+**Q2 — Sub-step 1 commit gate.** Confirmed as a hard gate. Sub-step 1 ships and pauses for Rhiannon's verification before sub-step 2 begins. Verification criteria per the design's planning guidance: console clean (no `P=0` warning), drove tile electricity rate within 21–28 p/kWh, dumb_hp_hh cost > dumb_hp_svt cost on Rhiannon's data.
+
+### Plan-internal cleanup applied at amend time (reviewer-mode edits)
+
+Already applied by Opus when this Design Review block was added:
+
+- Status field: `Awaiting approval` → `⚠ Approved with edits — apply Edits 1–3 below before implementing (2026-04-30)`.
+- Section heading: `Claude.ai Review` → `Design Review`.
+
+### Sonnet protocol
+
+When picking up this plan for implementation:
+
+1. Apply Edits 1–3 to the plan body. Update Status to `⚠ Approved with edits — applied 2026-04-30`. Commit (`plan amend: agile-rate-robustness — apply review edits`).
+2. Proceed with sub-step 1 (APX switch). Commit, push, **stop for Rhiannon's verification** (sub-step 1 hard gate per Q2 confirmation above).
+3. After verification, proceed with sub-step 2 then sub-step 3.
+4. Implementation Deviations section (post-implementation) records any further deviations discovered while writing code.
+
+## Review Summary
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| CRITICAL | 0     | — |
+| HIGH     | 0     | — |
+| MEDIUM   | 0     | — |
+| LOW      | 1     | Edit 1 (per-slot warning redundancy) — Sonnet applies |
+| Edits from review discussion | 2 | Edits 2 (preceding-week mean), 3 (insufficient propagation) — Sonnet applies |
+
+Verdict: ⚠ APPROVED WITH EDITS — three plan-body edits before implementation; sub-step 1 hard gate confirmed; Q1 DOM spec inference accepted.
 
 ---
 
 ## Approval
 
-[To be filled on approval.]
+**Status:** ⚠ Approved with edits — apply Edits 1–3 before implementing (2026-04-30)
+**Approved by:** Rhiannon (via Opus review)
+**Clarifications confirmed:** Preceding-7-day rolling mean for null-wholesale imputation (preserves seasonality) replaces full-year mean. Insufficient-data marking propagates beyond pricing table to verdict, chart, financial card, drove tile, and sensitivity grid via the existing `payback_status = 'no_data'` mechanism. Per-slot null-wholesale warning push removed (Section E tier system is the user-visible signal). Sub-step 1 (APX switch) is a hard gate — pause for verification before proceeding. DOM spec for `unusual-result-panel` and coverage warnings per Sonnet's inference. Wholesale dataset is shared across users (static, evolving day-by-day, not personalised) — relevant context for future "Elexon down" handling but no plan change needed.
 
 ---
 
