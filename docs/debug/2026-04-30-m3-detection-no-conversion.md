@@ -183,7 +183,10 @@ implementation. Flagging as secondary concern — not fixing inline.
    - `updateGasM3Label()` called after every programmatic toggle state change and on
      user `change` event. Default HTML text set to "No…" (matches unchecked default).
 
-**Fix source:** Category A — direct from root cause; label wording specified by Rhiannon.
+**Fix source:** Category A — direct from root cause; label wording and behaviour specified by Rhiannon.
+
+**Amendment (commit ea81b39):** Removed `gasM3Toggle.addEventListener('change', updateGasM3Label)`.
+Label is set by detection only — manual toggle does not update label text.
 
 ## Verification
 
