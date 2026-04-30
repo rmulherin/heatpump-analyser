@@ -146,6 +146,7 @@ const gasCheckWinter = document.getElementById('gas-check-winter');
 const gasCheckSummerMonth = document.getElementById('gas-check-summer-month');
 const gasCheckWinterMonth = document.getElementById('gas-check-winter-month');
 const gasM3Toggle = document.getElementById('gas-m3-toggle');
+const gasM3Label  = document.getElementById('gas-m3-label');
 const btnGasConfirm = document.getElementById('btn-gas-confirm');
 const resultsCard = document.getElementById('results-card');
 const resultsSummary = document.getElementById('results-summary');
@@ -459,6 +460,7 @@ async function continueWithProperty(apiKey) {
   detectedGasUnitSource = null;
   gasM3Toggle.checked = false;
   gasM3Toggle.disabled = false;
+  updateGasM3Label();
 
   // Step 2: Fetch consumption (with meter stitching if multiple meters)
   showProgress('Fetching consumption data…', 30);
@@ -494,6 +496,7 @@ async function continueWithProperty(apiKey) {
       } else if (gasResult.detectedUnit === 'kwh') {
         gasM3Toggle.checked = false;
       }
+      updateGasM3Label();
     }
 
     // Fall back to single-meter fetch for fuels that didn't need stitching
@@ -530,7 +533,8 @@ async function continueWithProperty(apiKey) {
     showProgress('Checking gas units…', 45);
     // Use the first available gas rate from their tariff, or fallback to default
     const gasRate = CONFIG.DEFAULT_GAS_RATE_P_KWH;
-    const check = buildGasUnitCheck(gasRecords, gasRate);
+    const recordsForCheck = gasM3Toggle.checked ? convertM3ToKwh(gasRecords) : gasRecords;
+    const check = buildGasUnitCheck(recordsForCheck, gasRate);
 
     if (check) {
       gasCheckSummerMonth.textContent = check.summerMonth;
@@ -550,6 +554,7 @@ async function continueWithProperty(apiKey) {
       if (detectedGasUnitSource === 'm3_converted_per_meter') {
         gasM3Toggle.checked = false;
         gasM3Toggle.disabled = true;
+        updateGasM3Label();
       }
       gasCheckArea.classList.remove('hidden');
 
@@ -728,6 +733,14 @@ async function continueWithProperty(apiKey) {
 }
 
 // ===== Gas Confirmation =====
+
+function updateGasM3Label() {
+  gasM3Label.textContent = gasM3Toggle.checked
+    ? 'Yes, my meter reads in cubic metres (m³)'
+    : 'No, my meter reads in cubic metres (m³)';
+}
+
+gasM3Toggle.addEventListener('change', updateGasM3Label);
 
 function waitForGasConfirmation() {
   return new Promise((resolve) => {

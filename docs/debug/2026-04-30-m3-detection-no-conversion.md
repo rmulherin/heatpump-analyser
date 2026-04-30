@@ -169,4 +169,28 @@ Rhiannon's expected UX:
 This is a design change (inverted checkbox semantics) that needs Opus review before
 implementation. Flagging as secondary concern — not fixing inline.
 
-## Status: Awaiting clarification + Opus design review for checkbox semantics
+## Fix Applied
+
+**Changes (two in one commit):**
+
+1. **Panel display (bug):** `buildGasUnitCheck` now receives converted records when m³
+   is detected (`recordsForCheck = gasM3Toggle.checked ? convertM3ToKwh(gasRecords) : gasRecords`).
+   Tier 2 path unaffected (toggle is false, records already converted).
+
+2. **Label wording (design):** Label text is now dynamic:
+   - Checked: "Yes, my meter reads in cubic metres (m³)"
+   - Unchecked: "No, my meter reads in cubic metres (m³)"
+   - `updateGasM3Label()` called after every programmatic toggle state change and on
+     user `change` event. Default HTML text set to "No…" (matches unchecked default).
+
+**Fix source:** Category A — direct from root cause; label wording specified by Rhiannon.
+
+## Verification
+
+- [ ] Panel shows correct kWh values when m³ detected (pre-ticked)
+- [ ] Label reads "Yes, my meter reads in cubic metres (m³)" when pre-ticked
+- [ ] Label reads "No, my meter reads in cubic metres (m³)" when unticked
+- [ ] Label updates when user manually toggles the checkbox
+- [ ] No regression — kWh meter path still shows raw (kWh) values in panel
+
+## Status: Verification pending (browser)
