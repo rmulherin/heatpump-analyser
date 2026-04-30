@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-30
 **Reporter:** Rhiannon
-**Status:** Partial fix applied — root cause of P_samples=empty unconfirmed (diagnostic pending)
+**Status:** Root cause confirmed — plan drafted, awaiting Opus review before implementation
 
 ## Symptoms
 
@@ -62,35 +62,49 @@ returns an out-of-range (but non-null) value.
 - **Conclusion: P_samples should not be empty.** The `wholesale > 1.0` filter and
   `agileMap` lookup should work for peak-hour periods.
 
-**Remaining hypotheses for P_samples empty:**
-- H1: April afternoon peak wholesale IS consistently ≤1.0 p/kWh (high renewables event
-  specific to April 2026 — not confirmed by search). Low probability given Q1 avg = 9.8p.
-- H2: agileMap timestamp lookup fails specifically for peak-hour timestamps (e.g. the
-  Octopus API returns peak rates in an unexpected format). Possible if API changed format
-  post-reform.
-- H3: The Octopus API returns the 16:00–19:00 peak window as a single rate entry (one
-  valid_from) rather than 6 separate HH entries. Only the first 30-min slot would match
-  priceLookup; the other 5 would miss. This would give sparse but non-zero P_samples —
-  inconsistent with P=0 exactly.
+**Root cause confirmed (2026-04-30 console investigation):**
 
-**Diagnostic added (see Phase 5c):** `console.log` added to count P_samples and D_samples
-and print first few agile and wholesale values for peak hours. Re-run and report output
-to confirm root cause.
+N2EX (N2EXMIDP) has structurally withdrawn from UK electricity market trading in April 2026.
+Settlement period records exist in Elexon MID but show price=0, volume=0 — no trades executed.
+
+Console test results:
+
+| Date range | N2EX total | N2EX non-zero | Peak SPs (33–38) | Peak non-zero |
+|------------|-----------|--------------|-----------------|--------------|
+| Apr 1      | 1         | 0            | 0               | 0            |
+| Apr 2–3    | 49        | 1            | 6               | 0            |
+| Apr 15     | 1         | 0            | 0               | 0            |
+
+APX (APXMIDP) over the same period has complete, non-zero data:
+
+| Date range | APX total | APX non-zero | Peak SPs (33–38) | Peak non-zero | Sample prices |
+|------------|----------|-------------|-----------------|--------------|---------------|
+| Apr 2–3    | 49       | 49          | 6               | 6            | 8.2–11.6 p/kWh |
+
+The handful of non-zero non-peak N2EX records (e.g. SP16 at 14.0 p/kWh) produce a thin
+D_samples, so D is computed and the function returns non-null with P=0. Peak SPs are
+universally 0 → filtered by `wholesale <= 1.0` → P_samples empty → P=0.
+
+**Fix:** Switch `N2EXMIDP` → `APXMIDP` as the data provider throughout `external-data.js`.
+See plan `docs/plans/debug-agile-calibration-apx-switch.md`.
 
 ---
 
-## Phase 5 — Fixes Applied
+## Phase 5 — Proposed Fixes (pending Opus approval)
 
-### Fix A: graceful degradation (pricing-engine.js)
-Validate D and P after calibration extraction; fall back to defaults with warning if
-out of range.
+See plan `docs/plans/debug-agile-calibration-apx-switch.md` for full implementation
+detail. Three fixes proposed:
 
-### Fix B: display (app.js)
-`filter(r !== null)` → `filter(r => r > 0)` for the HH average display only.
+### Fix 1: Switch N2EX → APX (external-data.js)
+`N2EXMIDP` → `APXMIDP` in provider filter, SP conversion guard, and source tag.
+APX has complete non-zero data; N2EX has withdrawn from UK peak-hour trading.
 
-### Diagnostic (external-data.js)
-Temporary `console.log` added to report P_samples.length, D_samples.length, and sample
-peak agile/wholesale pairs. Remove once root cause confirmed.
+### Fix 2: Graceful degradation (pricing-engine.js)
+Replace `??` fallback with explicit P validation:
+`const calibration = (raw && raw.P_peak_p_kwh >= 5) ? raw : { D: D_DEFAULT, P_peak_p_kwh: P_DEFAULT_PEAK_P_KWH, source: 'default' };`
+
+### Fix 3: Display average excludes zero-rate periods (app.js)
+`filter(r => r !== null)` → `filter(r => r > 0)` for HH rate average display only.
 
 ---
 
@@ -101,4 +115,4 @@ peak agile/wholesale pairs. Remove once root cause confirmed.
 - [ ] "0.0 p/kWh average" replaced by ~15–20p
 - [ ] Diagnostic output printed to console — report values for root cause confirmation
 
-## Status: Fixes A+B applied; root cause of P_samples=empty unconfirmed pending diagnostic
+## Status: Root cause confirmed (N2EX withdrawal). Plan drafted — awaiting Opus review.
