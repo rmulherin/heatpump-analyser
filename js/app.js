@@ -740,8 +740,6 @@ function updateGasM3Label() {
     : 'No, my meter reads in cubic metres (m³)';
 }
 
-gasM3Toggle.addEventListener('change', updateGasM3Label);
-
 function waitForGasConfirmation() {
   return new Promise((resolve) => {
     const handler = () => {
