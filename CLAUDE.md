@@ -23,12 +23,26 @@ README.md — reference it instead.
 This window executes approved plans. Write code per design docs and approved plans.
 Flag deviations in the plan file — do not redesign on the fly.
 
-Architecture, design, and plan review happen in a parallel Claude Code window
-running Opus. That window operates out of
+Architecture, design, plan review, **and debug investigation** happen in a parallel
+Claude Code window running Opus. That window operates out of
 `~/Documents/git-repos/praxis-claude-hub/projects/tools/heatpump-analyser/`.
 
-If a request requires architectural judgement or design changes, stop and flag it
-to Rhiannon rather than proceeding. The Opus window is the right place for that work.
+> **Methodology:** This project follows the role-separated, structurally-enforced
+> build methodology in
+> `~/Documents/git-repos/claude-coding-hub/coding/rules/build-methodology.md`.
+> Read or re-read that file when calibrating role boundaries, debug handoffs,
+> or anti-patterns.
+
+**If a request requires architectural judgement or design changes, stop and flag
+it to Rhiannon** rather than proceeding. The Opus window is the right place for
+that work.
+
+**If a runtime bug surfaces** — wrong output, silent failure, missing UI state,
+framework misbehaviour — **do NOT enter fix mode in this window.** Surface the bug
+to Rhiannon so the Opus architect window can open a debug investigation, produce
+a debug document with a scoped fix, and hand it back to this window for fix
+application. Per build-methodology §5, debug is architect-owned. Compile / import
+errors remain implementer territory (see `build-error-resolver.md`).
 
 ---
 
@@ -124,9 +138,9 @@ GATE confirmation line.]
 | Phase | Required files | Location |
 |-------|---------------|----------|
 | **Plan** | `planner.md` + `research.md` | `~/Documents/git-repos/claude-coding-hub/coding/agents/` |
-| **Implement** | Plan file (must show ✅ Approved) | `docs/plans/` |
+| **Implement** | Plan file (must show ✅ Approved) — also applies to debug docs handed off from architect | `docs/plans/` and `docs/debug/` |
 | **Review** | `code-reviewer.md` + `general-principles.md` | `~/Documents/git-repos/claude-coding-hub/coding/agents/` + `coding/rules/` |
-| **Debug** | `debug-investigator.md` + `research.md` | `~/Documents/git-repos/claude-coding-hub/coding/agents/` |
+| **Debug** | **Not loaded in this window.** Debug investigation is architect-owned (build-methodology §5). Surface bugs to Rhiannon; architect window opens investigation. Compile/import errors → `build-error-resolver.md`. |  |
 | **Document** | `doc-updater.md` | `~/Documents/git-repos/claude-coding-hub/coding/agents/` |
 
 ---
