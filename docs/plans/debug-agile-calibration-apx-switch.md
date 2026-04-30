@@ -1,7 +1,7 @@
 # Debug: Agile Calibration — Switch N2EX → APX, graceful degradation
 
 **Date:** 2026-04-30
-**Status:** 🔵 Draft — awaiting Opus review
+**Status:** ⛔ Rejected — superseded by `design/agile-rate-robustness.md` (2026-04-30)
 **Debug doc:** `docs/debug/2026-04-30-agile-calibration-p-zero.md`
 **Related files:** `js/external-data.js`, `js/pricing-engine.js`, `js/app.js`
 
@@ -208,3 +208,88 @@ Should we prefer APX unconditionally, or should the code try N2EX first and fall
 to APX if N2EX has < N non-zero records? APX-only is simpler and correct today; a
 fallback is more robust if N2EX re-enters the market. Recommend APX-only given N2EX
 has been absent for the entire post-reform period — simpler and less code.
+
+---
+
+## Design Review
+
+**Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Date:** 2026-04-30
+**Review type:** Plan review (pre-implementation)
+**Authoritative design (proposed):** `design/agile-rate-robustness.md` (praxis-claude-hub, drafted 2026-04-30)
+**Verdict:** ⛔ REJECTED — plan scope is too narrow; superseded by a broader design
+
+### Context
+
+Plan correctly diagnosed three root causes from live testing on 2026-04-30:
+
+- N2EX has structurally withdrawn from UK MID peak-hour trading — APX is the active exchange.
+- The `??` fallback in `prepareRates` only fires for null/undefined, missing structurally-bad-but-non-null calibration returns (e.g. `P_peak_p_kwh = 0`).
+- Display average filter includes zero-rate slots, dragging the displayed value to misleading lows.
+
+The plan's three fixes (APX switch, P fallback guard, display zero filter) address each root cause **narrowly**. The diagnosis is correct; the fix scope is insufficient.
+
+APX-only (the open question) is the agreed direction — preserved in the new design.
+
+### Why the plan is rejected, not amended
+
+Three structural gaps require design-level decisions, not plan amendments. They are interlinked: each is a different facet of "the rate model silently fabricates low-confidence numbers from missing or anomalous data."
+
+**1. Null-wholesale handling silently fabricates zero-rate periods. (CRITICAL)**
+
+Current code (inherited from `m8-patch-gas-connection-retained.md` Section F3 — itself a design-level bug introduced earlier in the project) sets `elec_hh_rate_by_hh[i] = isPeakHour(ts) ? P_peak_p_kwh : 0` when `wholesale_prices[i]` is null. The off-peak zero is wrong — electricity isn't free during data gaps. Independent of the N2EX/APX issue, any Elexon outage, chunk-fetch boundary, or partial fetch producing nulls reproduces the same class of bug — just with a different trigger.
+
+Fixing only the P=0 case while leaving null-wholesale untouched is "set to 0 issue goes away" thinking. The plan's label of "graceful degradation" for Fix 2 oversells what the fix actually does — it catches one specific failure mode rather than the underlying pattern.
+
+**2. No runtime sanity check on rate-model output. (HIGH)**
+
+The bug presented `dumb_hp_hh` cost (£384) below `dumb_hp_svt` cost (£890) by £506. For a typical peak-heavy heating pattern, this *inverts* the structurally expected ordering: the Ofgem cap limits SVT pain at peak; Agile is uncapped at peak, so peak-heavy heating on Agile should cost *more* than on capped flat-rate. The cost ordering should be `dumb_hp_hh ≥ dumb_hp_svt` for typical users.
+
+The tool itself had no check that would have caught this. The user (Rhiannon) spotted it manually. A robust system catches the cost-ordering inversion (or the equivalent: consumption-weighted mean Agile rate falling below the Ofgem cap) before presenting the result, and either flags the anomaly with explanatory framing or blocks the result entirely.
+
+**3. Display-average plausibility threshold is missing entirely. (MEDIUM)**
+
+Even with the proposed fixes, a future calibration anomaly that produces (say) `D = 0.5` would show a displayed average HH rate around 5 p/kWh and pass through silently. The plan's Fix 3 (filter zeros from the displayed average) hides the signal that something's wrong rather than catching it. At the current Ofgem cap (24.67 p/kWh), a displayed average below ~20 p/kWh is structurally suspect for typical heating patterns and warrants a visible warning, not a sanitised number.
+
+### What replaces this plan
+
+A new design doc `design/agile-rate-robustness.md` (drafted in praxis-claude-hub on 2026-04-30) covers the breadth:
+
+- APX switch (preserved from the rejected plan)
+- P_peak fallback guard (preserved, expanded with both bounds + sample-count threshold)
+- D validation (new — bounds + sample-count threshold)
+- Null-wholesale per-slot fallback using calibration's typical rate, not zero (new)
+- Coverage tracking (`null_wholesale_fraction` exposed in metadata) (new)
+- Coverage warnings (visible thresholds at 5% and 25%, with insufficient_data marking at 25%) (new)
+- Display-average plausibility check (warn when below ~85% of Ofgem cap) (new)
+- Consumption-weighted-mean-vs-cap check (catches the cost-ordering inversion that triggered this investigation) (new)
+- Parent design docs updated to reflect APX as the active provider (`external-data.md`, `pricing-engine.md`)
+
+### Sonnet protocol
+
+Sonnet writes a fresh implementation plan against the new design — the rejected plan stays in the repo as historical record of the initial bug investigation. Suggested implementation ordering (per the design's planning guidance):
+
+1. APX switch alone (single-file change, ship and verify cost ordering returns to plausibility on live data).
+2. Calibration validation + null-wholesale per-slot fallback + coverage tracking (M2/M8 changes).
+3. Coverage warnings + display-average plausibility + weighted-mean-vs-cap check (display layer).
+
+Sub-steps may be a single plan with three commits, or three separate plans if Sonnet judges the scope warrants splitting.
+
+## Review Summary
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| CRITICAL | 1     | ⛔ null-wholesale handling silently fabricates rates |
+| HIGH     | 1     | ⛔ no runtime sanity check on rate-model output |
+| MEDIUM   | 1     | ⛔ display-average plausibility threshold missing |
+| LOW      | —     | (subsumed by the new design) |
+
+Verdict: ⛔ REJECTED — superseded by `design/agile-rate-robustness.md`.
+
+---
+
+## Approval
+
+**Status:** ⛔ Rejected — superseded by new design (2026-04-30)
+**Approved by:** Rhiannon (via Opus review)
+**Clarifications confirmed:** Three structural gaps in the rejected plan (null-wholesale handling, runtime sanity checks, display plausibility) are design-level decisions that warrant a new design doc + new plan, not amendments to this plan. This plan stays in the repo as historical record of the initial bug investigation; superseding design and implementation work proceeds against `design/agile-rate-robustness.md`.
