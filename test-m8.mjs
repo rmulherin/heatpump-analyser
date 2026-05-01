@@ -88,9 +88,9 @@ console.log('\nT2: HH electricity rate construction');
   );
   // Off-peak: D × W = 2.2 × 5.0 = 11.0
   assert(approx(rm.elec_hh_rate_by_hh[0], 11.0), 'T2a: off-peak wholesale=5, D=2.2 → rate=11.0 p/kWh');
-  // Null wholesale, off-peak → rate = 0
-  assert(approx(rm.elec_hh_rate_by_hh[1], 0.0), 'T2b: null wholesale, off-peak → rate=0 p/kWh');
-  assert(rm.warnings.some(w => w.includes('no wholesale')), 'T2c: null wholesale triggers warning');
+  // Null wholesale: imputed from global mean (5.0, only non-null slot) → same rate 11.0
+  assert(approx(rm.elec_hh_rate_by_hh[1], 11.0), 'T2b: null wholesale, off-peak → rate imputed from global mean = 11.0 p/kWh');
+  assert(!rm.warnings.some(w => w.includes('no wholesale')), 'T2c: null wholesale does not trigger per-slot warning (coverage tier system handles it)');
 }
 
 // ── T3: Negative wholesale passthrough ───────────────────────────────────────
