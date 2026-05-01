@@ -200,12 +200,14 @@ Run 2026-04-26, console script batch.
 
 ## 2026-04-29 — Node test suites after m8-patch + smart-scenario-fixes-1
 
-**Environment:** Windows 11, Node v24. Re-run required after m8-patch removed hybrid scenarios and changed M7/M8/M9 output shapes.
+**Environment:** Windows 11, Node v24. Re-run required after m8-patch removed hybrid scenarios and changed M7/M8/M9 output shapes. smart-scenario-fixes-1 phase 1 added M5 comfort-demand diagnostic tests.
 
 | Suite | Assertions | Result | Notes |
 |-------|-----------|--------|-------|
-| test-m7.mjs | 25/25 | ✅ | Hybrid keys removed from suite; greedy LP from smart-scenario-fixes-1 |
-| test-m8.mjs | 24/24 | ✅ | T4b, T10b updated for hybrid removal; T5 updated for Ofgem cap 24.67p |
+| test-m5.mjs | 39/39 | ✅ | Added M5X1–M5X7 (comfort-demand diagnostic, smart-scenario-fixes-1 phase 1). Plan estimated 7 new; D1 deviation = sub-assertion expansion → 13 new. 26 original unchanged. |
+| test-m5b.mjs | 29/29 | ✅ | Regression pass after phase 1 — no change |
+| test-m7.mjs | 25/25 | ✅ | Rewritten for greedy LP (smart-scenario-fixes-1 phase 2); hybrid keys removed (m8-patch) |
+| test-m8.mjs | 24/24 | ✅ | T4a/T4b updated for gas-connection-retained standing charge logic; T5 for Ofgem cap 24.67p; T10b/T10d for hybrid removal; T2a updated for D×W rate model (hh_overhead removed) |
 | test-m9.mjs | 24/24 | ✅ | Hybrid keys removed throughout |
 
 ---
@@ -348,9 +350,48 @@ Browser / real data. All pricing and financial cards affected.
 
 ---
 
+### m10a — UI Presentation: browser tests
+
+Implemented 2026-04-28 (commit 9d31cd3). Browser / real data.
+
+| ID | Description | Result | Notes |
+|----|-------------|--------|-------|
+| M10A1 | Verdict card appears above "Your home" section after analysis completes | ⏳ | |
+| M10A2 | Verdict copy correctly identifies primary scenario; second paragraph appears when `smart_hp_hh` is primary and `dumb_hp_svt` also available | ⏳ | |
+| M10A3 | All available scenarios appear as bars; scenarios with null `annual_cost_gbp` absent | ⏳ | |
+| M10A4 | Current-boiler bar is navy; HP bars are teal (positive saving) or coral (negative saving) | ⏳ | |
+| M10A5 | Chart tooltip shows `£X/yr` on hover | ⏳ | |
+| M10A6 | Clicking "Show methodology" reveals four technical cards; clicking again collapses them | ⏳ | |
+| M10A7 | Four technical cards remain accessible inside closed disclosure | ⏳ | |
+| M10A8 | Section banners appear at correct pipeline moments: "Your home" with results-card, "The verdict" and "Adjust the assumptions" with pricing-card | ⏳ | Superseded by m10b/"Cost breakdown" rename — verify current banner text |
+| M10A9 | Removed DL rows (validation status, days used, boiler efficiency, etc.) absent from all three technical cards | ⏳ | |
+| M10A10 | Scenario labels consistent across pricing table, financial table, and scenario consumption table | ⏳ | |
+| M10A11 | Financial table column headers: "Annual saving", "Net cost (after grant)", "Payback period" | ⏳ | |
+| M10A12 | Cooling note hidden when avoided AC > £0; not shown at all post-ui-fixes-2 cooling-note removal | ⏳ | ui-fixes-2 removed cooling note entirely |
+| M10A13 | Data-quality footnote reflects correct R² band | ⏳ | |
+| M10A14 | No Chart.js console errors; no JS console errors | ⏳ | |
+| M10A15 | Chart readable at 375px — bars visible, y-axis labels legible | ⏳ | |
+| M10A16 | Body text in Roboto; headings and buttons in Montserrat (confirm in DevTools) | ⏳ | |
+| M10A17 | Pricing-params and financial-params cards appear below pricing-card and financial-card | ⏳ | Superseded by m10c What If section — verify current page structure |
+
+---
+
 ## Outstanding tests — 2026-04-27 (superseded by 2026-04-29 section above)
 
-> The M7/M8/M9 browser tests below were written before m8-patch-gas-connection-retained removed hybrid scenarios and replaced the pricing table with the 4-component design. The superseded tests are retained for the record; the authoritative pending tests are in the 2026-04-29 section. Tests that are still valid (e.g. M5, M6) remain relevant.
+> The tests below were written against the codebase state as of 2026-04-27. Multiple subsequent changes have made individual entries stale:
+>
+> **Node suite descriptions (stale — historical record only):**
+> - M7 T3/T4 (hybrid dispatch), T7/T8 (DP comfort gate / pre-heating), T11 (`'no_thermal_mass'` status), T16 (DP infeasible): all describe the DP optimiser removed by smart-scenario-fixes-1. The 2026-04-29 node run shows the current suite.
+> - M8 T2b/T2c: describe the old `hh_overhead` additive model (m8-patch replaced with D×W+P; agile-rate-robustness then replaced null behaviour with imputation and removed the per-slot warning). See 2026-05-01 entry for current assertions.
+> - M8 T4b (`hybrid_dumb` standing charge), T10b/T10d (`hybrid_smart` null passthrough): hybrid scenarios removed by m8-patch.
+> - M9 T1b/T2b (hybrid net investment), T10b (`hybrid_smart` null): hybrid removed.
+>
+> **Browser tests (superseded — authoritative pending tests are in the 2026-04-29 section):**
+> - M7 T17/T18 (pre-heat slider, hybrid row): slider removed by smart-scenario-fixes-1; hybrid removed by m8-patch.
+> - M8 T11–T15: pricing table redesigned by m8-patch (4-scenario, 5-column cost decomposition); Recalculate button and params card removed by m10c.
+> - M9 T11/T12: financial card recalculate removed by m10c; hybrid scenarios removed.
+>
+> **Tests that remain valid:** M5 (all), M6 (all), M3 Step F, M3a, M3b, M1 patch, M4.
 
 All tests below are ⏳ Not yet run unless noted. Tests requiring a Node script are grouped separately — scripts need to be written before those can run. Browser tests require real data loaded via the Octopus flow (or CSV for no-gas variants).
 
@@ -578,3 +619,74 @@ Ran via `node test-m9.mjs`. 28 assertions. All pass.
 | T10 | M1 data ingestion | Getter-before-load: cannot retest once data is loaded in session |
 | T8/T9 | M3a gas separation | Requires dataset without summer data — no such dataset available |
 | T15 | M6 heatpump model | CSV no-gas dataset unavailable |
+
+---
+
+## 2026-05-01 — Node test suites: full re-run + test-m8 T2b/T2c correction
+
+**Environment:** Windows 11, Node v24.
+
+`test-m8.mjs` T2b and T2c were stale after agile-rate-robustness. Old assertions expected `rate=0` for null wholesale and a per-slot warning — both behaviours removed/replaced. Updated to match current imputation logic.
+
+| Suite | Assertions | Result | Notes |
+|-------|-----------|--------|-------|
+| test-m3-step-f.mjs | 18/18 | ✅ | Unchanged |
+| test-m5.mjs | 39/39 | ✅ | Unchanged |
+| test-m5b.mjs | 29/29 | ✅ | Unchanged |
+| test-m6.mjs | 24/24 | ✅ | Unchanged |
+| test-m7.mjs | 25/25 | ✅ | Unchanged |
+| test-m8.mjs | 24/24 | ✅ | T2b/T2c updated (commit 98ff3cc) — see below |
+| test-m9.mjs | 24/24 | ✅ | Unchanged |
+
+### test-m8.mjs — T2b and T2c corrected (commit 98ff3cc)
+
+The T2 fixture has 2 slots: `[{wholesale: 5.0}, {wholesale: null}]`. Agile-rate-robustness replaced the `hh_overhead` additive model with `D×W+P` and added null-wholesale imputation (7-day rolling mean → global mean → cap/D last-resort). Per-slot warning was removed (coverage tier system handles signalling).
+
+With 1 known slot (global mean = 5.0 p/kWh, below the 50-sample window threshold):
+
+| ID | Old assertion (stale) | New assertion | Result |
+|----|----------------------|---------------|--------|
+| T2b | null wholesale → overhead-only rate = 13 p/kWh | null wholesale → imputed from global mean (5.0) → rate = D×5.0 = 11.0 p/kWh | ✅ |
+| T2c | null wholesale triggers `'no wholesale'` warning | null wholesale does NOT trigger per-slot warning | ✅ |
+
+---
+
+## Outstanding tests — 2026-05-01
+
+### agile-rate-robustness — browser tests (live data)
+
+Implemented 2026-04-30. Sub-step 1 live gate was called PASS at implementation time (D1 deviation — cost ordering not yet restored due to null-wholesale bug; APX switch confirmed working via P_peak non-zero). Sub-steps 2 and 3 live tests pending.
+
+| ID | Description | Result | Notes |
+|----|-------------|--------|-------|
+| AR1 | Drove tile electricity rate in 21–28 p/kWh band on Rhiannon's data | ⏳ | Sub-step 1 gate: P_peak_p_kwh restored to 13.0 p/kWh ✅ (at implementation); full drove tile rate not confirmed |
+| AR2 | `dumb_hp_hh` total cost > `dumb_hp_svt` total cost on Rhiannon's data | ⏳ | Pre-launch gate |
+| AR3 | No unusual-result panel on Rhiannon's peak-heavy heating data | ⏳ | Weighted mean > cap expected |
+| AR4 | Drove tile electricity context shows region only (no plausibility note) on Rhiannon's data | ⏳ | |
+| AR5 | CSV path (no GSP region): tier-1 "couldn't fetch" coverage warning visible above pricing table | ⏳ | |
+| AR6 | No console errors on any path | ⏳ | |
+
+---
+
+### agile-rate-robustness — console-injection tests
+
+These require Rhiannon to paste synthetic JS into browser DevTools after a full pipeline run. Snippets to be prepared by Sonnet on request.
+
+**Sub-step 2 — calibration validation + imputation (5 tests)**
+
+| ID | Description | Result | Notes |
+|----|-------------|--------|-------|
+| AR-S2a | Inject 10% null slots into wholesale array → rates for null slots use preceding-7-day window mean, not zero | ⏳ | Requires ≥50 non-null slots in preceding 336 slots |
+| AR-S2b | Inject `D_sample_count=30` (below 50 threshold) into `agile_calibration` → `calibration_valid=false`; D=2.2, P=12 defaults used; `calibration_source='default'` | ⏳ | |
+| AR-S2c | Inject `P_peak_p_kwh=22` (above 20 bound) → `calibration_valid=false`, defaults used | ⏳ | |
+| AR-S2d | Inject `D=1.0` (below 1.5 bound) → `calibration_valid=false`, defaults used | ⏳ | |
+| AR-S2e | Inject all-null wholesale array → imputed rate = `OFGEM_CAP_ELEC_P_KWH / D` (last-resort); no console errors | ⏳ | |
+
+**Sub-step 3 — coverage warnings + display checks (4 tests)**
+
+| ID | Description | Result | Notes |
+|----|-------------|--------|-------|
+| AR-S3a | Inject `null_wholesale_fraction=0.06` → 5% tier info banner appears above pricing table | ⏳ | |
+| AR-S3b | Inject `null_wholesale_fraction=0.26` → HH scenarios insufficient: em-dashes in pricing + financial; verdict falls back to `dumb_hp_svt`; bar chart omits HH bars; sensitivity grid excludes HH; drove tile reflects SVT primary | ⏳ | |
+| AR-S3c | Inject off-peak-heavy heating scenario (02:00–06:00 concentration) → unusual-result panel fires with legitimate-result framing | ⏳ | |
+| AR-S3d | Patch `OFGEM_CAP_ELEC_P_KWH=30.0` → plausibility floor automatically becomes 25.5; no other code changes needed | ⏳ | |
