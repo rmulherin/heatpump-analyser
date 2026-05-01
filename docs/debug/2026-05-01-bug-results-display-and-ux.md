@@ -210,26 +210,208 @@ surface those. Do not surface a notice for `validation_status === 'good'`.
 
 ---
 
-## Bug 4 — Results do not make sense
+## Bug 4 — Results analysis (Rhiannon observations, 01-May)
 
-**Status: BLOCKED.** Bug 1 must be fixed first so Rhiannon can see the chart and
-report which numbers are wrong and in what direction. No investigation started.
+Rhiannon provided the following observations after the graph became visible:
+1. HH average electricity price showing ~15p/kWh — expected ~as SVT (24.5p)
+2. Annual saving of £35 doesn't seem realistic
+3. Changing 'wall construction' dropdown and clicking Recalculate does nothing
+4. Smart HP results show even with insufficient thermal mass data
+5. Switching tau-bucket (e.g. "takes days to cool" vs "cools within hours") and
+   clicking Recalculate changes only the thermal mass estimate — no effect on Smart HP costs
+
+---
+
+### 4A — HH average 15p/kWh
+
+**Finding: expected behaviour, not a bug.**
+
+The displayed average is the simple mean of all D×W+P slots across the year's 17,520
+HH periods. With D_DEFAULT = 2.2 (pricing-engine.js:14), P_DEFAULT = 12p (line 15),
+and 2024 UK APX wholesale averaging ~6p/kWh:
+- Off-peak rate: D×W = 2.2 × 6 = 13.2p (87.5% of slots)
+- Peak rate: D×W+P = 13.2+12 = 25.2p (12.5% of slots — 4pm–7pm)
+- Simple mean ≈ 0.875×13.2 + 0.125×25.2 = 14.7p ≈ **15p**
+
+The 15p simple mean is correct for 2024 UK data with default calibration. It is lower
+than SVT (24.67p) because HH pricing is intended to be cheaper for heat-pump users who
+shift demand to cheap periods — this is the tool's core economic premise.
+
+The **consumption-weighted** mean (what a dumb HP actually pays, weighted by when the
+boiler fires) will be higher than 15p, because the dumb HP follows the boiler's
+morning/evening pattern which overlaps with peak hours. This weighted mean is
+computed by `computeWeightedMeanHhRate` (app.js:1822) and shown in the
+`unusual-result-panel` if it exceeds a plausibility threshold.
+
+The key display question: is Rhiannon seeing the simple mean (15p) or the
+consumption-weighted mean? The simple mean is the correct number to show as the "average
+HH rate across the year" but it should be accompanied by the consumption-weighted mean
+to show what a dumb HP actually pays.
+
+**No code change required.** Consider adding a label clarifying it is the simple annual
+mean, not the consumption-weighted mean.
+
+---
+
+### 4B — Annual saving of £35 not realistic
+
+**Finding: mathematically correct given the inputs; surprising but not a bug.**
+
+Saving = gas_heating_cost − HP_heating_electricity_cost (gas-for-baseload and standing
+charges unchanged because gas connection is retained — m8-patch).
+
+With gas at ~5.7p/kWh (Ofgem cap) and boiler efficiency 0.9:
+- Gas heat cost = **5.7 / 0.9 = 6.3p per kWh thermal**
+
+With HH consumption-weighted rate ~17p and demand-weighted COP ~2.6:
+- HP heat cost = **17 / 2.6 = 6.5p per kWh thermal**
+
+Saving is ~0.2–0.4p per kWh thermal. At 15,000 kWh heating demand: saving £30–60/yr.
+£35 is in the right range.
+
+This is the CORRECT economic reality at April 2026 Ofgem cap prices: the dumb HP on
+HH pricing barely breaks even versus gas because Ofgem cap gas is very cheap.
+
+The finding confirms the design premise in scope.md: "A heat pump on flat-rate
+electricity barely breaks even vs gas. The economics only work with HH pricing + efficient
+building fabric + smart heating control." The What If section exists precisely to show
+how July 2026 gas price rise, levy removal, or higher COP flip the economics.
+
+**No code change required.** The tool is showing the correct answer.
+
+Recommend Rhiannon use the Policy Reform what-if to model July 2026 cap (~£1,972)
+and the BUS grant page for payback on that scenario — that is where the financial
+case becomes clearer.
+
+---
+
+### 4C — Wall construction recalculate does nothing visible
+
+**Finding: UX gap, not a calculation bug.**
+
+The `btn-recalculate-heat-loss` handler (app.js:1211–1226) only calls `runHeatLoss()`
+— no chain to M5. Wall construction is not used by M4 (Siviour regression). It is used
+exclusively in M5 for thermal mass cross-check validation.
+
+To see the wall construction cross-check result, the user must click the **Thermal
+Character Recalculate** button. That produces a validation note in `#thermal-char-status`
+(inside the methodology disclosure) confirming whether the estimated thermal mass is
+consistent with the wall type. It does NOT change the thermal mass estimate or any
+downstream results — it is informational only.
+
+**The wall construction input does not drive any calculation.** It only annotates
+whether the data-derived thermal mass is consistent with the wall type.
+
+**Proposed fix (minor):** Either (a) chain the heat-loss Recalculate button to also
+run M5, or (b) move the wall construction dropdown from heat-loss-card to
+thermal-char-card where it semantically belongs, or (c) add a label beneath the wall
+construction dropdown: "Affects thermal mass cross-check — use Thermal Character
+Recalculate to apply."
+
+---
+
+### 4D — Smart HP available despite insufficient thermal mass
+
+**Finding: design limitation, not a bug.**
+
+`computeValidationStatusSmart` (scenario-consumption.js:204–207) only requires:
+- `htc_w_per_k` (heat loss coefficient, from M4)
+- `hp_capacity_kw` (from M6)
+
+It does NOT require thermal mass. So Smart HP shows results whenever M4 and M6
+succeed, regardless of whether M5 returned a thermal mass.
+
+The smart scenario uses `buildSmartScenario` → `allocateGreedyDay`
+(scenario-consumption.js:166–196). This greedy LP does NOT take thermal mass as a
+parameter. Thermal mass is only used in `simulatePostHocTIndoor` (lines 138–163) for
+producing the indoor temperature trace — not for the heating schedule or costs.
+
+**The "smart" scenario is therefore a cost-aware dispatch (greedily shifts heat to
+cheapest HH slots within HP capacity limits), not a thermally-constrained dispatch.**
+It assumes unlimited thermal storage — i.e., the HP can pre-heat by any amount, limited
+only by HP capacity, not by how much heat the building can absorb and hold.
+
+For a low-thermal-mass building this overstates smart HP savings. For a high-thermal-mass
+building the assumption is more accurate.
+
+**No immediate code fix required** (this is a consequence of the greedy LP design agreed
+in smart-scenario-fixes-1). Raise as a known limitation. Add a note in the Smart HP
+row or tooltip: "Assumes the building can store pre-heated energy; savings may be lower
+for low-thermal-mass properties."
+
+---
+
+### 4E — Tau-bucket change has no effect on Smart HP costs
+
+**Finding: confirmed consequence of 4D. The greedy LP does not use thermal mass.**
+
+When tau_bucket is changed and thermal-char Recalculate is clicked, the chain
+M5→M7→M8→M9 runs correctly (app.js:1384–1388). M5 produces a new thermal mass value
+(Path B tau_bucket fallback). M7 receives the updated thermalChar via
+`getThermalCharacterResult()` (app.js:1587).
+
+However, within M7's smart scenario path (scenario-consumption.js:258):
+```javascript
+buildSmartScenario({
+  heating, external, copByHh, hpCapKw: hpCap,
+  gasRateByHh, elecHhRateByHh, eta, isAbsence, demandScale,
+})
+```
+Thermal mass (`thermalChar.thermal_mass_kj_per_k`) is NOT passed to `buildSmartScenario`
+and NOT used by `allocateGreedyDay`. The thermal mass only feeds
+`simulatePostHocTIndoor`, which produces the indoor temperature trace for display.
+
+**Result:** Changing tau_bucket changes:
+- The displayed thermal mass estimate ✓
+- The indoor temperature trace (in the scenario card, if shown) ✓
+
+But does NOT change:
+- The smart HP heating schedule ✗
+- M8 costs for smart HP ✗
+- M9 payback for smart HP ✗
+
+This is the correct behaviour given the greedy LP design. However, it is potentially
+misleading to the user — she would reasonably expect "how quickly your home cools"
+to affect smart HP economics.
+
+**Secondary concern (scoped separately from this fix session):** The greedy LP
+optimises on raw wholesale prices (app.js:1511 `buildRateArrays` returns
+`wholesale_p_kwh` without D×W+P). The M8 pricing then charges D×W+P rates including
+the peak premium P=12p for 4pm–7pm slots. M7 doesn't know about P, so it may schedule
+heat delivery into peak hours when it shouldn't. This reduces the smart scenario's
+optimality. Fix: pass the calibrated D×W+P rate array to M7 instead of raw wholesale.
 
 ---
 
 ## Fix sequencing
 
-Implement in this order:
+### Immediate (commit together)
+1. **Bug 1** (graph) — move `verdictCard.classList.remove('hidden')` before chart init
+2. **Bug 2** (What If CSS) — add `!important` to `.hidden` rule in styles.css
 
-1. **Bug 1** (graph) and **Bug 2** (What If visibility) — both are small, surgical fixes
-   in `app.js` and `styles.css` respectively. Implement together in one commit.
-2. **Rhiannon browser-tests** — confirms graph is visible and What If is hidden on load.
-3. **Bug 4 investigation begins** — Rhiannon provides detail on the incorrect results.
-4. **Bug 3** (manual-entry flag) — implement once Bug 4 is understood; the fix may need
-   to know which module is degraded to surface the right message.
+### After Rhiannon confirms graph visible and What If hidden on load
+3. **Bug 3** (manual-entry flag) — surface M5 insufficient_data warning on main UI;
+   auto-open methodology disclosure
+
+### Separate follow-up tasks (raise with Rhiannon for prioritisation)
+4. **4C** (wall construction UX) — chain heat-loss Recalculate to M5, or relocate
+   wall construction field, or add explanatory label
+5. **4D/4E** (smart HP thermal mass) — add a note/tooltip that smart HP assumes
+   unlimited thermal storage; optionally fix greedy LP to use D×W+P rates for dispatch
+   optimisation (addresses the secondary concern above)
+6. **4A display** — consider adding "consumption-weighted average" alongside simple
+   mean to help users understand what they'd actually pay
 
 ---
 
 ## Secondary concerns
 
-None identified at this stage.
+1. **Greedy LP uses raw wholesale for optimisation, M8 charges D×W+P** — M7's greedy
+   LP (via `buildRateArrays` in app.js:1596) uses raw wholesale, unaware of the peak
+   premium P. M8 then charges D×W+P rates. The smart dispatch will occasionally schedule
+   heat during 4pm–7pm peak slots it should avoid, reducing optimality.
+   Fix (separate task): pass `elec_hh_rate_by_hh` from pricing-engine's `prepareRates`
+   to M7 instead of rebuilding from raw wholesale.
+
+2. **"Smart" label implies thermal simulation** — consider renaming or adding a
+   qualifier (e.g. "Cost-optimised HP") to avoid implying thermally-constrained dispatch.
