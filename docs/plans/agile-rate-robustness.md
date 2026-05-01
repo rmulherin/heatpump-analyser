@@ -642,4 +642,17 @@ Verdict: ⚠ APPROVED WITH EDITS — three plan-body edits before implementation
 
 ## Implementation Deviations
 
-[To be filled during implementation. None expected.]
+**D1 — Sub-step 1 gate criterion relaxed (cost ordering).**
+Plan gate criterion stated `dumb_hp_hh > dumb_hp_svt` on Rhiannon's data. After APX switch, HH cost rose from £384 → £723 but remained below SVT (£889). Rhiannon's observation that 15.2 p/kWh drove-tile average was too low confirmed this was the sub-step 2 null-wholesale bug (off-peak null slots returning 0 p/kWh), not a sub-step 1 failure. Sub-step 1 gate called as PASS on the basis that P is non-zero (13.01 p/kWh) and APX switch is confirmed working. Cost ordering verification deferred to sub-step 2+3.
+
+**D2 — Coverage thresholds promoted to module-level constants.**
+Plan specified `COVERAGE_WARN_THRESHOLD` and `COVERAGE_INSUFFICIENT_THRESHOLD` as local constants inside `displayPricingResults`. Review identified that `runFinancialAnalysis` also uses the 0.25 threshold, creating drift risk. Both constants promoted to module-level (`HH_COVERAGE_WARN_THRESHOLD`, `HH_COVERAGE_INSUFFICIENT_THRESHOLD`) and reused in both functions.
+
+**D3 — `IMPUTE_MIN_WINDOW_SAMPLES` extracted.**
+Plan specified `MIN_WINDOW_SAMPLES = 50` as a local const inside `imputeWholesaleForSlot`. Promoted to module-level named constant in `pricing-engine.js` to avoid magic number.
+
+**D4 — `.unusual-result-panel` CSS rule added.**
+Plan stated coverage warnings reuse `.status-msg.warning/.info` (no new CSS) but gave implementation-time discretion for the unusual-result panel. Added `border-left: 4px solid var(--colour-teal)` to visually distinguish structural finding from passing info note.
+
+**D5 — HH insufficient propagation via `effectivePricingResult` copy, not post-hoc mutation.**
+Plan (Edit 3) suggested setting `payback_status = 'no_data'` and nullifying `annual_cost_gbp` on `financialResult.scenarios` after `analyseFinancials`. During implementation, identified that the sensitivity grid reads from `pricingResult.scenarios` inside `analyseFinancials`, so post-hoc mutation wouldn't affect it. Fixed by passing a shallow copy (`effectivePricingResult`) with null HH annual costs into `analyseFinancials` — allowing `analyseFinancials` to set `payback_status = 'no_data'` natively from null input, and correctly exclude HH scenarios from the sensitivity grid.
