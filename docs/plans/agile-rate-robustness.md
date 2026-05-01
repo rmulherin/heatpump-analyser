@@ -1,7 +1,7 @@
 # Agile Rate Robustness — implementation plan
 
 **Date:** 2026-04-30
-**Status:** ⚠ Approved with edits — apply Edits 1–3 below before implementing (2026-04-30)
+**Status:** ✅ Approved with edits — applied 2026-04-30
 **Parent design:** `~/Documents/git-repos/praxis-claude-hub/projects/tools/heatpump-analyser/design/agile-rate-robustness.md` (DRAFT — ready for Sonnet planning, 2026-04-30)
 **Related designs:** `design/external-data.md` (M2), `design/pricing-engine.md` (M8), `design/m8-patch-gas-connection-retained.md`, `design/patch-agile-region-calibration.md`
 **Supersedes:** `docs/plans/debug-agile-calibration-apx-switch.md` (rejected 2026-04-30 — kept as historical record of initial bug investigation)
@@ -163,29 +163,49 @@ The existing `external_metadata.agile_calibration` storage path is unchanged —
 
 **Note:** the existing default-fallback in `pricing-engine.js` (lines 67–72) currently fires when `agile_calibration` is null. After this change, calibration is *never* null — but the validation in step 2.4 below catches the structurally-bad case and falls back to defaults explicitly.
 
-**2.3 — `js/pricing-engine.js`: per-slot null-wholesale fallback (Section C)**
+**2.3 — `js/pricing-engine.js`: per-slot null-wholesale fallback (Section C) — Edit 1 + Edit 2 applied**
 
-Add helper `mean()` if not already present (vanilla utility). Compute `wholesale_mean_known` once outside the per-HH loop, after the calibration block resolves D:
+*(Edit 1: per-slot `warnings.push()` removed — Section E tier system is the user-visible signal. Edit 2: full-year mean replaced with preceding-7-day rolling mean.)*
+
+Add helper `imputeWholesaleForSlot` (module-level utility inside `pricing-engine.js`). Compute `global_mean_known` once outside the per-HH loop (fallback layer 2), then call the helper per null slot:
 
 ```js
-// (After the calibration validation block — D is now defined)
-const known_wholesale = external
-  .map(e => e?.wholesale_p_kwh)
-  .filter(w => w !== null && w !== undefined);
-const wholesale_mean_known = known_wholesale.length > 0
-  ? known_wholesale.reduce((s, w) => s + w, 0) / known_wholesale.length
-  : (OFGEM_CAP_ELEC_P_KWH / D);  // last-resort: entire fetch null
+function imputeWholesaleForSlot(i, wholesale_array, global_mean_known, D, ofgem_cap) {
+  // Preceding 7 days × 48 HHs = 336 slots
+  const window_start = Math.max(0, i - 336);
+  const window_slots = wholesale_array.slice(window_start, i)
+                                       .filter(w => w !== null && w !== undefined);
+  const MIN_WINDOW_SAMPLES = 50;
+  if (window_slots.length >= MIN_WINDOW_SAMPLES) {
+    return window_slots.reduce((s, w) => s + w, 0) / window_slots.length;
+  }
+  // Fall back to global mean of known wholesale prices
+  if (global_mean_known !== null) return global_mean_known;
+  // Last resort: every slot is null → use cap/D so resulting rate ≈ Ofgem cap
+  return ofgem_cap / D;
+}
+```
 
-// Per-HH loop — replace lines 104–119:
+Outside the per-HH loop (after calibration block resolves D):
+
+```js
+const wholesale_array = external.map(e => e?.wholesale_p_kwh ?? null);
+const known = wholesale_array.filter(w => w !== null);
+const global_mean_known = known.length > 0
+  ? known.reduce((s, w) => s + w, 0) / known.length
+  : null;
+const ofgem_cap = params.ofgem_cap_elec_p_kwh;
+```
+
+Per-HH loop — replace lines 104–119:
+
+```js
 const wholesale = external[i]?.wholesale_p_kwh;
 const peak      = isPeakHour(tsDate);
 if (wholesale === null || wholesale === undefined) {
-  elec_hh_rate_by_hh[i] = D * wholesale_mean_known
-                        + (peak ? P_peak_p_kwh : 0);
-  if (!warnedNullWholesale) {
-    warnings.push('Some HH periods have no wholesale price data — using a calibration-typical rate for affected periods.');
-    warnedNullWholesale = true;
-  }
+  const imputed = imputeWholesaleForSlot(i, wholesale_array, global_mean_known, D, ofgem_cap);
+  elec_hh_rate_by_hh[i] = D * imputed + (peak ? P_peak_p_kwh : 0);
+  // No warning push — Section E tier system is the user-visible signal
 } else {
   elec_hh_rate_by_hh[i] = Math.min(
     peak ? D * wholesale + P_peak_p_kwh : D * wholesale,
@@ -198,7 +218,7 @@ if (wholesale === null || wholesale === undefined) {
 }
 ```
 
-`OFGEM_CAP_ELEC_P_KWH` is currently in `app.js:78`. To use it inside `pricing-engine.js`, either (a) export it from `app.js` and import (cleanest with vanilla ES modules), or (b) pass it through `params` from `app.js:runPricingEngine`. **Plan choice: pass via `params.ofgem_cap_elec_p_kwh`** (already passed at app.js:290 according to grep) so `pricing-engine.js` stays free of hardcoded cap constants. If `params.ofgem_cap_elec_p_kwh` is missing/null, fall back to the existing `OFGEM_CAP_ELEC_P_KWH` reference in app.js — i.e. it's always populated.
+`OFGEM_CAP_ELEC_P_KWH` is currently in `app.js:78`. Pass via `params.ofgem_cap_elec_p_kwh` so `pricing-engine.js` stays free of hardcoded cap constants. If `params.ofgem_cap_elec_p_kwh` is missing/null, fall back to the existing `OFGEM_CAP_ELEC_P_KWH` reference in app.js — i.e. it's always populated.
 
 **2.4 — `js/pricing-engine.js`: expanded calibration validation (Section D)**
 
@@ -246,7 +266,8 @@ This makes the validated calibration available to downstream code (e.g. the disp
 
 **2.6 — Verify before committing:**
 - Console clean on Rhiannon's live data (calibration_valid = true; no fallback warning).
-- Synthetic null-wholesale test: inject 10% null slots in a mock dataset; confirm rates for those slots are `D × wholesale_mean_known + (peak ? P : 0)` (within rounding), not zero.
+- Synthetic null-wholesale test: inject 10% null slots in a mock dataset; confirm rates for those null slots reflect the preceding-7-day window mean (not a full-year mean), and are not zero.
+- Synthetic seasonal test: inject null slots in a winter month where summer/winter wholesale differs meaningfully; confirm imputed rates reflect the preceding-week context (winter-ish mean), not a year-averaged mean.
 - Synthetic calibration-validation test: simulate `D_sample_count = 30` (below 50) → defaults used.
 
 **Commit 2 message:** `fix(M2/M8): expand Agile calibration validation, add coverage metadata, per-slot null-wholesale fallback`
@@ -283,6 +304,24 @@ if (calSource === 'default') {
 ```
 
 `hhScenariosInsufficient` is propagated into the rows-builder: when set, the dumb_hp_hh and smart_hp_hh rows render as `—` for cost cells (existing `fmtGbp` already returns `—` for null inputs — pass `null` to force this). Replaces the existing `calibrationWarning` HTML. Sub-step 3.1 is one continuous change inside `displayPricingResults`.
+
+*(Edit 3 applied.)* When `hhScenariosInsufficient = true`, also set payback_status on the financial result **before** verdict, chart, financial card, and drove-tile rendering runs:
+
+```js
+if (hhScenariosInsufficient && financialResult?.scenarios) {
+  for (const key of ['dumb_hp_hh', 'smart_hp_hh']) {
+    if (financialResult.scenarios[key]) {
+      financialResult.scenarios[key].payback_status = 'no_data';
+    }
+  }
+}
+```
+
+The existing `payback_status === 'no_data'` handling in verdict, bar chart, financial card, and drove tile (established by smart-scenario-fixes-1 and ui-fixes-1) naturally treats those scenarios as unavailable.
+
+Specifically check during implementation:
+- **Verdict status line (Fix 6).** Does the existing trigger logic handle "all HH absent, dumb_hp_svt available" as a sibling case to its existing "smart absent" condition? If not, extend with one new condition.
+- **Sensitivity grid.** Confirm "best payback across scenarios" selection respects `payback_status = 'no_data'`. If not, add the filter.
 
 **3.2 — `js/app.js`: display-average plausibility floor in drove tile (Section F)**
 
@@ -360,7 +399,7 @@ If existing CSS is sufficient (`.status-msg.info` already styled), no `styles.cs
 **3.4 — Verify before committing:**
 - Live data (Rhiannon's): no unusual-result panel; drove tile electricity context shows region only, no plausibility note.
 - Synthetic 6% null slots: 5% threshold info banner appears.
-- Synthetic 26% null slots: 25% threshold marks HH scenarios insufficient (em-dashes in cost cells).
+- Synthetic 26% null slots: 25% threshold marks HH scenarios insufficient; cost cells render em-dashes in pricing AND financial cards; verdict bar chart omits HH bars; verdict primary scenario falls back to `dumb_hp_svt`; sensitivity grid excludes HH scenarios.
 - Synthetic off-peak-heavy heating: unusual-result panel fires with the legitimate-result framing.
 
 **Commit 3 message:** `fix(M10): coverage warnings, HH plausibility floor, weighted-mean-vs-cap check`
@@ -415,7 +454,7 @@ Per the design's Section "Test criteria". Success is sub-step-gated — sub-step
 
 - [ ] Live data: no unusual-result panel; drove tile context shows region only.
 - [ ] Synthetic 6% null slots: 5% tier info banner visible above pricing table.
-- [ ] Synthetic 26% null slots: 25% tier marks HH scenarios insufficient; cost cells render em-dashes; explanation visible.
+- [ ] Synthetic 26% null slots: 25% tier marks HH scenarios insufficient; cost cells render em-dashes in pricing AND financial cards; verdict bar chart omits HH bars; verdict primary scenario falls back to `dumb_hp_svt`; drove tile electricity stat reflects SVT primary; sensitivity grid best-payback excludes HH scenarios.
 - [ ] Synthetic off-peak-heavy heating (heating concentrated 02:00–06:00): unusual-result panel fires with legitimate-result framing.
 - [ ] Live (peak-heavy) data: weighted_mean > cap; unusual-result panel does NOT fire.
 - [ ] Plausibility floor scaling: change `OFGEM_CAP_ELEC_P_KWH` to 30.0; floor automatically becomes 25.5; no other code changes.
@@ -595,7 +634,7 @@ Verdict: ⚠ APPROVED WITH EDITS — three plan-body edits before implementation
 
 ## Approval
 
-**Status:** ⚠ Approved with edits — apply Edits 1–3 before implementing (2026-04-30)
+**Status:** ✅ Approved with edits — applied 2026-04-30
 **Approved by:** Rhiannon (via Opus review)
 **Clarifications confirmed:** Preceding-7-day rolling mean for null-wholesale imputation (preserves seasonality) replaces full-year mean. Insufficient-data marking propagates beyond pricing table to verdict, chart, financial card, drove tile, and sensitivity grid via the existing `payback_status = 'no_data'` mechanism. Per-slot null-wholesale warning push removed (Section E tier system is the user-visible signal). Sub-step 1 (APX switch) is a hard gate — pause for verification before proceeding. DOM spec for `unusual-result-panel` and coverage warnings per Sonnet's inference. Wholesale dataset is shared across users (static, evolving day-by-day, not personalised) — relevant context for future "Elexon down" handling but no plan change needed.
 
