@@ -50,11 +50,13 @@ export function getPricingResult()  { return _pricingResult; }
 
 // ===== Null-wholesale imputation =====
 
+const IMPUTE_MIN_WINDOW_SAMPLES = 50; // minimum non-null slots in 7-day window to use window mean
+
 function imputeWholesaleForSlot(i, wholesale_array, global_mean_known, D, ofgem_cap) {
   const window_start = Math.max(0, i - 336); // preceding 7 days × 48 HHs
   const window_slots = wholesale_array.slice(window_start, i)
                                       .filter(w => w !== null);
-  if (window_slots.length >= 50) {
+  if (window_slots.length >= IMPUTE_MIN_WINDOW_SAMPLES) {
     return window_slots.reduce((s, w) => s + w, 0) / window_slots.length;
   }
   if (global_mean_known !== null) return global_mean_known;

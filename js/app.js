@@ -76,6 +76,8 @@ import {
 
 // ===== Ofgem cap constants (Q2 2026) =====
 const OFGEM_CAP_ELEC_P_KWH  = 24.67;
+const HH_COVERAGE_WARN_THRESHOLD         = 0.05;  // null fraction above which info banner shows
+const HH_COVERAGE_INSUFFICIENT_THRESHOLD = 0.25;  // null fraction above which HH scenarios suppressed
 const OFGEM_CAP_GAS_P_KWH   = 5.70;
 const OFGEM_CAP_VALID_FROM  = '2026-04-01';
 const COP_BASELINE_AT_7C    = 2.91;  // EoH field-trial median COP at 7°C (M6 baseline)
@@ -901,10 +903,10 @@ async function runExternalData(showProgressFn, showStatusFn) {
   const agileCalResult = await fetchAgileCalibration(ingestion?.gsp_region ?? null);
 
   // Merge null_wholesale_fraction — computed here where both fetch results are visible
-  const _wholesale_arr = external.map(e => e.wholesale_p_kwh ?? null);
-  const _total_slots   = _wholesale_arr.length;
-  const _null_slots    = _wholesale_arr.filter(w => w === null).length;
-  const null_wholesale_fraction = _total_slots > 0 ? _null_slots / _total_slots : 1.0;
+  const wholesaleArr   = external.map(e => e.wholesale_p_kwh ?? null);
+  const totalSlots     = wholesaleArr.length;
+  const nullSlots      = wholesaleArr.filter(w => w === null).length;
+  const null_wholesale_fraction = totalSlots > 0 ? nullSlots / totalSlots : 1.0;
 
   const agileCalibration = agileCalResult
     ? { ...agileCalResult, null_wholesale_fraction }
@@ -1668,9 +1670,6 @@ function displayPricingResults(pricingResult) {
   const rateMetadata = getRateMetadata();
 
   // Coverage warning — three-tier based on null_wholesale_fraction
-  const COVERAGE_WARN_THRESHOLD         = 0.05;
-  const COVERAGE_INSUFFICIENT_THRESHOLD = 0.25;
-
   const cal      = getExternalResult()?.external_metadata?.agile_calibration ?? null;
   const fraction = cal?.null_wholesale_fraction ?? 0;
   const calSource = rateMetadata?.calibration_source ?? 'fetched';
@@ -1680,10 +1679,10 @@ function displayPricingResults(pricingResult) {
 
   if (calSource === 'default') {
     coverageWarning = `<p class="status-msg warning">Couldn't fetch live Agile rates for your region. Half-hourly tariff scenarios use typical UK averages (D=2.2, P=12 p/kWh peak). Numbers are indicative; your actual Agile rate will differ.</p>`;
-  } else if (fraction > COVERAGE_INSUFFICIENT_THRESHOLD) {
+  } else if (fraction > HH_COVERAGE_INSUFFICIENT_THRESHOLD) {
     hhScenariosInsufficient = true;
     coverageWarning = `<p class="status-msg warning">Half-hourly tariff scenarios couldn't be computed for your data period — wholesale price data was missing for ${(fraction * 100).toFixed(0)}% of half-hour slots (above the 25% coverage threshold).</p>`;
-  } else if (fraction > COVERAGE_WARN_THRESHOLD) {
+  } else if (fraction > HH_COVERAGE_WARN_THRESHOLD) {
     coverageWarning = `<p class="status-msg info">Wholesale price data was missing for ${(fraction * 100).toFixed(0)}% of your data period. Half-hourly tariff scenarios use a typical-rate estimate for those periods.</p>`;
   }
 
@@ -2244,11 +2243,11 @@ async function runFinancialAnalysis(showProgressFn, showStatusFn) {
 
   // Propagate HH insufficient flag: null out HH costs before financial analysis so the
   // sensitivity grid and payback rows exclude them (analyseFinancials treats null as no_data)
-  const _cal      = getExternalResult()?.external_metadata?.agile_calibration;
-  const _fraction = _cal?.null_wholesale_fraction ?? 0;
-  const _calSrc   = rateMetadata?.calibration_source ?? 'fetched';
-  const _hhInsuff = _calSrc !== 'default' && _fraction > 0.25;
-  const effectivePricingResult = _hhInsuff
+  const faCalibration  = getExternalResult()?.external_metadata?.agile_calibration;
+  const faFraction     = faCalibration?.null_wholesale_fraction ?? 0;
+  const faCalSrc       = rateMetadata?.calibration_source ?? 'fetched';
+  const hhInsufficient = faCalSrc !== 'default' && faFraction > HH_COVERAGE_INSUFFICIENT_THRESHOLD;
+  const effectivePricingResult = hhInsufficient
     ? {
         ...pricingResult,
         scenarios: {
