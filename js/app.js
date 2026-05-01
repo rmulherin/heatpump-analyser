@@ -1661,7 +1661,31 @@ function displayPricingResults(pricingResult) {
   pricingSummary.innerHTML = '';
   pricingStatus.innerHTML  = '';
 
+  // Reset unusual-result panel
+  const unusualResultPanel = document.getElementById('unusual-result-panel');
+  if (unusualResultPanel) unusualResultPanel.classList.add('hidden');
+
   const rateMetadata = getRateMetadata();
+
+  // Coverage warning — three-tier based on null_wholesale_fraction
+  const COVERAGE_WARN_THRESHOLD         = 0.05;
+  const COVERAGE_INSUFFICIENT_THRESHOLD = 0.25;
+
+  const cal      = getExternalResult()?.external_metadata?.agile_calibration ?? null;
+  const fraction = cal?.null_wholesale_fraction ?? 0;
+  const calSource = rateMetadata?.calibration_source ?? 'fetched';
+
+  let coverageWarning = '';
+  let hhScenariosInsufficient = false;
+
+  if (calSource === 'default') {
+    coverageWarning = `<p class="status-msg warning">Couldn't fetch live Agile rates for your region. Half-hourly tariff scenarios use typical UK averages (D=2.2, P=12 p/kWh peak). Numbers are indicative; your actual Agile rate will differ.</p>`;
+  } else if (fraction > COVERAGE_INSUFFICIENT_THRESHOLD) {
+    hhScenariosInsufficient = true;
+    coverageWarning = `<p class="status-msg warning">Half-hourly tariff scenarios couldn't be computed for your data period — wholesale price data was missing for ${(fraction * 100).toFixed(0)}% of half-hour slots (above the 25% coverage threshold).</p>`;
+  } else if (fraction > COVERAGE_WARN_THRESHOLD) {
+    coverageWarning = `<p class="status-msg info">Wholesale price data was missing for ${(fraction * 100).toFixed(0)}% of your data period. Half-hourly tariff scenarios use a typical-rate estimate for those periods.</p>`;
+  }
 
   const fmtGbp = (v) => {
     if (v === null || v === undefined || v === 0) return '—';
@@ -1670,30 +1694,28 @@ function displayPricingResults(pricingResult) {
 
   let hasNullSmart = false;
   const rows = ['current', 'dumb_hp_svt', 'dumb_hp_hh', 'smart_hp_hh'].map(key => {
-    const sc     = pricingResult.scenarios[key];
-    const isNull = sc.annual_cost_gbp === null;
+    const sc       = pricingResult.scenarios[key];
+    const isHh     = key === 'dumb_hp_hh' || key === 'smart_hp_hh';
+    const suppress = isHh && hhScenariosInsufficient;
+    const isNull   = sc.annual_cost_gbp === null;
     if (isNull) hasNullSmart = true;
-    const total = isNull ? null
+    const total = (suppress || isNull) ? null
                 : (sc.heating_gas_gbp     ?? 0)
                 + (sc.heating_elec_gbp    ?? 0)
                 + (sc.non_heating_gas_gbp  ?? 0)
                 + (sc.non_heating_elec_gbp ?? 0);
     return `<tr>
       <td>${escapeHtml(SCENARIO_DISPLAY_NAMES[key])}</td>
-      <td>${fmtGbp(sc.heating_gas_gbp)}</td>
-      <td>${fmtGbp(sc.heating_elec_gbp)}</td>
-      <td>${fmtGbp(sc.non_heating_gas_gbp)}</td>
-      <td>${fmtGbp(sc.non_heating_elec_gbp)}</td>
+      <td>${fmtGbp(suppress ? null : sc.heating_gas_gbp)}</td>
+      <td>${fmtGbp(suppress ? null : sc.heating_elec_gbp)}</td>
+      <td>${fmtGbp(suppress ? null : sc.non_heating_gas_gbp)}</td>
+      <td>${fmtGbp(suppress ? null : sc.non_heating_elec_gbp)}</td>
       <td>${fmtGbp(total)}</td>
     </tr>`;
   }).join('');
 
-  const calibrationWarning = rateMetadata?.calibration_source === 'default'
-    ? `<p class="status-msg warning">Couldn't fetch live Agile rates for your region — using typical UK averages (D=2.2, P=12p/kWh peak). Numbers are indicative; your actual Agile rate will differ.</p>`
-    : '';
-
   pricingSummary.innerHTML = `
-    ${calibrationWarning}
+    ${coverageWarning}
     <div class="table-scroll-wrap">
       <table class="energy-summary-table">
         <thead>
@@ -1713,6 +1735,22 @@ function displayPricingResults(pricingResult) {
     <p class="field-note">Heat pump scenario electricity costs use the current Ofgem price cap rate (electricity: ${OFGEM_CAP_ELEC_P_KWH}p/kWh). Gas costs (for the retained connection and baseload) and your current boiler costs use your actual historical tariff rates.</p>
     ${hasNullSmart ? '<p class="status-msg info" style="margin-top:0.75rem;">Smart HP scenario unavailable — insufficient heat loss or heat pump capacity data.</p>' : ''}
   `;
+
+  // Weighted-mean-vs-cap check (Section G)
+  if (!hhScenariosInsufficient) {
+    const scenarioResult   = getScenarioConsumptionResult();
+    const dumbHpHhElecKwh  = scenarioResult?.scenarios?.dumb_hp_hh?.elec_kwh ?? null;
+    const hhRates          = rateMetadata?.elec_hh_rate_by_hh ?? null;
+    if (dumbHpHhElecKwh && hhRates) {
+      const weighted_mean = computeWeightedMeanHhRate(dumbHpHhElecKwh, hhRates);
+      if (weighted_mean !== null && weighted_mean < OFGEM_CAP_ELEC_P_KWH && unusualResultPanel) {
+        document.getElementById('unusual-result-title').textContent = 'Half-hourly tariff favours your heating pattern';
+        document.getElementById('unusual-result-body').textContent  =
+          `Your half-hourly tariff scenario has an effective rate of ${weighted_mean.toFixed(1)} p/kWh across heating hours — below the flat-rate cap (${OFGEM_CAP_ELEC_P_KWH.toFixed(2)} p/kWh). This usually means your heating pattern is unusually off-peak weighted (e.g. continuous underfloor heating). If your heating runs heavily in evenings (typical gas-boiler timing), this result may indicate a data quality issue — check the coverage warning above for details.`;
+        unusualResultPanel.classList.remove('hidden');
+      }
+    }
+  }
 
   for (const w of (rateMetadata?.warnings ?? [])) {
     const div = document.createElement('div');
@@ -1781,6 +1819,17 @@ const FINANCIAL_DISPLAY_NAMES = {
 };
 
 const FINANCIAL_DISPLAY_ORDER = ['current', 'dumb_hp_svt', 'dumb_hp_hh', 'smart_hp_hh'];
+
+function computeWeightedMeanHhRate(scenarioElecKwh, hhRates) {
+  let weighted_sum = 0;
+  let total_kwh    = 0;
+  for (let i = 0; i < hhRates.length; i++) {
+    if (hhRates[i] === null || scenarioElecKwh[i] === null || scenarioElecKwh[i] === undefined) continue;
+    weighted_sum += scenarioElecKwh[i] * hhRates[i];
+    total_kwh    += scenarioElecKwh[i];
+  }
+  return total_kwh > 0 ? weighted_sum / total_kwh : null;
+}
 
 function fmtGbpSaving(v) {
   if (v === null || v === undefined) return '—';
@@ -1951,6 +2000,8 @@ function populateDroveTile(financialResult, heatLossResult, rateMetadata, primar
   const elecVal   = document.getElementById('drove-electricity-value');
   const elecCtx   = document.getElementById('drove-electricity-context');
   if (primaryKey === 'smart_hp_hh' || primaryKey === 'dumb_hp_hh') {
+    const PLAUSIBILITY_FACTOR = 0.85;
+    const plausibility_floor  = OFGEM_CAP_ELEC_P_KWH * PLAUSIBILITY_FACTOR;
     const hhRates   = rateMetadata?.elec_hh_rate_by_hh?.filter(r => r !== null) ?? [];
     const avgHhRate = hhRates.length > 0
       ? hhRates.reduce((s, r) => s + r, 0) / hhRates.length
@@ -1958,7 +2009,11 @@ function populateDroveTile(financialResult, heatLossResult, rateMetadata, primar
     elecLabel.textContent = 'Electricity (half-hourly)';
     elecVal.textContent   = avgHhRate != null ? `${avgHhRate.toFixed(1)} p/kWh average` : 'Not available';
     const region = externalRes?.external_metadata?.agile_calibration?.gsp_region ?? 'regional pricing';
-    elecCtx.textContent   = `Agile tariff — region ${region}`;
+    if (avgHhRate != null && avgHhRate < plausibility_floor) {
+      elecCtx.textContent = `Agile tariff — region ${region}. Note: the displayed average (${avgHhRate.toFixed(1)} p/kWh) is below the Ofgem cap (${OFGEM_CAP_ELEC_P_KWH.toFixed(2)} p/kWh). This suggests either an off-peak-heavy heating pattern or a data quality issue. See coverage warning above for details.`;
+    } else {
+      elecCtx.textContent = `Agile tariff — region ${region}`;
+    }
   } else if (primaryKey === 'dumb_hp_svt') {
     elecLabel.textContent = 'Electricity (flat rate)';
     elecVal.textContent   = `${(rateMetadata?.svt_rate_p_per_kwh ?? 0).toFixed(1)} p/kWh`;
@@ -2186,7 +2241,25 @@ async function runFinancialAnalysis(showProgressFn, showStatusFn) {
 
   showProgressFn('Computing financial analysis…');
   const params = readCapitalParams();
-  const result = analyseFinancials(pricingResult, rateMetadata, scenarioResult, params);
+
+  // Propagate HH insufficient flag: null out HH costs before financial analysis so the
+  // sensitivity grid and payback rows exclude them (analyseFinancials treats null as no_data)
+  const _cal      = getExternalResult()?.external_metadata?.agile_calibration;
+  const _fraction = _cal?.null_wholesale_fraction ?? 0;
+  const _calSrc   = rateMetadata?.calibration_source ?? 'fetched';
+  const _hhInsuff = _calSrc !== 'default' && _fraction > 0.25;
+  const effectivePricingResult = _hhInsuff
+    ? {
+        ...pricingResult,
+        scenarios: {
+          ...pricingResult.scenarios,
+          dumb_hp_hh:  { ...pricingResult.scenarios.dumb_hp_hh,  annual_cost_gbp: null },
+          smart_hp_hh: { ...pricingResult.scenarios.smart_hp_hh, annual_cost_gbp: null },
+        },
+      }
+    : pricingResult;
+
+  const result = analyseFinancials(effectivePricingResult, rateMetadata, scenarioResult, params);
   setFinancialResult(result);
 
   displayFinancialResults(result);

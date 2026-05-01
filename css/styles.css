@@ -216,6 +216,10 @@ input:focus {
   border: 1px solid #F5C6CB;
 }
 
+#unusual-result-panel {
+  border-left: 4px solid var(--colour-teal);
+}
+
 /* ===== Progress ===== */
 .progress-area {
   margin-top: 1rem;
