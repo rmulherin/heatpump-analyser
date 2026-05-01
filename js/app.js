@@ -898,7 +898,19 @@ async function runExternalData(showProgressFn, showStatusFn) {
   const external = alignExternalData(consumption, weatherMap, priceLookup);
 
   // Step 6: Agile calibration
-  const agileCalibration = await fetchAgileCalibration(ingestion?.gsp_region ?? null);
+  const agileCalResult = await fetchAgileCalibration(ingestion?.gsp_region ?? null);
+
+  // Merge null_wholesale_fraction — computed here where both fetch results are visible
+  const _wholesale_arr = external.map(e => e.wholesale_p_kwh ?? null);
+  const _total_slots   = _wholesale_arr.length;
+  const _null_slots    = _wholesale_arr.filter(w => w === null).length;
+  const null_wholesale_fraction = _total_slots > 0 ? _null_slots / _total_slots : 1.0;
+
+  const agileCalibration = agileCalResult
+    ? { ...agileCalResult, null_wholesale_fraction }
+    : { D: 2.2, P_peak_p_kwh: 12,
+        D_sample_count: 0, P_sample_count: 0,
+        null_wholesale_fraction, source: 'default' };
 
   // Step 7: Build metadata
   const externalMetadata = buildExternalMetadata(

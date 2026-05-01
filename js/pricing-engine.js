@@ -48,6 +48,19 @@ export function getRateMetadata()   { return _rateMetadata; }
 export function setPricingResult(r) { _pricingResult = r; }
 export function getPricingResult()  { return _pricingResult; }
 
+// ===== Null-wholesale imputation =====
+
+function imputeWholesaleForSlot(i, wholesale_array, global_mean_known, D, ofgem_cap) {
+  const window_start = Math.max(0, i - 336); // preceding 7 days × 48 HHs
+  const window_slots = wholesale_array.slice(window_start, i)
+                                      .filter(w => w !== null);
+  if (window_slots.length >= 50) {
+    return window_slots.reduce((s, w) => s + w, 0) / window_slots.length;
+  }
+  if (global_mean_known !== null) return global_mean_known;
+  return ofgem_cap / D; // last resort: entire fetch null
+}
+
 // ===== Phase A: prepareRates =====
 
 export function prepareRates(ingestion, external, params) {
@@ -59,18 +72,36 @@ export function prepareRates(ingestion, external, params) {
   const n = ingestion.consumption.length;
   const gas_rate_by_hh     = new Array(n);
   const elec_hh_rate_by_hh = new Array(n);
-  let warnedNullWholesale = false;
-  let warnedGapTariff     = false;
-  let hasExtremeNeg       = false;
+  let warnedGapTariff = false;
+  let hasExtremeNeg   = false;
 
-  // Agile D×W+P calibration — use fetched values or safe defaults
-  const calibration = params.agile_calibration ?? {
-    D: D_DEFAULT,
-    P_peak_p_kwh: P_DEFAULT_PEAK_P_KWH,
-    source: 'default',
-  };
+  // Agile D×W+P calibration — validate fetched values, fall back to safe defaults
+  const D_MIN = 1.5, D_MAX = 3.0;
+  const P_MIN = 5,   P_MAX = 20;
+  const D_MIN_SAMPLES = 50;
+  const P_MIN_SAMPLES = 20;
+
+  const raw = params.agile_calibration;
+  const calibration_valid = raw
+    && raw.D            >= D_MIN && raw.D            <= D_MAX
+    && raw.P_peak_p_kwh >= P_MIN && raw.P_peak_p_kwh <= P_MAX
+    && (raw.D_sample_count ?? 0) >= D_MIN_SAMPLES
+    && (raw.P_sample_count ?? 0) >= P_MIN_SAMPLES;
+
+  const calibration = calibration_valid
+    ? raw
+    : { D: D_DEFAULT, P_peak_p_kwh: P_DEFAULT_PEAK_P_KWH, source: 'default' };
+
   const { D, P_peak_p_kwh } = calibration;
   const calibration_source = calibration.source ?? 'fetched';
+
+  // Pre-compute wholesale array and global mean for null-slot imputation
+  const wholesale_array = external.map(e => e?.wholesale_p_kwh ?? null);
+  const known_wholesale = wholesale_array.filter(w => w !== null);
+  const global_mean_known = known_wholesale.length > 0
+    ? known_wholesale.reduce((s, w) => s + w, 0) / known_wholesale.length
+    : null;
+  const ofgem_cap = params.ofgem_cap_elec_p_kwh ?? 24.67;
 
   for (let i = 0; i < n; i++) {
     const ts     = ingestion.consumption[i].timestamp;
@@ -102,11 +133,8 @@ export function prepareRates(ingestion, external, params) {
     const wholesale = external[i]?.wholesale_p_kwh;
     const peak      = isPeakHour(tsDate);
     if (wholesale === null || wholesale === undefined) {
-      elec_hh_rate_by_hh[i] = peak ? P_peak_p_kwh : 0;
-      if (!warnedNullWholesale) {
-        warnings.push('Some HH periods have no wholesale price data — using peak uplift only for affected periods.');
-        warnedNullWholesale = true;
-      }
+      const imputed = imputeWholesaleForSlot(i, wholesale_array, global_mean_known, D, ofgem_cap);
+      elec_hh_rate_by_hh[i] = D * imputed + (peak ? P_peak_p_kwh : 0);
     } else {
       elec_hh_rate_by_hh[i] = Math.min(
         peak ? D * wholesale + P_peak_p_kwh : D * wholesale,
@@ -142,6 +170,7 @@ export function prepareRates(ingestion, external, params) {
       elec_standing_charge_p_per_day: elec_standing_p_day,
       data_period_days: 0,
       calibration_source,
+      agile_calibration: calibration,
       consumption: ingestion.consumption,
       warnings,
     };
@@ -160,6 +189,7 @@ export function prepareRates(ingestion, external, params) {
     elec_standing_charge_p_per_day: elec_standing_p_day,
     data_period_days,
     calibration_source,
+    agile_calibration: calibration,
     consumption: ingestion.consumption,
     warnings,
   };

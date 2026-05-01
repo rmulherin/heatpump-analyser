@@ -421,7 +421,9 @@ export async function fetchAgileCalibration(gsp_region) {
         D_samples.push(agileVal / wholesale);
       }
     }
-    if (D_samples.length === 0) return null;
+    const D_sample_count = D_samples.length;
+    const P_sample_count = P_samples.length;
+    if (D_sample_count === 0) return null;
 
     const D = median(D_samples);
     const P_computed = P_samples.map(s => s.agile - D * s.wholesale);
@@ -436,7 +438,11 @@ export async function fetchAgileCalibration(gsp_region) {
       ? `${monthNames[calibStart.getUTCMonth()]} ${calibStart.getUTCFullYear()} (partial)`
       : `${monthNames[calibStart.getUTCMonth()]} ${calibStart.getUTCFullYear()}`;
 
-    return { D, P_peak_p_kwh: P, calibration_period: calibPeriod, gsp_region };
+    return {
+      D, P_peak_p_kwh: P, calibration_period: calibPeriod, gsp_region,
+      D_sample_count, P_sample_count,
+      source: 'fetched',
+    };
 
   } catch (err) {
     console.error('Agile calibration fetch failed:', err);
