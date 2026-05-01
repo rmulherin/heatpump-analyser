@@ -279,15 +279,15 @@ export async function fetchWholesalePrices(dataStart, dataEnd, onProgress) {
     // Price failure is non-blocking — warn and continue with null prices
     const msg = e instanceof Error ? e.message : `Wholesale price fetch failed (${e.status}).`;
     warnings.push(msg + ' Wholesale price scenarios will be incomplete.');
-    return { priceLookup: new Map(), source: 'elexon-mid-n2ex', warnings };
+    return { priceLookup: new Map(), source: 'elexon-mid-apx', warnings };
   }
 
-  // Filter to N2EXMIDP only
-  const n2exRecords = allRecords.filter(r => r.dataProvider === 'N2EXMIDP');
+  // Filter to APXMIDP only (N2EX has structurally withdrawn from UK MID peak-hour trading)
+  const apxRecords = allRecords.filter(r => r.dataProvider === 'APXMIDP');
 
   // Deduplicate: chunk `to` overlap causes one boundary SP per chunk to appear twice
   const seen = new Set();
-  const uniqueRecords = n2exRecords.filter(r => {
+  const uniqueRecords = apxRecords.filter(r => {
     const key = `${r.settlementDate}|${r.settlementPeriod}`;
     if (seen.has(key)) return false;
     seen.add(key);
@@ -305,7 +305,7 @@ export async function fetchWholesalePrices(dataStart, dataEnd, onProgress) {
   const { priceLookup, warnings: spWarnings } = convertSpToUtc(converted);
   warnings.push(...spWarnings);
 
-  return { priceLookup, source: 'elexon-mid-n2ex', warnings };
+  return { priceLookup, source: 'elexon-mid-apx', warnings };
 }
 
 
@@ -320,7 +320,7 @@ export function convertSpToUtc(midRecords) {
   const spCountsByDate = new Map();
 
   for (const { settlementDate, settlementPeriod, price, dataProvider } of midRecords) {
-    if (dataProvider !== 'N2EXMIDP') continue;
+    if (dataProvider !== 'APXMIDP') continue;
 
     // Base: 00:00 LOCAL on settlementDate (Europe/London)
     const baseDate = DateTime.fromISO(settlementDate, { zone: 'Europe/London' });
