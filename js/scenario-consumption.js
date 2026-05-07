@@ -69,17 +69,21 @@ function buildDumbHpScenario(heating, copByHh, eta) {
 function allocateGreedyDay({
   dayIndices, heating, eta, copByHh, gasRateByHh, elecHhRateByHh,
   hpCapKw, isAbsence, demandScale = 1.0,
+  tau,       // hours — thermal time constant; non-null when smart runs
+  S_max_kwh, // kWh — max pre-heat storage budget above setpoint
 }) {
-  const n = dayIndices.length;
-  const cap = hpCapKw * 0.5;        // thermal kWh per HH at HP capacity
+  const n   = dayIndices.length;
+  const cap = hpCapKw * 0.5;  // thermal kWh per HH at HP capacity
 
-  // 1. Daily thermal budget B_d from observed gas heating × η, excluding absence HH
-  let B_d = 0;
-  for (const i of dayIndices) {
+  // 1. Demand array and B_d (observed heating × η, absence excluded)
+  const demand = new Array(n);
+  for (let t = 0; t < n; t++) {
+    const i = dayIndices[t];
     const h = heating[i].heating_kwh;
-    if (h != null && h > 0 && !isAbsence[i]) B_d += h * eta;
+    demand[t] = (!isAbsence[i] && h != null && h > 0) ? h * eta * demandScale : 0;
   }
-  B_d *= demandScale;
+  let B_d = 0;
+  for (const d of demand) B_d += d;
 
   const elec_kwh_alloc = new Array(n).fill(0);
   const gas_kwh_alloc  = new Array(n).fill(0);
@@ -91,42 +95,74 @@ function allocateGreedyDay({
              elec_kwh_alloc, gas_kwh_alloc, hpUndersized: false };
   }
 
-  // 2. Per-HH unit cost + cap
-  const slots = [];
-  for (let t = 0; t < n; t++) {
-    const i        = dayIndices[t];
-    const cop      = copByHh[i];
-    const elecRate = elecHhRateByHh[i];
-
-    const hpCost = (cop != null && elecRate != null) ? elecRate / cop : Infinity;
-    if (hpCost === Infinity) continue;                         // ineligible
-    slots.push({ t, i, fuel: 'hp', unitCost: hpCost, capI: cap });
+  // 2. Survival filter: d_next and survivalEligible
+  // d_next[t] = local index of nearest subsequent demand slot (Infinity if none)
+  const d_next = new Array(n).fill(Infinity);
+  for (let t = n - 2; t >= 0; t--) {
+    d_next[t] = (demand[t + 1] > 0) ? t + 1 : d_next[t + 1];
   }
 
-  // 3. Sort cheapest first, deterministic tiebreak by HH index
+  // survivalEligible[t]: non-demand slot t can reach next demand within 2τ HH
+  // condition: n_gap × 0.5 / τ ≤ 1  ↔  exp(−n_gap×0.5/τ) ≥ exp(−1)
+  const survivalEligible = new Array(n).fill(false);
+  for (let t = 0; t < n; t++) {
+    if (demand[t] > 0) continue;
+    const n_gap = d_next[t] - t;
+    if (n_gap === Infinity) continue;
+    survivalEligible[t] = (n_gap * 0.5 / tau) <= 1;
+  }
+
+  // 3. max_addable_at: storage headroom at slot s given current q_delivered
+  // O(n) forward scan; O(n²) per day — acceptable (n=48, ≤365 days)
+  function max_addable_at(s) {
+    let cum = 0;
+    for (let t = 0; t <= s; t++) cum += q_delivered[t] - demand[t];
+    let headroom = S_max_kwh - cum;
+    for (let t = s + 1; t < n; t++) {
+      cum += q_delivered[t] - demand[t];
+      headroom = Math.min(headroom, S_max_kwh - cum);
+    }
+    return Math.max(0, headroom);
+  }
+
+  // 4. Eligible slots: demand slots + survival-eligible non-demand slots
+  const slots = [];
+  for (let t = 0; t < n; t++) {
+    const i       = dayIndices[t];
+    const cop     = copByHh[i];
+    const elecRate = elecHhRateByHh[i];
+    if (cop == null || elecRate == null) continue;
+    if (demand[t] === 0 && !survivalEligible[t]) continue;
+    if (isAbsence[i]) continue;
+    slots.push({ t, i, unitCost: elecRate / cop });
+  }
+
+  // 5. Sort cheapest first, deterministic tiebreak by HH index
   slots.sort((a, b) => a.unitCost - b.unitCost || a.t - b.t);
 
-  // 4. Greedy fill until B_d met
+  // 6. Greedy fill with storage headroom constraint
   let remaining = B_d;
   for (const s of slots) {
     if (remaining <= 0) break;
-    const Q = Math.min(s.capI, remaining);
-    q_delivered[s.t] = Q;
-    fuel_mode[s.t]   = s.fuel;
-    if (s.fuel === 'hp')  elec_kwh_alloc[s.t] = Q / copByHh[s.i];
-    else                  gas_kwh_alloc[s.t]  = Q / eta;
-    remaining -= Q;
+    const cap_headroom     = cap - q_delivered[s.t];
+    const storage_headroom = max_addable_at(s.t);
+    const add = Math.min(remaining, cap_headroom, storage_headroom);
+    if (add > 0) {
+      q_delivered[s.t]     += add;
+      elec_kwh_alloc[s.t]   = q_delivered[s.t] / copByHh[s.i];
+      fuel_mode[s.t]         = 'hp';
+      remaining             -= add;
+    }
   }
 
-  // 5. Undersized fallback — resistive backup at COP=1
+  // 7. Undersized fallback — resistive backup at COP=1
   let hpUndersized = false;
   if (remaining > 1e-9) {
     hpUndersized = true;
-    // Resistive backup at COP=1 in cheapest eligible HH
     const target = slots[0];
     if (target) {
       elec_kwh_alloc[target.t] += remaining;
-      q_delivered[target.t]    += remaining;     // 1 kWh elec → 1 kWh heat at COP=1
+      q_delivered[target.t]    += remaining;
       fuel_mode[target.t]       = 'hp';
     }
   }
@@ -163,10 +199,49 @@ function simulatePostHocTIndoor({
   return { indoor_temp_c: out, T_init_next: T };
 }
 
+// RC temperature trace for the current (boiler) scenario — display only.
+// Resets T to setpoint on data gaps (null heating or null temp) rather than
+// carrying T forward, because a null entry means a metering gap where the
+// building's true state is unknown; setpoint is the least-bad assumption.
+function simulateCurrentRcTrace({ heating, external, heatLoss, thermalChar }) {
+  const htc = heatLoss?.htc_w_per_k;
+  const C   = thermalChar?.thermal_mass_kj_per_k;
+  const eta = heatLoss?.boiler_efficiency_used ?? 0.9;
+  const sp  = thermalChar?.setpoint_c;
+  if (htc == null || C == null || sp == null) return heating.map(() => null);
+
+  const R = (heatLoss?.solar_correction_applied && heatLoss?.solar_aperture_m2 != null)
+    ? heatLoss.solar_aperture_m2 : 0;
+  const out = new Array(heating.length);
+  let T = sp;
+  for (let i = 0; i < heating.length; i++) {
+    const h  = heating[i].heating_kwh;
+    const tc = external[i]?.temp_c;
+    if (h == null || tc == null) {
+      out[i] = null;
+      T = sp;
+      continue;
+    }
+    const Q_current    = h * eta;
+    const heatLossKwh  = htc * (T - tc) * 0.5 / 1000;
+    const solarGainKwh = R * (external[i]?.solar_w_m2 ?? 0) * 0.5 / 1000;
+    const dT = (Q_current + solarGainKwh - heatLossKwh) * 3600 / C;
+    T += dT;
+    out[i] = T;
+  }
+  return out;
+}
+
 function buildSmartScenario({
   heating, external, copByHh, hpCapKw,
   gasRateByHh, elecHhRateByHh, eta, isAbsence, demandScale = 1.0,
+  htc,         // W/K — required; non-null when called (computeValidationStatusSmart guards)
+  thermalMass, // kJ/K — required; same guard
+  tMaxPreheat, // °C — maximum pre-heat above setpoint
 }) {
+  const tau     = thermalMass * 1000 / (htc * 3600);  // hours
+  const S_max   = thermalMass * tMaxPreheat / 3600;   // kWh
+
   const days = buildDayHhIndices(heating);
   const gas_kwh   = new Array(heating.length).fill(0);
   const elec_kwh  = new Array(heating.length).fill(0);
@@ -182,6 +257,7 @@ function buildSmartScenario({
     const day = allocateGreedyDay({
       dayIndices: indices, heating, eta,
       copByHh, gasRateByHh, elecHhRateByHh, hpCapKw, isAbsence, demandScale,
+      tau, S_max_kwh: S_max,
     });
     if (day.hpUndersized) anyHpUndersized = true;
     for (let k = 0; k < indices.length; k++) {
@@ -201,16 +277,18 @@ function computeValidationStatusDumb(dumbDiagnostics, baseloadMethod) {
   return fallbackFrac >= SC_CONFIG.PARTIAL_DUMB_THRESHOLD ? 'partial' : 'ok';
 }
 
-function computeValidationStatusSmart(heatLoss, heatPumpModel) {
-  if (heatLoss?.htc_w_per_k == null)         return 'insufficient_data';
-  if (heatPumpModel?.hp_capacity_kw == null) return 'insufficient_data';
+function computeValidationStatusSmart(heatLoss, heatPumpModel, thermalCharacter) {
+  if (heatLoss?.htc_w_per_k == null)                   return 'no_htc';
+  if (heatPumpModel?.hp_capacity_kw == null)           return 'insufficient_data';
+  if (thermalCharacter?.thermal_mass_kj_per_k == null) return 'no_thermal_mass';
   return 'ok';
 }
 
 export function estimateScenarioConsumption({
   heating, external, heatLoss, thermalCharacter, heatPumpModel,
   baseloadMethod, gasRateByHh, elecHhRateByHh,
-  comfort_demand_scale,   // optional; slider value in % (e.g. 80 = 80%); undefined → scale=1
+  comfort_demand_scale,         // optional; slider value in % (e.g. 80 = 80%); undefined → scale=1
+  t_max_preheat_offset_c = 3.0, // °C above setpoint the smart HP may pre-heat to
 }) {
   const warnings = [];
   const eta      = heatLoss?.boiler_efficiency_used ?? 0.9;
@@ -226,18 +304,21 @@ export function estimateScenarioConsumption({
         current: nullScenario, dumb_hp_svt: nullScenario, dumb_hp_hh: nullScenario,
         smart_hp_hh: nullScenario,
       },
-      validation_status: { dumb: 'no_data', smart: computeValidationStatusSmart(heatLoss, heatPumpModel) },
+      validation_status: { dumb: 'no_data', smart: computeValidationStatusSmart(heatLoss, heatPumpModel, thermalCharacter) },
       warnings: ['No gas heating detected — heat pump scenarios cannot be modelled against an existing gas baseline.'],
     };
   }
 
   // Steps 1–2: current + dumb scenarios
   const current = buildCurrentScenario(heating);
+  current.indoor_temp_c = simulateCurrentRcTrace({
+    heating, external, heatLoss, thermalChar: thermalCharacter,
+  });
   const dumbHp  = buildDumbHpScenario(heating, copByHh, eta);
   const dumbDiagnostics = dumbHp._diagnostics; delete dumbHp._diagnostics;
 
   // Step 4: smart scenario (greedy LP)
-  let smartStatus = computeValidationStatusSmart(heatLoss, heatPumpModel);
+  let smartStatus = computeValidationStatusSmart(heatLoss, heatPumpModel, thermalCharacter);
   let smartHpHh;
 
   if (smartStatus === 'ok') {
@@ -257,6 +338,9 @@ export function estimateScenarioConsumption({
     const sm = buildSmartScenario({
       heating, external, copByHh, hpCapKw: hpCap,
       gasRateByHh, elecHhRateByHh, eta, isAbsence, demandScale,
+      htc:         heatLoss.htc_w_per_k,
+      thermalMass: thermalCharacter.thermal_mass_kj_per_k,
+      tMaxPreheat: t_max_preheat_offset_c,
     });
 
     if (sm.hpUndersized) {
@@ -281,7 +365,7 @@ export function estimateScenarioConsumption({
       if (q == null || q <= 0) return false;
       const t = smTinSim.indoor_temp_c[idx];
       if (t == null || thermalCharacter?.setpoint_c == null) return false;
-      return t > thermalCharacter.setpoint_c + 3.0;
+      return t > thermalCharacter.setpoint_c + t_max_preheat_offset_c;
     });
     if (overshoot) {
       warnings.push('Smart-HP schedule concentrates heating into low-cost periods; in practice your thermostat would moderate this.');

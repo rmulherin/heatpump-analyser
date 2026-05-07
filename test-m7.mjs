@@ -205,9 +205,8 @@ function _spec_requiredQ(T_cur, T_next, C, heatLossKwh, solarGainKwh) {
   assert(smart.indoor_temp_c[0] !== null, 'T10b', `Post-hoc sim runs even when B_d=0: indoor_temp_c[0] non-null`);
 }
 
-// ===== T11 — Null thermal_mass passthrough =====
-// thermal_mass null does NOT block smart (greedy needs only htc and hp_capacity).
-// Post-hoc sim returns all-null indoor_temp_c when C is missing.
+// ===== T11 — Null thermal_mass blocks smart dispatch =====
+// thermal_mass null → validation_status.smart = 'no_thermal_mass'; smart arrays all null.
 {
   const { heating, external, cop_by_hh } = buildSimpleDay({ tempC: 10 });
   heating[0] = hh(ts(0, 0), 1.0);
@@ -215,13 +214,14 @@ function _spec_requiredQ(T_cur, T_next, C, heatLossKwh, solarGainKwh) {
     heating, external, cop_by_hh,
     thermal_mass_kj_per_k: null,
   }));
-  assert(result.validation_status.smart === 'ok',
-    'T11a', `validation.smart = 'ok' when thermal_mass=null (got '${result.validation_status.smart}')`);
-  assert((result.scenarios.smart_hp_hh.elec_kwh[0] ?? 0) > 0,
-    'T11b', `Smart elec_kwh computed even when thermal_mass=null`);
-  const allTempNull = result.scenarios.smart_hp_hh.indoor_temp_c.every(t => t === null);
-  assert(allTempNull,
-    'T11c', `indoor_temp_c all null when thermal_mass=null (post-hoc sim skipped)`);
+  assert(result.validation_status.smart === 'no_thermal_mass',
+    'T11a', `validation.smart = 'no_thermal_mass' when thermal_mass=null (got '${result.validation_status.smart}')`);
+  assert(result.scenarios.smart_hp_hh.elec_kwh[0] === null,
+    'T11b', `Smart elec_kwh[0] null when thermal_mass=null (got ${result.scenarios.smart_hp_hh.elec_kwh[0]})`);
+  const allSmartNull = result.scenarios.smart_hp_hh.gas_kwh.every(v => v === null)
+    && result.scenarios.smart_hp_hh.elec_kwh.every(v => v === null);
+  assert(allSmartNull,
+    'T11c', `Smart gas_kwh and elec_kwh all null when thermal_mass=null`);
   assert((result.scenarios.dumb_hp_svt.elec_kwh[0] ?? 0) > 0,
     'T11d', `Dumb scenarios computed even when thermal_mass=null`);
 }
@@ -390,6 +390,293 @@ function _spec_requiredQ(T_cur, T_next, C, heatLossKwh, solarGainKwh) {
   const hasWarn = result.warnings.some(w => w.toLowerCase().includes('insufficient') || w.toLowerCase().includes('undersized'));
   assert(hasWarn, 'T18b',
     `Warning surfaced for undersized HP (warnings: ${JSON.stringify(result.warnings)})`);
+}
+
+// ===== T19 — Storage constraint enforced =====
+// C=5000 kJ/K, HTC=200 W/K → τ=6.94h, t_max=3°C → S_max ≈ 4.17 kWh.
+// Demand at slots 16–23 (1.5 kWh thermal each, B_d=12 kWh); cheap 8p in slots 4–11.
+// Slots 4–11: n_gap to demand = 12..5 → 12×0.5/6.94=0.865 ≤ 1 → survival-eligible.
+// Storage constraint must bind: Σ Q_thermal[4..11] ≤ S_max ≈ 4.17 kWh.
+{
+  const n = 48;
+  const heating = [], external = [], cop_by_hh = [];
+  for (let i = 0; i < n; i++) {
+    heating.push(hh(ts(0, i), i >= 16 && i < 24 ? 1.5 / 0.9 : 0));
+    external.push(ext(5));
+    cop_by_hh.push(3);
+  }
+  const elecRates = new Array(n).fill(30);
+  for (let i = 4; i < 12; i++) elecRates[i] = 8;
+
+  const result = estimateScenarioConsumption(buildInputs({
+    heating, external, cop_by_hh,
+    htc_w_per_k: 200, thermal_mass_kj_per_k: 5000,
+    setpoint_c: 19, hp_capacity_kw: 8,
+    gasRateByHh: new Array(n).fill(1000),
+    elecHhRateByHh: elecRates,
+    thermalCharacterOverride: {
+      setpoint_c: 19, thermal_mass_kj_per_k: 5000,
+      occupancy_weights: new Array(n).fill(1),
+      underheat_ratio: null,
+    },
+  }));
+
+  const smart = result.scenarios.smart_hp_hh;
+  const S_max = 5000 * 3 / 3600;
+  let preHeatThermal = 0;
+  for (let i = 4; i < 12; i++) preHeatThermal += (smart.elec_kwh[i] ?? 0) * 3;
+  assert(preHeatThermal <= S_max + 1e-6, 'T19',
+    `Storage constraint: pre-heat thermal ≤ S_max=${S_max.toFixed(2)} kWh (got ${preHeatThermal.toFixed(4)})`);
+}
+
+// ===== T20 — ΔT_max flow-through (MANDATORY regression) =====
+// C=5000 kJ/K, HTC=200 W/K (τ≈6.94h). Morning demand slots 12–15, 0.8 kWh heating each.
+// t_max=1°C → S_max≈1.39 kWh (binding); t_max=5°C → S_max≈6.94 kWh (non-binding).
+// cost(t_max=5°C) must be lower than cost(t_max=1°C).
+{
+  const n = 48;
+  const heating = [], external = [], cop_by_hh = [];
+  for (let i = 0; i < n; i++) {
+    heating.push(hh(ts(0, i), i >= 12 && i < 16 ? 0.8 : 0));
+    external.push(ext(5));
+    cop_by_hh.push(3);
+  }
+  const elecRates = new Array(n).fill(30);
+  for (let i = 0; i < 12; i++) elecRates[i] = 8;
+
+  const baseInputs = {
+    heating, external, cop_by_hh,
+    htc_w_per_k: 200, thermal_mass_kj_per_k: 5000,
+    setpoint_c: 19, hp_capacity_kw: 10,
+    gasRateByHh: new Array(n).fill(1000),
+    elecHhRateByHh: elecRates,
+    thermalCharacterOverride: {
+      setpoint_c: 19, thermal_mass_kj_per_k: 5000,
+      occupancy_weights: new Array(n).fill(1),
+      underheat_ratio: null,
+    },
+  };
+
+  const r1 = estimateScenarioConsumption({ ...buildInputs(baseInputs), t_max_preheat_offset_c: 1.0 });
+  const r5 = estimateScenarioConsumption({ ...buildInputs(baseInputs), t_max_preheat_offset_c: 5.0 });
+
+  let cost1 = 0, cost5 = 0;
+  for (let i = 0; i < n; i++) {
+    cost1 += (r1.scenarios.smart_hp_hh.elec_kwh[i] ?? 0) * elecRates[i];
+    cost5 += (r5.scenarios.smart_hp_hh.elec_kwh[i] ?? 0) * elecRates[i];
+  }
+  assert(cost5 < cost1, 'T20',
+    `ΔT_max flow-through: cost(t_max=5°C) < cost(t_max=1°C) (cost5=${cost5.toFixed(2)}p, cost1=${cost1.toFixed(2)}p)`);
+}
+
+// ===== T21 — Absence excluded from B_d and Q_delivered =====
+{
+  const n = 48;
+  const heating = [], external = [], cop_by_hh = [];
+  for (let i = 0; i < n; i++) {
+    heating.push(hh(ts(0, i), 1.0, i >= 16 && i < 36));
+    external.push(ext(5));
+    cop_by_hh.push(3);
+  }
+
+  const result = estimateScenarioConsumption(buildInputs({
+    heating, external, cop_by_hh,
+    htc_w_per_k: 200, thermal_mass_kj_per_k: 5000,
+    setpoint_c: 19, hp_capacity_kw: 10,
+    gasRateByHh: new Array(n).fill(1000),
+    elecHhRateByHh: new Array(n).fill(20),
+    thermalCharacterOverride: {
+      setpoint_c: 19, thermal_mass_kj_per_k: 5000,
+      occupancy_weights: new Array(n).fill(1),
+      underheat_ratio: null,
+    },
+  }));
+
+  const smart = result.scenarios.smart_hp_hh;
+  let absenceAllocated = false;
+  for (let i = 16; i < 36; i++) {
+    if ((smart.elec_kwh[i] ?? 0) > 0) { absenceAllocated = true; break; }
+  }
+  assert(!absenceAllocated, 'T21',
+    `Absence HH excluded from Q_delivered: smart elec_kwh[16..35] all 0`);
+}
+
+// ===== T22 — Survival filter: 8h vs 2h house =====
+// Morning demand only at slots 12–15, 0.5 kWh thermal each.
+// τ=8h → overnight eligible; τ=2h → only slots 8–11 eligible (n_gap=4 at boundary).
+{
+  const n = 48;
+  function makeDay() {
+    const h = [], e = [], c = [];
+    for (let i = 0; i < n; i++) {
+      h.push(hh(ts(0, i), i >= 12 && i < 16 ? 0.5 / 0.9 : 0));
+      e.push(ext(5));
+      c.push(3);
+    }
+    return { heating: h, external: e, cop_by_hh: c };
+  }
+  const elecRates = new Array(n).fill(20);
+  for (let i = 0; i < 12; i++) elecRates[i] = 8;
+
+  // τ=8h: C=5760, HTC=200
+  const { heating: h8, external: e8, cop_by_hh: c8 } = makeDay();
+  const r8 = estimateScenarioConsumption(buildInputs({
+    heating: h8, external: e8, cop_by_hh: c8,
+    htc_w_per_k: 200, thermal_mass_kj_per_k: 5760,
+    setpoint_c: 19, hp_capacity_kw: 8,
+    gasRateByHh: new Array(n).fill(1000),
+    elecHhRateByHh: elecRates,
+    thermalCharacterOverride: { setpoint_c: 19, thermal_mass_kj_per_k: 5760, occupancy_weights: new Array(n).fill(1), underheat_ratio: null },
+  }));
+  let overnightThermal8 = 0;
+  for (let i = 0; i < 12; i++) overnightThermal8 += (r8.scenarios.smart_hp_hh.elec_kwh[i] ?? 0) * 3;
+  assert(overnightThermal8 > 0, 'T22a',
+    `τ=8h: cheap overnight slots used (thermal pre-heat = ${overnightThermal8.toFixed(4)})`);
+
+  // τ=2h: C=1440, HTC=200
+  const { heating: h2, external: e2, cop_by_hh: c2 } = makeDay();
+  const r2 = estimateScenarioConsumption(buildInputs({
+    heating: h2, external: e2, cop_by_hh: c2,
+    htc_w_per_k: 200, thermal_mass_kj_per_k: 1440,
+    setpoint_c: 19, hp_capacity_kw: 8,
+    gasRateByHh: new Array(n).fill(1000),
+    elecHhRateByHh: elecRates,
+    thermalCharacterOverride: { setpoint_c: 19, thermal_mass_kj_per_k: 1440, occupancy_weights: new Array(n).fill(1), underheat_ratio: null },
+  }));
+  let earlyOvernight2 = 0;
+  for (let i = 0; i < 8; i++) earlyOvernight2 += (r2.scenarios.smart_hp_hh.elec_kwh[i] ?? 0);
+  assert(earlyOvernight2 === 0, 'T22b',
+    `τ=2h: overnight slots 0–7 ineligible (sum=${earlyOvernight2})`);
+  let latePreHeat2 = 0;
+  for (let i = 8; i < 12; i++) latePreHeat2 += (r2.scenarios.smart_hp_hh.elec_kwh[i] ?? 0) * 3;
+  assert(latePreHeat2 > 0, 'T22c',
+    `τ=2h: slots 8–11 eligible (thermal pre-heat = ${latePreHeat2.toFixed(4)})`);
+}
+
+// ===== T23 — Survival filter: boundary precision =====
+// τ=4h (C=2880, HTC=200). Demand only at slot 20.
+// Slot 12: n_gap=8, 8×0.5/4=1 → eligible (at threshold).
+// Slot 11: n_gap=9, 9×0.5/4=1.125 → ineligible.
+{
+  const n = 48;
+  const heating = [], external = [], cop_by_hh = [];
+  for (let i = 0; i < n; i++) {
+    heating.push(hh(ts(0, i), i === 20 ? 3.0 / 0.9 : 0));
+    external.push(ext(5));
+    cop_by_hh.push(3);
+  }
+  const elecRates = new Array(n).fill(30);
+  for (let i = 0; i < 20; i++) elecRates[i] = 5;
+
+  const result = estimateScenarioConsumption(buildInputs({
+    heating, external, cop_by_hh,
+    htc_w_per_k: 200, thermal_mass_kj_per_k: 2880,
+    setpoint_c: 19, hp_capacity_kw: 10,
+    gasRateByHh: new Array(n).fill(1000),
+    elecHhRateByHh: elecRates,
+    thermalCharacterOverride: { setpoint_c: 19, thermal_mass_kj_per_k: 2880, occupancy_weights: new Array(n).fill(1), underheat_ratio: null },
+  }));
+
+  const smart = result.scenarios.smart_hp_hh;
+  const q12 = (smart.elec_kwh[12] ?? 0) * 3;
+  const q11 = (smart.elec_kwh[11] ?? 0) * 3;
+  assert(q12 > 0, 'T23a', `Slot 12 eligible (at survival threshold): Q_thermal[12]=${q12.toFixed(4)}`);
+  assert(q11 === 0, 'T23b', `Slot 11 ineligible (just beyond threshold): Q_thermal[11]=${q11.toFixed(4)}`);
+}
+
+// ===== T24 — Current scenario RC trace shape =====
+// HTC=200, C=5000, setpoint=19, temp=5, η=0.9; heating 1.0 kWh in slots 12–15, else 0.
+// 1.0 kWh chosen so Q=0.9 kWh > heat_loss≈0.57 kWh at T≈10°C → temperature rises.
+{
+  const n = 48;
+  const heating = [], external = [], cop_by_hh = [];
+  for (let i = 0; i < n; i++) {
+    heating.push(hh(ts(0, i), i >= 12 && i < 16 ? 1.0 : 0));
+    external.push(ext(5));
+    cop_by_hh.push(3);
+  }
+  const result = estimateScenarioConsumption(buildInputs({
+    heating, external, cop_by_hh,
+    htc_w_per_k: 200, thermal_mass_kj_per_k: 5000,
+    setpoint_c: 19, hp_capacity_kw: 10,
+    gasRateByHh: new Array(n).fill(1000),
+    elecHhRateByHh: new Array(n).fill(20),
+    thermalCharacterOverride: { setpoint_c: 19, thermal_mass_kj_per_k: 5000, occupancy_weights: new Array(n).fill(1), underheat_ratio: null },
+  }));
+
+  const curTemp = result.scenarios.current.indoor_temp_c;
+  assert(curTemp[11] !== null && curTemp[11] < 19, 'T24a',
+    `current.indoor_temp_c[11] < 19 after cooling (got ${curTemp[11]?.toFixed(2)})`);
+  assert(curTemp[15] !== null && curTemp[15] > curTemp[11], 'T24b',
+    `current.indoor_temp_c rises when boiler fires: T[15]=${curTemp[15]?.toFixed(2)} > T[11]=${curTemp[11]?.toFixed(2)}`);
+  const dumbAllNull = result.scenarios.dumb_hp_svt.indoor_temp_c.every(t => t === null);
+  assert(dumbAllNull, 'T24c', `dumb_hp_svt.indoor_temp_c all null (unaffected by RC trace)`);
+}
+
+// ===== T25 — Current scenario RC trace null when HTC missing =====
+{
+  const n = 48;
+  const heating = [], external = [], cop_by_hh = [];
+  for (let i = 0; i < n; i++) {
+    heating.push(hh(ts(0, i), i >= 12 && i < 16 ? 0.5 : 0));
+    external.push(ext(5));
+    cop_by_hh.push(3);
+  }
+  const result = estimateScenarioConsumption(buildInputs({
+    heating, external, cop_by_hh,
+    htc_w_per_k: null, thermal_mass_kj_per_k: 5000,
+    setpoint_c: 19, hp_capacity_kw: 10,
+    gasRateByHh: new Array(n).fill(1000),
+    elecHhRateByHh: new Array(n).fill(20),
+    thermalCharacterOverride: { setpoint_c: 19, thermal_mass_kj_per_k: 5000, occupancy_weights: new Array(n).fill(1), underheat_ratio: null },
+  }));
+
+  const allNull = result.scenarios.current.indoor_temp_c.every(t => t === null);
+  assert(allNull, 'T25a', `current.indoor_temp_c all null when HTC=null`);
+  assert(result.scenarios.dumb_hp_svt.elec_kwh.some(v => v !== null && v > 0), 'T25b',
+    `Dumb scenarios still computed when HTC=null`);
+}
+
+// ===== T26 — Rate array fix: D×W+P avoids peak vs flat rate =====
+// D×W+P: 16p in slots 0–31 and 38–47; 28p in slots 32–37 (peak).
+// Flat: 16p everywhere. Storage-constrained so pre-heat allocation actually differs.
+{
+  const n = 48;
+  const heating = [], external = [], cop_by_hh = [];
+  for (let i = 0; i < n; i++) {
+    heating.push(hh(ts(0, i), 0.3));
+    external.push(ext(5));
+    cop_by_hh.push(3);
+  }
+
+  const flatRates = new Array(n).fill(16);
+  const peakRates = new Array(n).fill(16);
+  for (let i = 32; i < 38; i++) peakRates[i] = 28;
+
+  const rFlat = estimateScenarioConsumption(buildInputs({
+    heating, external, cop_by_hh,
+    htc_w_per_k: 200, thermal_mass_kj_per_k: 5000,
+    setpoint_c: 19, hp_capacity_kw: 10,
+    gasRateByHh: new Array(n).fill(1000),
+    elecHhRateByHh: flatRates,
+    thermalCharacterOverride: { setpoint_c: 19, thermal_mass_kj_per_k: 5000, occupancy_weights: new Array(n).fill(1), underheat_ratio: null },
+  }));
+  const rPeak = estimateScenarioConsumption(buildInputs({
+    heating, external, cop_by_hh,
+    htc_w_per_k: 200, thermal_mass_kj_per_k: 5000,
+    setpoint_c: 19, hp_capacity_kw: 10,
+    gasRateByHh: new Array(n).fill(1000),
+    elecHhRateByHh: peakRates,
+    thermalCharacterOverride: { setpoint_c: 19, thermal_mass_kj_per_k: 5000, occupancy_weights: new Array(n).fill(1), underheat_ratio: null },
+  }));
+
+  let peakFlat = 0, peakPeak = 0;
+  for (let i = 32; i < 38; i++) {
+    peakFlat += (rFlat.scenarios.smart_hp_hh.elec_kwh[i] ?? 0) * 3;
+    peakPeak += (rPeak.scenarios.smart_hp_hh.elec_kwh[i] ?? 0) * 3;
+  }
+  assert(peakPeak < peakFlat, 'T26',
+    `D×W+P: peak-slot thermal lower with premium than flat (peakPeak=${peakPeak.toFixed(4)}, peakFlat=${peakFlat.toFixed(4)})`);
 }
 
 // ===== Summary =====
