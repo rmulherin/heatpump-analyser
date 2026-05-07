@@ -2170,7 +2170,8 @@ methodology section below. The figures in the tables are rough estimates only.`;
     verdictStatus.innerHTML = '';
   }
 
-  // Step 16g — scenario bar chart
+  // Step 16g — reveal verdict card before chart init so Chart.js can measure the canvas
+  verdictCard.classList.remove('hidden');
   if (verdictChart) verdictChart.destroy();
 
   const scenarioOrder = ['current', 'dumb_hp_svt', 'dumb_hp_hh', 'smart_hp_hh'];
@@ -2216,9 +2217,6 @@ methodology section below. The figures in the tables are rough estimates only.`;
       },
     },
   });
-
-  // Step 16h — reveal verdict card
-  verdictCard.classList.remove('hidden');
 
   // Step 16i — drove tile
   populateDroveTile(financialResult, heatLossResult, rateMetadata, primaryKey);
