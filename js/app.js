@@ -127,7 +127,9 @@ const THERMAL_MASS_RATING_LABELS = {
   very_high: 'Very high (solid stone, large Victorian, concrete)',
 };
 
-let verdictChart = null;
+let verdictChart  = null;
+let chartDispatch = null;
+let chartTemp     = null;
 
 // ===== DOM References =====
 const apiKeyInput = document.getElementById('api-key');
@@ -221,6 +223,16 @@ const pricingCard        = document.getElementById('pricing-card');
 const pricingResults     = document.getElementById('pricing-results');
 const pricingStatus      = document.getElementById('pricing-status');
 const pricingSummary     = document.getElementById('pricing-summary');
+
+// Day-view chart section
+const dayViewSection      = document.getElementById('day-view-section');
+const dayPicker           = document.getElementById('day-picker');
+const dayViewNoData       = document.getElementById('day-view-no-data');
+const dayViewTiles        = document.getElementById('day-view-tiles');
+const dispatchNote        = document.getElementById('dispatch-note');
+const tempNote            = document.getElementById('temp-note');
+const chartDispatchCanvas = document.getElementById('chart-dispatch');
+const chartTempCanvas     = document.getElementById('chart-temp');
 
 // Verdict card DOM references
 const verdictCard      = document.getElementById('verdict-card');
@@ -2231,6 +2243,7 @@ methodology section below. The figures in the tables are rough estimates only.`;
 
   // Step 16g — reveal verdict card before chart init so Chart.js can measure the canvas
   verdictCard.classList.remove('hidden');
+  setupDayViewCharts();
   if (verdictChart) verdictChart.destroy();
 
   const scenarioOrder = ['current', 'dumb_hp_svt', 'dumb_hp_hh', 'smart_hp_hh'];
@@ -2607,6 +2620,275 @@ gasSplitSlider.addEventListener('input', () => {
   const hw = parseInt(gasSplitSlider.value);
   gasSplitDisplay.textContent = `${hw}% hot water · ${100 - hw}% other`;
   updateQuotesOutput();
+});
+
+// ===== Day-view charts =====
+
+function selectDefaultDay(heating) {
+  const byDay = {};
+  for (const h of heating) {
+    const d = h.timestamp.slice(0, 10);
+    if (byDay[d] === undefined) byDay[d] = 0;
+    if (h.heating_kwh != null) byDay[d] += h.heating_kwh;
+  }
+  const winterDays = Object.entries(byDay)
+    .map(([date, total]) => ({ date, total }))
+    .filter(({ date, total }) => {
+      const month = parseInt(date.slice(5, 7), 10);
+      return (month >= 10 || month <= 3) && total > 0;
+    })
+    .sort((a, b) => a.total - b.total);
+  const idx = Math.floor(winterDays.length * 0.6);
+  return winterDays[idx]?.date ?? heating[0].timestamp.slice(0, 10);
+}
+
+function getIndicesForDay(heating, dateStr) {
+  const indices = [];
+  for (let i = 0; i < heating.length; i++) {
+    if (heating[i].timestamp.slice(0, 10) === dateStr) indices.push(i);
+  }
+  return indices;
+}
+
+function generateHhLabels(n) {
+  return Array.from({ length: n }, (_, i) => {
+    const hh = String(Math.floor(i / 2)).padStart(2, '0');
+    const mm = (i % 2) ? '30' : '00';
+    return `${hh}:${mm}`;
+  });
+}
+
+function createDispatchChart(canvas) {
+  return new Chart(canvas.getContext('2d'), {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [
+        {
+          label: 'Current (gas)',
+          yAxisID: 'y-energy',
+          data: [],
+          borderColor: '#FD7A7F',
+          backgroundColor: 'rgba(253, 122, 127, 0.25)',
+          fill: 'origin',
+          borderWidth: 1,
+          pointRadius: 0,
+          tension: 0.2,
+        },
+        {
+          label: 'Smart HP (electricity)',
+          yAxisID: 'y-energy',
+          data: [],
+          borderColor: '#3B8284',
+          backgroundColor: 'rgba(59, 130, 132, 0.25)',
+          fill: 'origin',
+          borderWidth: 1,
+          pointRadius: 0,
+          tension: 0.2,
+        },
+        {
+          label: 'Gas rate',
+          yAxisID: 'y-price',
+          data: [],
+          borderColor: '#FD7A7F',
+          backgroundColor: 'transparent',
+          fill: false,
+          borderWidth: 2.5,
+          pointRadius: 0,
+          tension: 0.3,
+        },
+        {
+          label: 'HH electricity rate',
+          yAxisID: 'y-price',
+          data: [],
+          borderColor: '#3B8284',
+          backgroundColor: 'transparent',
+          fill: false,
+          borderWidth: 2.5,
+          pointRadius: 0,
+          tension: 0.3,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: true },
+        tooltip: { mode: 'index', intersect: false },
+      },
+      scales: {
+        x: {
+          ticks: {
+            callback: (val, i) => (i % 4 === 0 ? generateHhLabels(48)[i] ?? '' : ''),
+            maxRotation: 0,
+          },
+        },
+        'y-price': {
+          type: 'linear',
+          position: 'left',
+          min: 0,
+          title: { display: true, text: 'p / kWh' },
+          grid: { display: true },
+        },
+        'y-energy': {
+          type: 'linear',
+          position: 'right',
+          min: 0,
+          title: { display: true, text: 'kWh' },
+          grid: { display: false },
+        },
+      },
+    },
+  });
+}
+
+function createTempChart(canvas) {
+  return new Chart(canvas.getContext('2d'), {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [
+        {
+          label: 'Outdoor',
+          data: [],
+          borderColor: '#94A3B8',
+          backgroundColor: 'transparent',
+          fill: false,
+          borderWidth: 1.5,
+          borderDash: [6, 3],
+          pointRadius: 0,
+          tension: 0.3,
+        },
+        {
+          label: 'Current (estimated)',
+          data: [],
+          borderColor: '#FD7A7F',
+          backgroundColor: 'transparent',
+          fill: false,
+          borderWidth: 2,
+          pointRadius: 0,
+          tension: 0.3,
+        },
+        {
+          label: 'Smart HP (estimated)',
+          data: [],
+          borderColor: '#3B8284',
+          backgroundColor: 'transparent',
+          fill: false,
+          borderWidth: 2,
+          pointRadius: 0,
+          tension: 0.3,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: true },
+        tooltip: { mode: 'index', intersect: false },
+      },
+      scales: {
+        x: {
+          ticks: {
+            callback: (val, i) => (i % 4 === 0 ? generateHhLabels(48)[i] ?? '' : ''),
+            maxRotation: 0,
+          },
+        },
+        y: {
+          title: { display: true, text: '°C' },
+          afterDataLimits(scale) {
+            scale.max += 2;
+            scale.min -= 2;
+          },
+        },
+      },
+    },
+  });
+}
+
+function renderDayViewDay(dateStr) {
+  const heating   = getBaseloadResult().heating;
+  const external  = getExternalResult().external;
+  const scenarios = getScenarioConsumptionResult().scenarios;
+  const valStatus = getScenarioConsumptionResult().validation_status;
+  const rateMeta  = getRateMetadata();
+
+  const indices = getIndicesForDay(heating, dateStr);
+
+  const allNull = indices.length === 0
+    || indices.every(i => heating[i].heating_kwh === null);
+
+  dayViewNoData.classList.toggle('hidden', !allNull);
+  dayViewTiles.classList.toggle('hidden', allNull);
+  if (allNull) return;
+
+  const labels      = generateHhLabels(indices.length);
+  const currentGas  = indices.map(i => scenarios.current.gas_kwh[i] ?? null);
+  const smartElec   = indices.map(i => scenarios.smart_hp_hh.elec_kwh[i] ?? null);
+  const gasRate     = indices.map(i => rateMeta.gas_rate_by_hh[i] ?? null);
+  const elecRate    = indices.map(i => rateMeta.elec_hh_rate_by_hh[i] ?? null);
+  const outdoorTemp = indices.map(i => external[i]?.temp_c ?? null);
+  const currentTemp = indices.map(i => scenarios.current.indoor_temp_c[i] ?? null);
+  const smartTemp   = indices.map(i => scenarios.smart_hp_hh.indoor_temp_c[i] ?? null);
+
+  chartDispatch.data.labels           = labels;
+  chartDispatch.data.datasets[0].data = currentGas;
+  chartDispatch.data.datasets[1].data = smartElec;
+  chartDispatch.data.datasets[2].data = gasRate;
+  chartDispatch.data.datasets[3].data = elecRate;
+  chartDispatch.update();
+
+  const smartElecAvail = smartElec.some(v => v !== null);
+  dispatchNote.textContent = smartElecAvail ? '' : 'Smart HP dispatch not available — thermal mass data required.';
+  dispatchNote.classList.toggle('hidden', smartElecAvail);
+
+  chartTemp.data.labels           = labels;
+  chartTemp.data.datasets[0].data = outdoorTemp;
+  chartTemp.data.datasets[1].data = currentTemp;
+  chartTemp.data.datasets[2].data = smartTemp;
+
+  const currentTempAvail = currentTemp.some(v => v !== null);
+  const smartTempAvail   = valStatus.smart === 'ok' || valStatus.smart === 'hp_undersized';
+
+  chartTemp.setDatasetVisibility(1, currentTempAvail);
+  chartTemp.setDatasetVisibility(2, smartTempAvail);
+  chartTemp.update();
+
+  const noteParts = [];
+  if (!currentTempAvail) {
+    noteParts.push('Building temperature model not available — enter thermal data manually.');
+  }
+  if (!smartTempAvail) {
+    noteParts.push('Smart HP temperature not available — thermal mass data required.');
+  }
+  tempNote.textContent = noteParts.join(' ');
+  tempNote.classList.toggle('hidden', noteParts.length === 0);
+}
+
+function setupDayViewCharts() {
+  const heating = getBaseloadResult()?.heating;
+  if (!heating || !getScenarioConsumptionResult() || !getRateMetadata()) return;
+
+  dayViewSection.classList.remove('hidden');
+
+  dayPicker.min = heating[0].timestamp.slice(0, 10);
+  dayPicker.max = heating[heating.length - 1].timestamp.slice(0, 10);
+
+  if (!chartDispatch || !chartTemp) {
+    dayPicker.value = selectDefaultDay(heating);
+    chartDispatch = createDispatchChart(chartDispatchCanvas);
+    chartTemp     = createTempChart(chartTempCanvas);
+  }
+
+  renderDayViewDay(dayPicker.value || heating[0].timestamp.slice(0, 10));
+}
+
+dayPicker.addEventListener('change', () => {
+  if (chartDispatch && chartTemp) {
+    renderDayViewDay(dayPicker.value);
+  }
 });
 
 // ===== CSV Helpers =====

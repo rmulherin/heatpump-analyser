@@ -668,4 +668,4 @@ Verdict: ⚠ APPROVED WITH EDITS — both HIGH issues resolved inline; MEDIUM it
 
 ## Implementation Deviations
 
-*(To be completed after implementation.)*
+**D1 — `tempCaveat` DOM ref removed.** Plan Step 3 declared `const tempCaveat = document.getElementById('temp-caveat')` but `renderDayViewDay` never references it — `#temp-caveat` is always visible and requires no JS toggling. Ref removed as dead code. No behavioural change.

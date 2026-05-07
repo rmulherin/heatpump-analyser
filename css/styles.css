@@ -716,3 +716,43 @@ details[open] .methodology-summary::before {
 .status-summary::-webkit-details-marker { display: none; }
 .status-summary::before { content: '▶ '; font-size: 0.75rem; }
 details[open] .status-summary::before { content: '▼ '; }
+
+/* ===== Day-view charts ===== */
+
+.day-view-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.day-view-header h2 {
+  margin: 0;
+}
+
+.day-view-chart-wrap {
+  position: relative;
+}
+
+.day-view-chart-wrap canvas {
+  height: 280px;
+}
+
+.chart-note {
+  font-size: 0.8rem;
+  color: #666;
+  font-style: italic;
+  margin-top: 0.5rem;
+}
+
+@media (max-width: 768px) {
+  .day-view-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+
+  .day-view-header input[type="date"] {
+    width: 100%;
+  }
+}

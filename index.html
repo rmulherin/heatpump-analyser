@@ -421,6 +421,34 @@
       </div>
     </section>
 
+    <!-- Day-view charts -->
+    <section id="day-view-section" class="hidden">
+      <div class="day-view-header">
+        <h2>A typical day</h2>
+        <input type="date" id="day-picker">
+      </div>
+      <p id="day-view-no-data" class="status-msg info hidden">No heating data for this day.</p>
+      <div class="section-tiles" id="day-view-tiles">
+        <div class="card">
+          <h3>When the heating ran</h3>
+          <div class="day-view-chart-wrap">
+            <canvas id="chart-dispatch"></canvas>
+          </div>
+          <p class="chart-note hidden" id="dispatch-note"></p>
+        </div>
+        <div class="card">
+          <h3>Indoor temperature</h3>
+          <div class="day-view-chart-wrap">
+            <canvas id="chart-temp"></canvas>
+          </div>
+          <p class="chart-note" id="temp-caveat">Temperature traces are estimated from your
+            building's thermal model. Accuracy improves with
+            <a href="#methodology-disclosure">manual thermal data</a>.</p>
+          <p class="chart-note hidden" id="temp-note"></p>
+        </div>
+      </div>
+    </section>
+
     <!-- Section 5: What If -->
     <div class="section-banner hidden" id="section-banner-what-if">
       <h2 class="section-heading">What If</h2>
