@@ -222,16 +222,19 @@ All tests below are ⏳ Not yet run. These supersede the 2026-04-27 outstanding 
 
 ### smart-scenario-fixes-1 — Phase 3 (M10 UI / underheat panel)
 
+> **Blocked on smart-HP redesign + Bug 3** — all SF tests should run after the redesign lands. SF2, SF3, SF5 specifically flagged for re-specification before running.
+
 Browser / real data (Rhiannon's Octopus account).
 
 | ID | Description | Result | Notes |
 |----|-------------|--------|-------|
-| SF1 | `#scenario-controls` absent from page — no pre-heat offset slider or occupancy threshold input | ⏳ | Pre-heat/occupancy sliders removed in Phase 2 |
-| SF2 | Underheating sub-panel (`#underheat-card`) renders inside Your Home after pipeline run; traffic-light dot visible | ⏳ | Rhiannon's data expected: `underheat_ratio > 0` if SP setpoint inference < actual occupant setpoint |
-| SF3 | Heat to Comfort slider triggers M7→M8→M9→verdict re-run; visible cost/payback values change; no console errors | ⏳ | Slider only shown when `underheat_ratio != null` |
-| SF4 | `hp_undersized` warning appears under scenario comparison when `validation_status.smart === 'hp_undersized'` | ⏳ | May not trigger on Rhiannon's data if HP is well-sized |
-| SF5 | Smart HP total cost < Dumb HP (HH) total cost on Rhiannon's data (strict inequality) | ⏳ | Pre-launch validation gate — hard halt if this fails |
-| SF6 | No console errors during full pipeline run including Heat to Comfort slider re-run | ⏳ | |
+| SF1 | `#scenario-controls` absent from page — no pre-heat offset slider or occupancy threshold input | ⏳ | Pre-heat/occupancy sliders removed in Phase 2; likely still valid after redesign |
+| SF2 | Underheating sub-panel (`#underheat-card`) renders inside Your Home after pipeline run; traffic-light dot visible | ⏳ | ⚠ Review after smart-HP redesign — new dispatch uses cumulative storage constraint, not underheat ratio; UI surface needs re-confirmation before running |
+| SF3 | Heat to Comfort slider triggers M7→M8→M9→verdict re-run; visible cost/payback values change; no console errors | ⏳ | ⚠ Review after smart-HP redesign — slider is demandScale knob; redesign adds mandatory ΔT_max flow-through (see SF7 below) |
+| SF4 | `hp_undersized` warning appears under scenario comparison when `validation_status.smart === 'hp_undersized'` | ⏳ | May not trigger on Rhiannon's data if HP is well-sized; likely still valid after redesign |
+| SF5 | Smart HP total cost < Dumb HP (HH) total cost on Rhiannon's data (strict inequality) | ⏳ | ⚠ Review after smart-HP redesign — new design enforces Smart ≤ Dumb by construction (T6 in design doc); runtime gate may become redundant |
+| SF6 | No console errors during full pipeline run including Heat to Comfort slider re-run | ⏳ | Likely still valid after redesign |
+| SF7 | ΔT_max flow-through: changing ΔT_max slider triggers M7→M8→M9→verdict re-run; cost/payback values change independently of demandScale | ⏳ | New — missing from original Phase 3 spec; T8 in revised design doc; add after redesign lands |
 
 ---
 
@@ -267,7 +270,7 @@ Browser / real data. All pricing and financial cards affected.
 | UF1-2 | Progress bar fill animates as Elexon chunks complete | ⏳ | Visual bar moves, not just text |
 | UF1-3 | Methodology DLs render in two columns (label left, value right) | ⏳ | |
 | UF1-4 | BUS-eligibility note appears below the financial table | ⏳ | Text from plan; no change to grant figures |
-| UF1-5 | When smart scenarios unavailable but HH dumb available: amber status line + "Provide that input ↓" link | ⏳ | May not trigger on Rhiannon's data if M5b produces thermal mass |
+| UF1-5 | When smart scenarios unavailable but HH dumb available: amber status line + "Provide that input ↓" link | ⏳ | Blocked on Bug 3 (smart-HP redesign) — verdict status surface may change; run after redesign lands |
 | UF1-6 | Clicking "Provide that input ↓" link: opens methodology disclosure, scrolls to thermal char card, focuses first-empty M5b input, applies 1.5s highlight | ⏳ | |
 | UF1-7 | When all data good: no status line in verdict card | ⏳ | |
 | UF1-8 | No console errors | ⏳ | |
@@ -296,14 +299,16 @@ Browser / real data. All pricing and financial cards affected.
 | AC1 | Octopus path: `ingestionResult.gsp_region` is a single letter A–P (not I or O); visible in Data Input card | ⏳ | Rhiannon's meter is in London — expect `C` |
 | AC2 | Octopus path: read-only region display shown in Octopus card (no dropdown) | ⏳ | |
 | AC3 | CSV path: region `<select>` visible; selecting "London" produces `gsp_region = 'C'` | ⏳ | |
-| AC4 | `agile_calibration.D` in range 2.0–2.4 on real data | ⏳ | Same as MP10 — verify both here and in devtools |
-| AC5 | `agile_calibration.P_peak_p_kwh` in range 8–16 on real data | ⏳ | |
-| AC6 | `calibration_period` in external metadata reflects most recent completed post-reform month | ⏳ | April 2026 partial month: expect "(partial)" suffix |
+| AC4 | `agile_calibration.D` in range 2.0–2.4 on real data | 🚫 | Duplicate of MP10 — run MP10 instead |
+| AC5 | `agile_calibration.P_peak_p_kwh` in range 8–16 on real data | 🚫 | Duplicate of MP11 — run MP11 instead |
+| AC6 | `calibration_period` in external metadata reflects most recent completed post-reform month | ⏳ | As of 2026-05-07: April 2026 is a fully completed month — expect `2026-04` with no "(partial)" suffix |
 | AC7 | No new console errors on normal (successful) path | ⏳ | |
 
 ---
 
 ### ui-design-m10b — browser tests
+
+> **Blocked on Bug 1 (chart-rendering fix)** — tile layout and bar chart sizing both depend on the chart rendering correctly; run all M10B tests after Bug 1 lands.
 
 | ID | Description | Result | Notes |
 |----|-------------|--------|-------|
@@ -324,6 +329,8 @@ Browser / real data. All pricing and financial cards affected.
 ---
 
 ### ui-design-m10c-what-if — browser tests
+
+> **Blocked on Bug 2 (.hidden specificity fix)** — What If section visibility depends on Bug 2's CSS fix; running before it lands just retests the known bug.
 
 | ID | Description | Result | Notes |
 |----|-------------|--------|-------|
@@ -358,21 +365,21 @@ Implemented 2026-04-28 (commit 9d31cd3). Browser / real data.
 |----|-------------|--------|-------|
 | M10A1 | Verdict card appears above "Your home" section after analysis completes | ⏳ | |
 | M10A2 | Verdict copy correctly identifies primary scenario; second paragraph appears when `smart_hp_hh` is primary and `dumb_hp_svt` also available | ⏳ | |
-| M10A3 | All available scenarios appear as bars; scenarios with null `annual_cost_gbp` absent | ⏳ | |
-| M10A4 | Current-boiler bar is navy; HP bars are teal (positive saving) or coral (negative saving) | ⏳ | |
-| M10A5 | Chart tooltip shows `£X/yr` on hover | ⏳ | |
+| M10A3 | All available scenarios appear as bars; scenarios with null `annual_cost_gbp` absent | ⏳ | Blocked on Bug 1 (chart-rendering fix) |
+| M10A4 | Current-boiler bar is navy; HP bars are teal (positive saving) or coral (negative saving) | ⏳ | Blocked on Bug 1 (chart-rendering fix) |
+| M10A5 | Chart tooltip shows `£X/yr` on hover | ⏳ | Blocked on Bug 1 (chart-rendering fix) |
 | M10A6 | Clicking "Show methodology" reveals four technical cards; clicking again collapses them | ⏳ | |
 | M10A7 | Four technical cards remain accessible inside closed disclosure | ⏳ | |
-| M10A8 | Section banners appear at correct pipeline moments: "Your home" with results-card, "The verdict" and "Adjust the assumptions" with pricing-card | ⏳ | Superseded by m10b/"Cost breakdown" rename — verify current banner text |
+| M10A8 | Section banners appear at correct pipeline moments: "Your home" with results-card, "The verdict" and "Adjust the assumptions" with pricing-card | 🚫 | Stale — banner renamed "Cost breakdown" by m10b; "Adjust the assumptions" replaced by What If (m10c); current banner check is M10B8 |
 | M10A9 | Removed DL rows (validation status, days used, boiler efficiency, etc.) absent from all three technical cards | ⏳ | |
 | M10A10 | Scenario labels consistent across pricing table, financial table, and scenario consumption table | ⏳ | |
 | M10A11 | Financial table column headers: "Annual saving", "Net cost (after grant)", "Payback period" | ⏳ | |
-| M10A12 | Cooling note hidden when avoided AC > £0; not shown at all post-ui-fixes-2 cooling-note removal | ⏳ | ui-fixes-2 removed cooling note entirely |
+| M10A12 | Cooling note hidden when avoided AC > £0; not shown at all post-ui-fixes-2 cooling-note removal | 🚫 | Stale — ui-fixes-2 removed cooling note entirely; covered by UF2-6 and UF2-7 |
 | M10A13 | Data-quality footnote reflects correct R² band | ⏳ | |
-| M10A14 | No Chart.js console errors; no JS console errors | ⏳ | |
-| M10A15 | Chart readable at 375px — bars visible, y-axis labels legible | ⏳ | |
+| M10A14 | No Chart.js console errors; no JS console errors | ⏳ | Blocked on Bug 1 (chart-rendering fix) |
+| M10A15 | Chart readable at 375px — bars visible, y-axis labels legible | ⏳ | Blocked on Bug 1 (chart-rendering fix) |
 | M10A16 | Body text in Roboto; headings and buttons in Montserrat (confirm in DevTools) | ⏳ | |
-| M10A17 | Pricing-params and financial-params cards appear below pricing-card and financial-card | ⏳ | Superseded by m10c What If section — verify current page structure |
+| M10A17 | Pricing-params and financial-params cards appear below pricing-card and financial-card | 🚫 | Stale — m10c replaced params-card area with What If section; page structure entirely different |
 
 ---
 
