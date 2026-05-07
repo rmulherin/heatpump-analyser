@@ -1,7 +1,7 @@
 # UI — Day-View Two-Tile Charts
 
 **Date:** 2026-05-07
-**Status:** Awaiting approval — review via claude.ai before implementation begins.
+**Status:** ⚠ Approved with edits — 2026-05-07. Implementation may begin once `m7-scenario-consumption-revised` is implemented.
 
 ---
 
@@ -182,6 +182,8 @@ const dayViewTiles     = document.getElementById('day-view-tiles');
 const dispatchNote     = document.getElementById('dispatch-note');
 const tempCaveat       = document.getElementById('temp-caveat');
 const tempNote         = document.getElementById('temp-note');
+const chartDispatchCanvas = document.getElementById('chart-dispatch');
+const chartTempCanvas     = document.getElementById('chart-temp');
 ```
 
 Add module-level chart variables immediately after (or near existing `let verdictChart`
@@ -473,6 +475,11 @@ function renderDayViewDay(dateStr) {
   chartDispatch.data.datasets[3].data = elecRate;
   chartDispatch.update();
 
+  // Dispatch note: shown when smart HP dispatch is unavailable (all elec_kwh null)
+  const smartElecAvail = smartElec.some(v => v !== null);
+  dispatchNote.textContent = smartElecAvail ? '' : 'Smart HP dispatch not available — thermal mass data required.';
+  dispatchNote.classList.toggle('hidden', smartElecAvail);
+
   // Update temp chart
   chartTemp.data.labels           = labels;
   chartTemp.data.datasets[0].data = outdoorTemp;
@@ -525,8 +532,8 @@ function setupDayViewCharts() {
   if (!chartDispatch || !chartTemp) {
     // First call: select default day and create chart instances
     dayPicker.value = selectDefaultDay(heating);
-    chartDispatch = createDispatchChart(document.getElementById('chart-dispatch'));
-    chartTemp     = createTempChart(document.getElementById('chart-temp'));
+    chartDispatch = createDispatchChart(chartDispatchCanvas);
+    chartTemp     = createTempChart(chartTempCanvas);
   }
 
   renderDayViewDay(dayPicker.value || heating[0].timestamp.slice(0, 10));
@@ -539,25 +546,8 @@ Notes:
 - Charts are created only once: if `chartDispatch` is already set (subsequent calls via
   What If recalculation), skip creation and just re-render. What If recalculations don't
   change scenario or rate data, so the chart data is unchanged — the render call is fast.
-- Uses `document.getElementById` for canvas elements (rather than module-level const) to
-  avoid requiring the DOM refs to be declared earlier than this function. Alternatively,
-  use the module-level consts from Step 3 — either is fine; the Step 3 approach is
-  cleaner and consistent with project patterns. **Clarification note:** Step 3 adds
-  `chartDispatchCanvas` and `chartTempCanvas` as module-level consts; use those here
-  to stay consistent.
-
-Revised canvas refs (using consts from Step 3):
-
-```js
-    chartDispatch = createDispatchChart(chartDispatchCanvas);
-    chartTemp     = createTempChart(chartTempCanvas);
-```
-
-Add to Step 3 DOM refs:
-```js
-const chartDispatchCanvas = document.getElementById('chart-dispatch');
-const chartTempCanvas     = document.getElementById('chart-temp');
-```
+- Canvas refs `chartDispatchCanvas` and `chartTempCanvas` are declared as module-level
+  consts in Step 3.
 
 ---
 
@@ -581,8 +571,7 @@ but defensive).
 
 ### Step 12 — `js/app.js`: wire into `buildAndDisplayVerdict`
 
-In `buildAndDisplayVerdict`, immediately after `verdictCard.classList.remove('hidden')`
-(currently at line ~2174), add:
+In `buildAndDisplayVerdict`, immediately after `verdictCard.classList.remove('hidden')`, add:
 
 ```js
   setupDayViewCharts();
@@ -624,28 +613,56 @@ chart creation, and initial render are all handled inside `setupDayViewCharts`.
 
 ---
 
-## Claude.ai Review — yyyy-mm-dd
+## Design Review
 
-**Reviewer:** Claude (claude.ai)
+**Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Date:** 2026-05-07
+**Review type:** Plan review (pre-implementation)
+**Authoritative design:** `praxis-claude-hub/projects/tools/heatpump-analyser/design/ui-day-view-charts.md`
 
-**Overall verdict:** [Approved / Approved with clarifications / Revise and resubmit]
+### Context
 
-### What is solid
-[What the plan gets right. Be specific.]
+Plan submitted for the day-view two-tile chart section that sits between `financial-card` and the What If section. Reviewed against the parent design doc (committed `b8371e7`) and the `m7-scenario-consumption-revised` plan (approved `aea62ed`, implementation underway). Read-only Explore sub-agent dispatched to verify two specific codebase claims (getter names and rate-array index parity); both verified clean.
 
-### Clarifications required before implementation
-[Any ambiguity, missing specification, or underdefined behaviour that would force
-Claude Code to make an undocumented decision mid-build. Each item must include
-the resolution — not just the problem.]
+### Required changes for implementation
 
-### Minor observations (not blockers)
-[Optional. Suggestions for V2, style notes, things to keep in mind.]
+**1. Step 10 canvas refs reconciled with Step 3.** Original plan had `setupDayViewCharts` using `document.getElementById('chart-dispatch')` / `'chart-temp'` inline, followed by a trailing "Clarification note" instructing the implementer to instead use module-level consts that the plan never declared in Step 3. Two competing instructions for the same code path forced the implementer to reconcile them. Resolved inline: canvas consts (`chartDispatchCanvas`, `chartTempCanvas`) declared in Step 3; Step 10 body uses those refs; trailing "Revised canvas refs" / "Add to Step 3 DOM refs" snippets dropped from the Notes block.
+
+**2. Dispatch-note wiring added to `renderDayViewDay`.** Original plan declared `<p id="dispatch-note">` in HTML and a `dispatchNote` DOM ref in Step 3, but never set its content or visibility — leaving the design's "Smart HP area still shown if elec_kwh non-null; otherwise omit with note" only half-implemented (the omit half worked via `?? null`; the note half was unwired). Resolved inline: data-driven check on `smartElec.some(v => v !== null)` toggles `#dispatch-note` visibility and sets text. **Note copy:** "Smart HP dispatch not available — thermal mass data required." (parallel to the right-tile temp note for the same root cause). Final copy is Rhiannon's call — adjust at approval if a different phrasing is preferred.
+
+**3. Step 12 line-number reference removed.** Plan referenced "currently at line ~2174" alongside a function-name anchor. Line numbers don't survive between sessions; the function-name anchor (`buildAndDisplayVerdict`, after `verdictCard.classList.remove('hidden')`) is durable. Hygiene edit applied.
+
+### Resolution of review changes
+
+1. **Step 10 canvas refs reconciled with Step 3** — Step 3 amended to declare `chartDispatchCanvas` / `chartTempCanvas` consts; Step 10 body uses those refs; trailing contradictory notes removed.
+2. **Dispatch-note wiring added to `renderDayViewDay`** — three-line block added after `chartDispatch.update()`, parallel to the right-tile note pattern.
+3. **Step 12 line-number reference removed** — replaced by function-name anchor only.
+
+### Items noted but not edited
+
+- **MEDIUM (verified clean) — Codebase claims.** Read-only Explore confirmed all four getters exist with the exact names the plan uses (`getBaseloadResult`, `getExternalResult`, `getScenarioConsumptionResult`, `getRateMetadata`) as exports of their respective modules, and that `gas_rate_by_hh` / `elec_hh_rate_by_hh` are 1:1 with `consumption.length` by construction (single indexed loop in `prepareRates`). No edit required; recording the verification here so future readers don't duplicate the check.
+- **MEDIUM — Dependency on `m7-scenario-consumption-revised`.** Plan correctly declares the prerequisite. M7-revised is approved (`aea62ed`) but not yet implemented. Implementation of this plan must wait. The defensive allowlist for `validation_status.smart` (`'ok'` || `'hp_undersized'`) correctly treats any other status — including all post-rename values from m7-revised — as "smart unavailable". No edit required.
+- **LOW — DST tick labels.** On 50-slot autumn days the tick callback's hardcoded `generateHhLabels(48)[i]` returns `undefined` for indices 48–49 (caught by `?? ''` → blank labels). On 46-slot spring days labels are sequential and don't reflect the missing hour. Acceptable per parent design doc ("may not align perfectly — acceptable").
+- **LOW — `setDatasetVisibility` fallback note in Risks table.** Risks row mentions a `.hidden`-property fallback even though `setDatasetVisibility` is supported in Chart.js 4 and used throughout. Surface mentioned in the risk table is a style choice, not a defect.
+
+## Review Summary
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| CRITICAL | 0     | ✓ pass |
+| HIGH     | 2     | ✅ resolved |
+| MEDIUM   | 2     | ℹ noted |
+| LOW      | 2     | — note |
+
+Verdict: ⚠ APPROVED WITH EDITS — both HIGH issues resolved inline; MEDIUM items either verified clean or correctly handled defensively; LOW items acceptable per design.
 
 ---
 
 ## Approval
 
-**Status:** *(pending review)*
+**Status:** ⚠ Approved with edits — 2026-05-07
+**Approved by:** Rhiannon (via Opus review)
+**Clarifications confirmed:** Dispatch-note copy "Smart HP dispatch not available — thermal mass data required." (parallel to right-tile temp note); implementation cannot begin until `m7-scenario-consumption-revised` is implemented and merged.
 
 ---
 
