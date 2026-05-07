@@ -308,7 +308,7 @@ Browser / real data. All pricing and financial cards affected.
 
 ### ui-design-m10b — browser tests
 
-> **Blocked on Bug 1 (chart-rendering fix)** — tile layout and bar chart sizing both depend on the chart rendering correctly; run all M10B tests after Bug 1 lands.
+> **Bug 1 fixed** (bug-fix-results-display, 2026-05-07). All M10B tests can now run.
 
 | ID | Description | Result | Notes |
 |----|-------------|--------|-------|
@@ -330,7 +330,7 @@ Browser / real data. All pricing and financial cards affected.
 
 ### ui-design-m10c-what-if — browser tests
 
-> **Blocked on Bug 2 (.hidden specificity fix)** — What If section visibility depends on Bug 2's CSS fix; running before it lands just retests the known bug.
+> **Bug 2 fixed** (bug-fix-results-display, 2026-05-07). All M10C tests can now run.
 
 | ID | Description | Result | Notes |
 |----|-------------|--------|-------|
@@ -365,9 +365,9 @@ Implemented 2026-04-28 (commit 9d31cd3). Browser / real data.
 |----|-------------|--------|-------|
 | M10A1 | Verdict card appears above "Your home" section after analysis completes | ⏳ | |
 | M10A2 | Verdict copy correctly identifies primary scenario; second paragraph appears when `smart_hp_hh` is primary and `dumb_hp_svt` also available | ⏳ | |
-| M10A3 | All available scenarios appear as bars; scenarios with null `annual_cost_gbp` absent | ⏳ | Blocked on Bug 1 (chart-rendering fix) |
-| M10A4 | Current-boiler bar is navy; HP bars are teal (positive saving) or coral (negative saving) | ⏳ | Blocked on Bug 1 (chart-rendering fix) |
-| M10A5 | Chart tooltip shows `£X/yr` on hover | ⏳ | Blocked on Bug 1 (chart-rendering fix) |
+| M10A3 | All available scenarios appear as bars; scenarios with null `annual_cost_gbp` absent | ⏳ | |
+| M10A4 | Current-boiler bar is navy; HP bars are teal (positive saving) or coral (negative saving) | ⏳ | |
+| M10A5 | Chart tooltip shows `£X/yr` on hover | ⏳ | |
 | M10A6 | Clicking "Show methodology" reveals four technical cards; clicking again collapses them | ⏳ | |
 | M10A7 | Four technical cards remain accessible inside closed disclosure | ⏳ | |
 | M10A8 | Section banners appear at correct pipeline moments: "Your home" with results-card, "The verdict" and "Adjust the assumptions" with pricing-card | 🚫 | Stale — banner renamed "Cost breakdown" by m10b; "Adjust the assumptions" replaced by What If (m10c); current banner check is M10B8 |
@@ -376,8 +376,8 @@ Implemented 2026-04-28 (commit 9d31cd3). Browser / real data.
 | M10A11 | Financial table column headers: "Annual saving", "Net cost (after grant)", "Payback period" | ⏳ | |
 | M10A12 | Cooling note hidden when avoided AC > £0; not shown at all post-ui-fixes-2 cooling-note removal | 🚫 | Stale — ui-fixes-2 removed cooling note entirely; covered by UF2-6 and UF2-7 |
 | M10A13 | Data-quality footnote reflects correct R² band | ⏳ | |
-| M10A14 | No Chart.js console errors; no JS console errors | ⏳ | Blocked on Bug 1 (chart-rendering fix) |
-| M10A15 | Chart readable at 375px — bars visible, y-axis labels legible | ⏳ | Blocked on Bug 1 (chart-rendering fix) |
+| M10A14 | No Chart.js console errors; no JS console errors | ⏳ | |
+| M10A15 | Chart readable at 375px — bars visible, y-axis labels legible | ⏳ | |
 | M10A16 | Body text in Roboto; headings and buttons in Montserrat (confirm in DevTools) | ⏳ | |
 | M10A17 | Pricing-params and financial-params cards appear below pricing-card and financial-card | 🚫 | Stale — m10c replaced params-card area with What If section; page structure entirely different |
 
@@ -697,3 +697,85 @@ These require Rhiannon to paste synthetic JS into browser DevTools after a full 
 | AR-S3b | Inject `null_wholesale_fraction=0.26` → HH scenarios insufficient: em-dashes in pricing + financial; verdict falls back to `dumb_hp_svt`; bar chart omits HH bars; sensitivity grid excludes HH; drove tile reflects SVT primary | ⏳ | |
 | AR-S3c | Inject off-peak-heavy heating scenario (02:00–06:00 concentration) → unusual-result panel fires with legitimate-result framing | ⏳ | |
 | AR-S3d | Patch `OFGEM_CAP_ELEC_P_KWH=30.0` → plausibility floor automatically becomes 25.5; no other code changes needed | ⏳ | |
+
+---
+
+## 2026-05-07 — Node test suites: full re-run after m7-scenario-consumption-revised
+
+**Environment:** Windows 11, Node v24.
+
+`test-m7.mjs` grew from 25/25 to 39/39 — 14 new assertions (T11a–d through T26) added by m7-scenario-consumption-revised covering: `no_thermal_mass` validation status, `current.gas_kwh` / `elec_kwh` identity invariants, `dumb_hp_svt === dumb_hp_hh` object identity, DST day handling, partial validation, Smart ≤ Dumb invariant, budget conservation, `hp_undersized`, storage constraint (`S_max`), ΔT_max flow-through, absence exclusion, τ-based survival filter, `current.indoor_temp_c` RC trace, and D×W+P rate model in greedy dispatch.
+
+| Suite | Assertions | Result | Notes |
+|-------|-----------|--------|-------|
+| test-m3-step-f.mjs | 18/18 | ✅ | Unchanged |
+| test-m5.mjs | 39/39 | ✅ | Unchanged |
+| test-m5b.mjs | 29/29 | ✅ | Unchanged |
+| test-m6.mjs | 24/24 | ✅ | Unchanged |
+| test-m7.mjs | 39/39 | ✅ | Grew from 25/25; T11a–T26 added for m7-scenario-consumption-revised |
+| test-m8.mjs | 24/24 | ✅ | Unchanged |
+| test-m9.mjs | 24/24 | ✅ | Unchanged |
+
+### test-m7.mjs — new assertions T11a–T26 (m7-scenario-consumption-revised)
+
+| ID | Description | Result |
+|----|-------------|--------|
+| T11a | `validation.smart = 'no_thermal_mass'` when thermal_mass=null | ✅ |
+| T11b | Smart `elec_kwh[0]` null when thermal_mass=null | ✅ |
+| T11c | Smart gas_kwh and elec_kwh all null when thermal_mass=null | ✅ |
+| T11d | Dumb scenarios computed even when thermal_mass=null | ✅ |
+| T12a | `current.gas_kwh[i] === heating_kwh[i]` for all i | ✅ |
+| T12b | `current.elec_kwh[i] === 0` (or null when heating_kwh=null) | ✅ |
+| T13 | `dumb_hp_svt === dumb_hp_hh` (object identity) | ✅ |
+| T14a | 47-HH (DST) day: all smart gas/elec = 0 | ✅ |
+| T14b | Day 0 (48 HH) allocated | ✅ |
+| T14c | Day 2 (48 HH after DST gap) allocated | ✅ |
+| T15 | `validation.dumb = 'partial'` at 8% null COP | ✅ |
+| T16 | Smart ≤ Dumb invariant (smart=57.60p, dumb=172.80p) | ✅ |
+| T17 | Budget conservation: `|Σq_thermal − B_d| < 0.01` | ✅ |
+| T18a | `validation.smart = 'hp_undersized'` when cap exhausted | ✅ |
+| T18b | `hp_undersized` warning surfaced | ✅ |
+| T19 | Storage constraint: pre-heat thermal ≤ `S_max=4.17 kWh` | ✅ |
+| T20 | ΔT_max flow-through: cost(t_max=5°C) < cost(t_max=1°C) | ✅ |
+| T21 | Absence HH excluded from Q_delivered: smart elec_kwh[16..35] all 0 | ✅ |
+| T22a | τ=8h: cheap overnight slots used (pre-heat = 2.0000) | ✅ |
+| T22b | τ=2h: overnight slots 0–7 ineligible (sum=0) | ✅ |
+| T22c | τ=2h: slots 8–11 eligible (pre-heat = 1.2000) | ✅ |
+| T23a | Slot 12 eligible (at survival threshold): Q_thermal[12]=2.4000 | ✅ |
+| T23b | Slot 11 ineligible (just beyond threshold): Q_thermal[11]=0.0000 | ✅ |
+| T24a | `current.indoor_temp_c[11]` < 19 after cooling (got 10.71) | ✅ |
+| T24b | `current.indoor_temp_c` rises when boiler fires: T[15]=11.56 > T[11]=10.71 | ✅ |
+| T24c | `dumb_hp_svt.indoor_temp_c` all null (unaffected by RC trace) | ✅ |
+| T25a | `current.indoor_temp_c` all null when HTC=null | ✅ |
+| T25b | Dumb scenarios still computed when HTC=null | ✅ |
+| T26 | D×W+P: peak-slot thermal lower with premium than flat | ✅ |
+
+---
+
+## Outstanding tests — 2026-05-07
+
+### bug-fix-results-display
+
+Implemented 2026-05-07. No separate browser criteria in plan — Bug 1 (chart not rendering) and Bug 2 (What If visible on page load) were visible failures whose absence confirms the fix. M10B, M10C, and M10A3/4/5/14/15 blocks lifted (see inline updates above).
+
+---
+
+### ui-day-view-charts — browser tests
+
+Implemented 2026-05-07 (commit 91eed41). Browser / real data (Rhiannon's Octopus account). Section appears between financial-card and What If section after analysis completes.
+
+Note on Rhiannon's data: `thermal_mass=null` → `validation_status.smart` is not `'ok'`/`'hp_undersized'` → right tile should show outdoor + current temp only (no smart HP trace); temp note shown; left tile smart HP area may be null (DV6).
+
+| ID | Description | Result | Notes |
+|----|-------------|--------|-------|
+| DV1 | Left tile renders four datasets on a valid winter day: two area fills (coral current gas, teal smart HP electricity), two rate lines (coral gas rate, teal HH electricity rate). Both y-axes labelled (`p/kWh` left, `kWh` right). | ⏳ | |
+| DV2 | Area fill colour matches series line colour — coral for current gas, teal for smart HP. | ⏳ | |
+| DV3 | `picker.min` equals date of first `heating` entry; `picker.max` equals date of last entry. Dates outside range not selectable. | ⏳ | |
+| DV4 | Default day is in Oct–Mar with heating > 0. Not a summer or zero-heating day. | ⏳ | |
+| DV5 | Changing picker → both charts update with data for new date. No page reload. | ⏳ | |
+| DV6 | With `validation_status.smart` not `'ok'`/`'hp_undersized'` (Rhiannon's data): smart HP trace absent from right tile; temp note shown below right chart. Left tile smart HP area shown if `elec_kwh` non-null, else dispatch note shown. | ⏳ | Expected on Rhiannon's data (thermal_mass=null) |
+| DV7 | Selecting an absence day (all `heating_kwh = null`): canvases hidden, "No heating data for this day." shown. No Chart.js console error. | ⏳ | Pick a summer absence day from the known absence list |
+| DV8 | With `current.indoor_temp_c` all null (HTC unavailable — not applicable on Rhiannon's data): right tile shows outdoor only; note shown. | 🚫 | Rhiannon's data has HTC — cannot test this path without synthetic injection |
+| DV9 | Section is hidden on page load and revealed only when analysis completes. | ⏳ | |
+| DV10 | On mobile (375px): tiles stack vertically; date picker full width below heading. | ⏳ | |
+| DV11 | No new console errors. | ⏳ | |
