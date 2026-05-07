@@ -270,6 +270,18 @@ heatToComfortSlider.addEventListener('input', () => {
   heatToComfortOutput.value = heatToComfortSlider.value;
 });
 
+// ===== t-max-preheat slider =====
+
+const tMaxPreheatInput   = document.getElementById('t-max-preheat');
+const tMaxPreheatOutput  = document.getElementById('t-max-preheat-value');
+const tMaxPreheatWarning = document.getElementById('t-max-preheat-warning');
+
+tMaxPreheatInput.addEventListener('input', () => {
+  const val = parseFloat(tMaxPreheatInput.value);
+  tMaxPreheatOutput.value = val.toFixed(1);
+  tMaxPreheatWarning.classList.toggle('hidden', val <= 5);
+});
+
 heatToComfortSlider.addEventListener('change', async () => {
   await runScenarioConsumption(() => {}, () => {});
   await runPricingEngine(() => {}, () => {});
@@ -1128,6 +1140,15 @@ function displayHeatLossResults(result) {
 
   if (result.validation_status === 'insufficient_data') {
     heatLossResults.classList.remove('hidden');
+    const noticeDiv = document.createElement('div');
+    noticeDiv.className = 'status-msg warning';
+    noticeDiv.textContent = 'Heat loss could not be determined from your data. '
+      + 'Open "Show methodology" → Heat loss and enter values manually to improve accuracy.';
+    statusDetails.appendChild(noticeDiv);
+    if (methodologyDisclosure) {
+      methodologyDisclosure.removeAttribute('hidden');
+      methodologyDisclosure.open = true;
+    }
     return;
   }
 
@@ -1290,6 +1311,17 @@ function displayThermalCharacterResults(result) {
     return;
   }
 
+  if (result.thermal_mass_source === 'no_data' || result.validation_status === 'insufficient_data') {
+    const noticeDiv = document.createElement('div');
+    noticeDiv.className = 'status-msg warning';
+    noticeDiv.textContent = 'Your thermal mass estimate could not be determined from your data. '
+      + 'Open "Show methodology" → Thermal character and enter values manually to improve accuracy.';
+    statusDetails.appendChild(noticeDiv);
+    if (methodologyDisclosure) {
+      methodologyDisclosure.removeAttribute('hidden');
+      methodologyDisclosure.open = true;
+    }
+  }
   if (result.validation_status === 'insufficient_data') return;
 
   const fmt = (v, dp = 0) => v !== null && v !== undefined ? v.toFixed(dp) : '—';
@@ -1593,8 +1625,12 @@ async function runScenarioConsumption(showProgressFn, showStatusFn) {
   // Yield to the browser so the progress message paints before the greedy LP runs
   await new Promise(r => setTimeout(r, 0));
 
-  const { gasRateByHh, elecHhRateByHh } = buildRateArrays(
-    ingestion.consumption, externalResult.external, ingestion.tariff_rates);
+  const agileCalibration  = externalResult.external_metadata?.agile_calibration ?? null;
+  const rateParamsForM7   = { ...readRateParams(), agile_calibration: agileCalibration };
+  const rateMetadataForM7 = prepareRates(ingestion, externalResult.external, rateParamsForM7);
+  setRateMetadata(rateMetadataForM7);
+  const gasRateByHh    = rateMetadataForM7.gas_rate_by_hh;
+  const elecHhRateByHh = rateMetadataForM7.elec_hh_rate_by_hh;
 
   const comfortScale = (thermalChar?.underheat_ratio != null)
     ? parseFloat(heatToComfortSlider.value)
@@ -1611,6 +1647,7 @@ async function runScenarioConsumption(showProgressFn, showStatusFn) {
       baseloadMethod:  baseloadResult.baseload_metadata.method,
       gasRateByHh, elecHhRateByHh,
       comfort_demand_scale: comfortScale,
+      t_max_preheat_offset_c: parseFloat(tMaxPreheatInput?.value) || 3.0,
     });
   } catch (err) {
     showStatusFn('Scenario computation failed: ' + err.message, 'error');
@@ -1637,6 +1674,8 @@ btnRecalcScenario.addEventListener('click', async () => {
       scenarioStatus.appendChild(div);
     }
   );
+  await runPricingEngine(() => {}, () => {});
+  await runFinancialAnalysis(() => {}, () => {});
   btnRecalcScenario.disabled = false;
 });
 
@@ -1771,6 +1810,26 @@ function displayPricingResults(pricingResult) {
   whatIfTiles.classList.remove('hidden');
 }
 
+function buildEffectivePricingResult(pricingResult, scenarioResult, rateMetadata) {
+  const fraction       = rateMetadata?.agile_calibration?.null_wholesale_fraction ?? 0;
+  const calSrc         = rateMetadata?.calibration_source ?? 'fetched';
+  const hhInsufficient = calSrc !== 'default' && fraction > HH_COVERAGE_INSUFFICIENT_THRESHOLD;
+  const smartNotOk     = !['ok', 'hp_undersized'].includes(
+    scenarioResult?.validation_status?.smart
+  );
+  if (!hhInsufficient && !smartNotOk) return pricingResult;
+
+  const newScenarios = { ...pricingResult.scenarios };
+  if (hhInsufficient) {
+    newScenarios.dumb_hp_hh  = { ...newScenarios.dumb_hp_hh,  annual_cost_gbp: null };
+    newScenarios.smart_hp_hh = { ...newScenarios.smart_hp_hh, annual_cost_gbp: null };
+  }
+  if (smartNotOk) {
+    newScenarios.smart_hp_hh = { ...newScenarios.smart_hp_hh, annual_cost_gbp: null };
+  }
+  return { ...pricingResult, scenarios: newScenarios };
+}
+
 async function runPricingEngine(showProgressFn, showStatusFn) {
   const ingestion      = getIngestionResult();
   const external       = getExternalResult();
@@ -1802,7 +1861,7 @@ async function runPricingEngine(showProgressFn, showStatusFn) {
   );
   setPricingResult(pricingResult);
 
-  displayPricingResults(pricingResult);
+  displayPricingResults(buildEffectivePricingResult(pricingResult, getScenarioConsumptionResult(), rateMetadata));
 
   for (const w of rateMetadata.warnings)  showStatusFn(w, 'warning');
   for (const w of pricingResult.warnings) showStatusFn(w, 'warning');
@@ -2175,17 +2234,17 @@ methodology section below. The figures in the tables are rough estimates only.`;
   if (verdictChart) verdictChart.destroy();
 
   const scenarioOrder = ['current', 'dumb_hp_svt', 'dumb_hp_hh', 'smart_hp_hh'];
-  const chartData = scenarioOrder
-    .filter(k => financialResult.scenarios[k].annual_cost_gbp !== null)
-    .map(k => ({
-      key:    k,
-      label:  VERDICT_CHART_LABELS[k],
-      cost:   financialResult.scenarios[k].annual_cost_gbp,
-      saving: financialResult.scenarios[k].annual_saving_gbp,
-    }));
+  const chartData = scenarioOrder.map(k => ({
+    key:    k,
+    label:  VERDICT_CHART_LABELS[k],
+    cost:   financialResult.scenarios[k].annual_cost_gbp,
+    saving: financialResult.scenarios[k].annual_saving_gbp,
+  }));
 
   const bgColors = chartData.map(d =>
-    d.key === 'current' ? '#26588D' : (d.saving > 0 ? '#3B8284' : '#FD7A7F')
+    d.cost === null ? '#CCCCCC'
+    : d.key === 'current' ? '#26588D'
+    : (d.saving > 0 ? '#3B8284' : '#FD7A7F')
   );
 
   const ctx = document.getElementById('verdict-chart').getContext('2d');
@@ -2203,7 +2262,9 @@ methodology section below. The figures in the tables are rough estimates only.`;
         legend: { display: false },
         tooltip: {
           callbacks: {
-            label: ctx => `£${Math.round(ctx.parsed.x).toLocaleString('en-GB')}/yr`,
+            label: ctx => ctx.raw === null
+              ? 'Data unavailable'
+              : `£${Math.round(ctx.parsed.x).toLocaleString('en-GB')}/yr`,
           },
         },
       },
@@ -2239,22 +2300,7 @@ async function runFinancialAnalysis(showProgressFn, showStatusFn) {
   showProgressFn('Computing financial analysis…');
   const params = readCapitalParams();
 
-  // Propagate HH insufficient flag: null out HH costs before financial analysis so the
-  // sensitivity grid and payback rows exclude them (analyseFinancials treats null as no_data)
-  const faCalibration  = getExternalResult()?.external_metadata?.agile_calibration;
-  const faFraction     = faCalibration?.null_wholesale_fraction ?? 0;
-  const faCalSrc       = rateMetadata?.calibration_source ?? 'fetched';
-  const hhInsufficient = faCalSrc !== 'default' && faFraction > HH_COVERAGE_INSUFFICIENT_THRESHOLD;
-  const effectivePricingResult = hhInsufficient
-    ? {
-        ...pricingResult,
-        scenarios: {
-          ...pricingResult.scenarios,
-          dumb_hp_hh:  { ...pricingResult.scenarios.dumb_hp_hh,  annual_cost_gbp: null },
-          smart_hp_hh: { ...pricingResult.scenarios.smart_hp_hh, annual_cost_gbp: null },
-        },
-      }
-    : pricingResult;
+  const effectivePricingResult = buildEffectivePricingResult(pricingResult, scenarioResult, rateMetadata);
 
   const result = analyseFinancials(effectivePricingResult, rateMetadata, scenarioResult, params);
   setFinancialResult(result);

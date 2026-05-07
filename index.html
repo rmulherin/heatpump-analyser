@@ -357,6 +357,21 @@
           </p>
         </div>
 
+        <div class="form-group" id="t-max-preheat-group">
+          <label for="t-max-preheat">Maximum pre-heat above setpoint
+            <span class="unit">°C</span>
+          </label>
+          <input id="t-max-preheat" type="range" min="0" max="8" step="0.5" value="3">
+          <output id="t-max-preheat-value">3.0</output>
+          <p class="form-hint">
+            How far above your thermostat setpoint the smart HP can pre-heat.
+            Higher values allow more heat to be shifted to cheap overnight slots.
+          </p>
+          <p id="t-max-preheat-warning" class="form-hint warning hidden">
+            Values above 5°C are physically unrealistic for most homes.
+          </p>
+        </div>
+
         <div id="scenario-results" class="hidden">
           <div class="status-area" id="scenario-status"></div>
           <h3>Annual heating energy by scenario</h3>

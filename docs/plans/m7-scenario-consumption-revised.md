@@ -709,4 +709,16 @@ T8 was browser-only. T26 added: automated test verifying that passing D×W+P (wi
 
 ## Implementation Deviations
 
-*(To be completed after implementation.)*
+**D1 — `null_wholesale_fraction` path in `buildEffectivePricingResult`**
+Plan (Step 10) showed `rateMetadata?.null_wholesale_fraction ?? 0` as the literal code.
+`null_wholesale_fraction` is not a top-level field on `rateMetadata`; it lives at
+`rateMetadata.agile_calibration.null_wholesale_fraction` (per `prepareRates` return shape).
+Implemented as `rateMetadata?.agile_calibration?.null_wholesale_fraction ?? 0`.
+The plan's stated intent (avoid calling `getExternalResult()` from module state) is fully preserved.
+
+**D2 — `btnRecalcScenario` M8/M9 callbacks**
+Plan amendment said "use same display callbacks as main pipeline." Implemented with `() => {}`
+for M8 and M9 callbacks, consistent with the prevailing pattern at all other non-main-pipeline
+call sites (heat-to-comfort.change, What If recalcs at lines 275–276, 1387–1388, 2305–2306,
+2374–2375). `displayPricingResults` and `displayFinancialResults` are called internally
+and are not suppressed by no-op callbacks.
