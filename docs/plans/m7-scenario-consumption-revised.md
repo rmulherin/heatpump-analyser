@@ -8,14 +8,16 @@
 ## Task description
 
 Audit `js/scenario-consumption.js` and the M7 call site in `js/app.js` against the
-revised design document `scenario-consumption-revised.md` (commit 6a0d086 in
+revised design document `scenario-consumption-revised.md` (commits 6a0d086 + 65ee9d7 in
 praxis-claude-hub). Implement all changes needed to bring the code into alignment.
 The primary additions are: (1) a τ-based survival filter that makes pre-heat physically
 meaningful by limiting look-ahead to one time-constant, (2) a cumulative-storage
 constraint (S_max = C × ΔT_max / 3600) that enforces how much heat the building can
 hold above setpoint, (3) correcting the `elecHhRateByHh` source (currently raw
-wholesale; must be D×W+P from `prepareRates`), and (4) exposing `t_max_preheat_offset_c`
-as a user-editable input. Also implements Bug 3 (main-UI surfacing of missing thermal
+wholesale; must be D×W+P from `prepareRates`), (4) exposing `t_max_preheat_offset_c`
+as a user-editable input, and (5) a post-hoc RC temperature trace for the `current`
+scenario (display only; makes the boiler's reactive pattern visible alongside the smart
+HP's proactive pre-heat). Also implements Bug 3 (main-UI surfacing of missing thermal
 data) and ensures null smart HP scenarios are visible in the cost display.
 
 ---
@@ -58,6 +60,11 @@ Key findings:
 10. Test T11 currently expects `validation_status.smart = 'ok'` when
     `thermal_mass_kj_per_k = null`. After item 1 is implemented, this becomes
     `'no_thermal_mass'`; T11a–T11c need updating.
+11. `current` scenario `indoor_temp_c` is always null (audit item 12 — `simulatePostHocTIndoor`
+    not called for current scenario). Must add `simulateCurrentRcTrace` using
+    `heating_kwh[i] × η` as input heat, same RC model as §4h. Resets T to `setpoint_c`
+    on data gaps (null heating or null temp), unlike `simulatePostHocTIndoor` which carries
+    T forward. Runs only when HTC, C, setpoint_c non-null; display only.
 
 ---
 
@@ -65,10 +72,10 @@ Key findings:
 
 | Action | File | Purpose |
 |--------|------|---------|
-| MODIFY | `js/scenario-consumption.js` | Items 1–4, 6, 11: validation status, allocateGreedyDay, buildSmartScenario, estimateScenarioConsumption, overshoot threshold |
+| MODIFY | `js/scenario-consumption.js` | Items 1–4, 6, 11, 12: validation status, allocateGreedyDay, buildSmartScenario, estimateScenarioConsumption, overshoot threshold, current-scenario RC trace |
 | MODIFY | `js/app.js` | Items 5, 7–9: prepareRates in M7 call site; t_max DOM refs + event wiring; Bug 3 main-UI notice; buildEffectivePricingResult helper; chart null handling |
 | MODIFY | `index.html` | Item 7: t-max-preheat range input in scenario card |
-| MODIFY | `test-m7.mjs` | Update T11; add T19–T23 |
+| MODIFY | `test-m7.mjs` | Update T11; add T19–T25 |
 
 ---
 
@@ -262,6 +269,60 @@ return t > thermalCharacter.setpoint_c + t_max_preheat_offset_c;
 ```
 
 `t_max_preheat_offset_c` is in scope as a parameter of `estimateScenarioConsumption`.
+
+### Step 5a (in scenario-consumption.js) — Current scenario RC trace (audit item 12)
+
+Add `simulateCurrentRcTrace` as a new module-level function. Key difference from
+`simulatePostHocTIndoor`: resets T to `setpoint_c` on data gaps (null heating or null
+temp) rather than carrying T forward. This is correct for the `current` scenario because
+a null heating entry represents a metering gap — the building's true state is unknown
+and setpoint is the least-bad assumption.
+
+```js
+function simulateCurrentRcTrace({ heating, external, heatLoss, thermalChar }) {
+  const htc = heatLoss?.htc_w_per_k;
+  const C   = thermalChar?.thermal_mass_kj_per_k;
+  const eta = heatLoss?.boiler_efficiency_used ?? 0.9;
+  const sp  = thermalChar?.setpoint_c;
+  if (htc == null || C == null || sp == null) return heating.map(() => null);
+
+  const R = (heatLoss?.solar_correction_applied && heatLoss?.solar_aperture_m2 != null)
+    ? heatLoss.solar_aperture_m2 : 0;
+  const out = new Array(heating.length);
+  let T = sp;
+  for (let i = 0; i < heating.length; i++) {
+    const h  = heating[i].heating_kwh;
+    const tc = external[i]?.temp_c;
+    if (h == null || tc == null) {
+      out[i] = null;
+      T = sp;    // reset to setpoint on data gap
+      continue;
+    }
+    const Q_current    = h * eta;
+    const heatLossKwh  = htc * (T - tc) * 0.5 / 1000;
+    const solarGainKwh = R * (external[i]?.solar_w_m2 ?? 0) * 0.5 / 1000;
+    const dT = (Q_current + solarGainKwh - heatLossKwh) * 3600 / C;
+    T += dT;
+    out[i] = T;
+  }
+  return out;
+}
+```
+
+In `estimateScenarioConsumption`, after `buildCurrentScenario` (before Step 3 dumb HP
+computation):
+```js
+const current = buildCurrentScenario(heating);
+// Step 2a — current scenario RC trace (display only; no effect on costs)
+current.indoor_temp_c = simulateCurrentRcTrace({
+  heating, external, heatLoss, thermalChar: thermalCharacter,
+});
+```
+
+`buildCurrentScenario` initialises `indoor_temp_c` to `heating.map(() => null)`. This
+line replaces it with the computed trace, or leaves it all-null if preconditions are not
+met (HTC/C/setpoint missing). No other code paths need updating — `indoor_temp_c` on
+the `current` scenario is display-only and not consumed by M8 or M9.
 
 ---
 
@@ -479,6 +540,18 @@ n_gap for slot 11 = 9 (9×0.5/4=1.125 > 1 → ineligible).
 Assert: `Q_delivered_thermal[12] > 0` (at-threshold slot receives pre-heat).
 Assert: `Q_delivered_thermal[11] = 0` (just-beyond slot excluded by survival filter).
 
+**Add T24 — current scenario RC trace shape** (design doc T17):
+Setup: HTC=200, C=5000, setpoint_c=19, temp_c=5, R=0, η=0.9; 1-day (48 HH);
+`heating_kwh=0` for HH 0–11 and 16–47; `heating_kwh=0.5` for HH 12–15.
+Assert: `current.indoor_temp_c[11] < 19` (building cooled below setpoint with no heat).
+Assert: `current.indoor_temp_c[15] > current.indoor_temp_c[11]` (temp rises when boiler fires).
+Assert: all `dumb_hp_svt.indoor_temp_c` entries null (dumb scenarios unaffected).
+
+**Add T25 — current scenario RC trace null when HTC missing** (design doc T18):
+Setup: same as T24 but with `htc_w_per_k = null`.
+Assert: all `current.indoor_temp_c` entries null.
+Assert: dumb and smart scenarios computed normally (HTC null blocks RC trace only).
+
 ---
 
 ## Risks and mitigations
@@ -492,6 +565,7 @@ Assert: `Q_delivered_thermal[11] = 0` (just-beyond slot excluded by survival fil
 | `buildEffectivePricingResult` duplicates HH-insufficient logic previously inline | The helper replaces the inline block in `runFinancialAnalysis` entirely; no duplication remains. |
 | T11b/T11c assertions inverted — could mask regression if smart ran when it shouldn't | T11a (validation_status check) and T11b (elec_kwh null) together verify both smart status and that dispatch was skipped. |
 | Survival filter excludes all pre-heat slots on days with no subsequent demand (summer) | Covered by existing `B_d = 0` path (Step 0); only allocation skipped, not an error. |
+| `simulateCurrentRcTrace` reset-on-gap differs from `simulatePostHocTIndoor` carry-forward | Intentional per spec: null heating = metering gap, unknown building state → setpoint reset is safer than propagating stale T. Document in function comment. |
 
 ---
 
@@ -509,6 +583,8 @@ Assert: `Q_delivered_thermal[11] = 0` (just-beyond slot excluded by survival fil
 - [ ] T21: absence HH excluded from B_d; Q_delivered=0 for absence slots
 - [ ] T22: τ=8h → cheap overnight slots used; τ=2h → overnight ineligible, only 04:00–06:00 window
 - [ ] T23: slot at exact exp(−1) threshold eligible; slot one beyond ineligible
+- [ ] T24: current scenario indoor_temp_c drifts downward when no heat, rises when boiler fires; dumb scenarios unaffected (remain null)
+- [ ] T25: current scenario indoor_temp_c all null when HTC=null; dumb and smart unaffected
 
 ### Browser / structural
 
