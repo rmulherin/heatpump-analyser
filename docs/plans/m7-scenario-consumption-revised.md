@@ -351,14 +351,21 @@ result = estimateScenarioConsumption({
 });
 ```
 
-Update `btnRecalcScenario.addEventListener` to chain M7→M8→M9 (currently runs M7 only):
+Update `btnRecalcScenario.addEventListener` to chain M7→M8→M9 (currently runs M7 only).
+
+**Amendment (Medium):** Do not pass no-op callbacks to `runPricingEngine` and
+`runFinancialAnalysis` — suppressing `onComplete` would prevent the pricing table and
+financial display from updating. Use the same display callbacks as the main pipeline
+run. Inspect how `runPricingEngine` and `runFinancialAnalysis` are called in the
+existing full-pipeline path (e.g. after M6 completes) and replicate those callbacks:
+
 ```js
 btnRecalcScenario.addEventListener('click', async () => {
   btnRecalcScenario.disabled = true;
   // ... existing status clear ...
   await runScenarioConsumption(...);
-  await runPricingEngine(() => {}, () => {});
-  await runFinancialAnalysis(() => {}, () => {});
+  await runPricingEngine(/* same onProgress, onComplete as main pipeline */);
+  await runFinancialAnalysis(/* same onProgress, onComplete as main pipeline */);
   btnRecalcScenario.disabled = false;
 });
 ```
@@ -380,6 +387,9 @@ After the closing `</div>` of `heat-to-comfort-group` (line ~358), insert:
     How far above your thermostat setpoint the smart HP can pre-heat.
     Higher values allow more heat to be shifted to cheap overnight slots.
   </p>
+  <p id="t-max-preheat-warning" class="form-hint warning hidden">
+    Values above 5°C are physically unrealistic for most homes.
+  </p>
 </div>
 ```
 
@@ -391,10 +401,17 @@ const tMaxPreheatInput  = document.getElementById('t-max-preheat');
 const tMaxPreheatOutput = document.getElementById('t-max-preheat-value');
 ```
 
-Wire live display (near existing `heatToComfortSlider` input handler):
+Add DOM ref for warning element (near other t-max refs):
+```js
+const tMaxPreheatWarning = document.getElementById('t-max-preheat-warning');
+```
+
+Wire live display and warning (near existing `heatToComfortSlider` input handler):
 ```js
 tMaxPreheatInput.addEventListener('input', () => {
-  tMaxPreheatOutput.value = parseFloat(tMaxPreheatInput.value).toFixed(1);
+  const val = parseFloat(tMaxPreheatInput.value);
+  tMaxPreheatOutput.value = val.toFixed(1);
+  tMaxPreheatWarning.classList.toggle('hidden', val <= 5);
 });
 ```
 
@@ -428,12 +445,16 @@ Apply the same pattern in `displayHeatLossResults` for M4 `insufficient_data`.
 ### Step 10 — `app.js`: `buildEffectivePricingResult` helper and null smart override
 
 Extract the existing inline HH-insufficient override in `runFinancialAnalysis` (lines
-2244–2257) into a named helper that also covers null smart scenarios:
+2244–2257) into a named helper that also covers null smart scenarios.
+
+**Amendment (Medium):** The original helper called `getExternalResult()` from module
+state inside the function while taking other data as parameters — inconsistent and
+fragile. `null_wholesale_fraction` is already on `rateMetadata` (merged there by
+app.js at calibration time); use it directly from the parameter instead.
 
 ```js
 function buildEffectivePricingResult(pricingResult, scenarioResult, rateMetadata) {
-  const cal          = getExternalResult()?.external_metadata?.agile_calibration;
-  const fraction     = cal?.null_wholesale_fraction ?? 0;
+  const fraction     = rateMetadata?.null_wholesale_fraction ?? 0;
   const calSrc       = rateMetadata?.calibration_source ?? 'fetched';
   const hhInsufficient = calSrc !== 'default' && fraction > HH_COVERAGE_INSUFFICIENT_THRESHOLD;
   const smartNotOk   = !['ok', 'hp_undersized'].includes(
@@ -452,6 +473,21 @@ function buildEffectivePricingResult(pricingResult, scenarioResult, rateMetadata
   return { ...pricingResult, scenarios: newScenarios };
 }
 ```
+
+**Amendment (High) — verify M9 handles null costs before writing Step 10:**
+`buildEffectivePricingResult` sets `smart_hp_hh.annual_cost_gbp = null`. This result
+is passed to `analyseFinancials` (M9). Before implementing the helper, read
+`analyseFinancials` and confirm it handles null `annual_cost_gbp` gracefully — i.e.
+that savings and payback for a null-cost scenario are also null, not NaN. If null
+guards are absent in M9, add them as part of this step:
+
+```js
+// in analyseFinancials, for each scenario:
+const saving = (cost != null && current_cost != null) ? current_cost - cost : null;
+const payback = (saving > 0 && investment != null) ? investment / saving : null;
+```
+
+This must be verified — do not assume M9 is safe.
 
 Use this helper:
 - In `runPricingEngine`: `displayPricingResults(buildEffectivePricingResult(pricingResult, getScenarioConsumptionResult(), rateMetadata));`
@@ -540,6 +576,18 @@ n_gap for slot 11 = 9 (9×0.5/4=1.125 > 1 → ineligible).
 Assert: `Q_delivered_thermal[12] > 0` (at-threshold slot receives pre-heat).
 Assert: `Q_delivered_thermal[11] = 0` (just-beyond slot excluded by survival filter).
 
+**Add T26 — rate array fix: smart dispatch avoids peak when D×W+P passed:**
+Setup: 1-day; demand uniform slots 0–47 (0.3 kWh heating each, B_d=12.96 kWh);
+`elecHhRateByHh` with D×W+P: 16 p/kWh in slots 0–31 and 38–47, 28 p/kWh in slots
+32–37 (16:00–18:30 peak premium); cop=3, hp_cap=10 kW, C=5000, HTC=200 (τ=6.94h,
+S_max=4.17 kWh).
+Assert: `Σ smart.elec_kwh[32..37] × cop < Σ smart.elec_kwh[32..37] × cop` when
+same test is run with flat 16p everywhere — i.e. peak is avoided when premium is
+present. Concretely: `Σ Q_delivered[32..37]` with D×W+P < `Σ Q_delivered[32..37]`
+with flat rate (LP shifts load away from peak when it costs more).
+Purpose: catches the regression where `buildRateArrays` (flat wholesale) is
+accidentally passed instead of `prepareRates` D×W+P output.
+
 **Add T24 — current scenario RC trace shape** (design doc T17):
 Setup: HTC=200, C=5000, setpoint_c=19, temp_c=5, R=0, η=0.9; 1-day (48 HH);
 `heating_kwh=0` for HH 0–11 and 16–47; `heating_kwh=0.5` for HH 12–15.
@@ -596,6 +644,9 @@ Assert: dumb and smart scenarios computed normally (HTC null blocks RC trace onl
 - [ ] Main-UI notice pushed to status area when M5 returns `thermal_mass_source = 'no_data'` or `validation_status = 'insufficient_data'`; methodology disclosure auto-opens
 - [ ] Same notice for M4 `insufficient_data`
 - [ ] No new console errors
+- [ ] When smart HP status is not ok: saving and payback for smart HP scenario are null/N/A in financial table — not NaN
+- [ ] Pricing table updates correctly when "Recalculate scenarios" is clicked (not suppressed by no-op callbacks)
+- [ ] `ΔT_max` slider warning visible when value exceeds 5°C; hidden at 5°C and below
 - [ ] No items deferred — all functionality specified in this plan is delivered
 
 ---
@@ -610,7 +661,7 @@ Assert: dumb and smart scenarios computed normally (HTC null blocks RC trace onl
 
 **Reviewer:** Claude (Praxis Insight — Opus architect window)
 
-**Overall verdict:** Approved with 1 clarification
+**Overall verdict:** Approved with amendments
 
 ### What is solid
 
@@ -621,29 +672,38 @@ Assert: dumb and smart scenarios computed normally (HTC null blocks RC trace onl
 - **Risk table thorough.** Dual prepareRates call (idempotent), O(n²)/day acceptable, T11 assertion inversion, reset-vs-carry-forward in simulateCurrentRcTrace, buildEffectivePricingResult duplication elimination all noted and mitigated.
 - **No deferrals.** Day-view charts are explicitly out of scope (separate plan after M7 lands), not a deferral of in-scope work. ✓
 
-### Clarifications required before implementation
+### Findings and amendments applied
+
+**High — M9 null cost handling (amended in Step 10)**
+`buildEffectivePricingResult` sets `smart_hp_hh.annual_cost_gbp = null`, which is passed to `analyseFinancials`. If M9 does arithmetic on null costs, result is NaN — silent failure in payback table. Amendment: Step 10 now requires Sonnet to read `analyseFinancials` first, verify null handling, and add null guards if absent. Success criterion added: saving and payback show null/N/A, not NaN.
+
+**Medium — `runPricingEngine` no-op callbacks (amended in Step 6)**
+Original plan passed `() => {}` to `runPricingEngine` in the recalc chain, suppressing `displayPricingResults`. Amendment: Step 6 now instructs Sonnet to use the same display callbacks as the main pipeline — pricing table must update on recalculation.
+
+**Medium — `buildEffectivePricingResult` module state (amended in Step 10)**
+Original helper called `getExternalResult()` from module state while taking other data as parameters. `null_wholesale_fraction` is already on `rateMetadata` (the passed parameter). Amendment: helper now reads it from `rateMetadata` directly — all inputs via parameters, no module state access.
+
+**Low — `ΔT_max > 5°C` warning missing (amended in Steps 7 and 8)**
+Design doc edge case specifies warn above 5°C. Amendment: warning element added to HTML; input handler toggles it on/off at the 5°C threshold.
+
+**Low — No automated test for rate array fix (added T26 in Step 12)**
+T8 was browser-only. T26 added: automated test verifying that passing D×W+P (with peak premium) produces lower peak-slot allocation than flat rate — catches the regression where `buildRateArrays` is accidentally used instead of `prepareRates`.
+
+### Clarification confirmed before implementation
 
 **C1. `setRateMetadata` in Step 6 — verify setter pattern before writing code.**
+`rateMetadata` in `app.js` is likely a module-level `let` assigned directly, not via a named setter. Resolution: at the start of Step 6, verify how `rateMetadata` is currently assigned after M8 runs and use the same pattern.
 
-The plan calls `setRateMetadata(rateMetadataForM7)` as a named function. In `app.js`, `rateMetadata` is likely a module-level `let` assigned directly (e.g. `rateMetadata = rateMetadataForM7`), with no named setter. If the function does not exist, the call fails silently or throws.
+### Minor observation
 
-**Resolution:** At the start of Step 6, search `app.js` for how `rateMetadata` is currently assigned after M8 runs. If a named setter exists, use it. If not, use direct assignment. Do not assume either pattern — verify first.
-
-### Minor observations (not blockers)
-
-- **Session sizing.** 12 steps across 4 files exceeds the >8-step threshold. `app.js` carries 5 independent concerns in Steps 6–11 (prepareRates wiring, recalc chaining, Bug 3, buildEffectivePricingResult, chart null handling). Risk of context exhaustion mid-session. Recommended checkpoint: commit after Steps 1–5a (`scenario-consumption.js` complete, tests updated) before starting `app.js` changes.
-- **Test ID mapping.** Design doc T17/T18 renumbered to T24/T25 in this plan due to existing test file using T17/T18. Design doc corrected to match. No action needed.
-- **"No items deferred" success criterion added** (see below).
+- **Session sizing.** 12 steps across 4 files. Recommended checkpoint: commit after Steps 1–5a (`scenario-consumption.js` complete, tests T11 updated, T19–T26 added) before starting `app.js` work.
 
 ---
 
 ## Approval
 
-**Status:** ✅ Approved — implementation may begin. 1 clarification applies (see review below).
-**Approved by:** Rhiannon (via Opus review)
-
-**Clarifications confirmed:**
-- C1: Before writing Step 6, verify whether `rateMetadata` is assigned via a named setter or direct assignment in `app.js`. Use whichever pattern is established.
+**Status:** ✅ Approved — implementation may begin. Amendments and clarification apply (see review above).
+**Approved by:** Rhiannon (via Opus review, 2026-05-07)
 
 ---
 
