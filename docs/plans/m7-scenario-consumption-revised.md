@@ -1,7 +1,7 @@
 # M7 — Scenario Consumption: Audit and Revised Dispatch
 
 **Date:** 2026-05-07
-**Status:** Awaiting approval — review via claude.ai before implementation begins.
+**Status:** ✅ Approved — implementation may begin. 1 clarification applies (see review below).
 
 ---
 
@@ -596,12 +596,54 @@ Assert: dumb and smart scenarios computed normally (HTC null blocks RC trace onl
 - [ ] Main-UI notice pushed to status area when M5 returns `thermal_mass_source = 'no_data'` or `validation_status = 'insufficient_data'`; methodology disclosure auto-opens
 - [ ] Same notice for M4 `insufficient_data`
 - [ ] No new console errors
+- [ ] No items deferred — all functionality specified in this plan is delivered
 
 ---
 
 ## Approval
 
-**Status:** Awaiting approval — review via claude.ai before implementation begins.
+**Status:** ✅ Approved — Rhiannon (via Opus review, 2026-05-07)
+
+---
+
+## Claude.ai Review — 2026-05-07
+
+**Reviewer:** Claude (Praxis Insight — Opus architect window)
+
+**Overall verdict:** Approved with 1 clarification
+
+### What is solid
+
+- **Approach correct.** Approach challenge performed: all three root causes addressed directly — wrong rate array (buildRateArrays → prepareRates), no storage constraint (S_max via max_addable_at), no horizon limit (survival filter via τ). No symptom-treatment or parallel computation concerns.
+- **Algorithm verified.** τ units (kJ/K → hours), S_max units (kJ/K × °C / 3600 = kWh), survival condition (n_gap × 0.5 / τ ≤ 1 ↔ exp(−n_gap × 0.5 / τ) ≥ exp(−1)), max_addable_at forward scan — all correct on units and logic.
+- **Test arithmetic spot-checked.** T20: S_max binding at 1°C (1.39 kWh < B_d 2.88 kWh), non-binding at 5°C (6.94 kWh > 2.88 kWh) — cost ordering correct. T22: τ=2h → slot 8 eligible (n_gap=4, exactly at threshold), slot 7 ineligible (n_gap=5). T23: τ=4h → slot 12 eligible (n_gap=8, at threshold), slot 11 ineligible (n_gap=9). ✓
+- **Design alignment complete.** All 12 audit checklist items addressed across the 12 implementation steps.
+- **Risk table thorough.** Dual prepareRates call (idempotent), O(n²)/day acceptable, T11 assertion inversion, reset-vs-carry-forward in simulateCurrentRcTrace, buildEffectivePricingResult duplication elimination all noted and mitigated.
+- **No deferrals.** Day-view charts are explicitly out of scope (separate plan after M7 lands), not a deferral of in-scope work. ✓
+
+### Clarifications required before implementation
+
+**C1. `setRateMetadata` in Step 6 — verify setter pattern before writing code.**
+
+The plan calls `setRateMetadata(rateMetadataForM7)` as a named function. In `app.js`, `rateMetadata` is likely a module-level `let` assigned directly (e.g. `rateMetadata = rateMetadataForM7`), with no named setter. If the function does not exist, the call fails silently or throws.
+
+**Resolution:** At the start of Step 6, search `app.js` for how `rateMetadata` is currently assigned after M8 runs. If a named setter exists, use it. If not, use direct assignment. Do not assume either pattern — verify first.
+
+### Minor observations (not blockers)
+
+- **Session sizing.** 12 steps across 4 files exceeds the >8-step threshold. `app.js` carries 5 independent concerns in Steps 6–11 (prepareRates wiring, recalc chaining, Bug 3, buildEffectivePricingResult, chart null handling). Risk of context exhaustion mid-session. Recommended checkpoint: commit after Steps 1–5a (`scenario-consumption.js` complete, tests updated) before starting `app.js` changes.
+- **Test ID mapping.** Design doc T17/T18 renumbered to T24/T25 in this plan due to existing test file using T17/T18. Design doc corrected to match. No action needed.
+- **"No items deferred" success criterion added** (see below).
+
+---
+
+## Approval
+
+**Status:** ✅ Approved — implementation may begin. 1 clarification applies (see review below).
+**Approved by:** Rhiannon (via Opus review)
+
+**Clarifications confirmed:**
+- C1: Before writing Step 6, verify whether `rateMetadata` is assigned via a named setter or direct assignment in `app.js`. Use whichever pattern is established.
 
 ---
 
