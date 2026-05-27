@@ -334,15 +334,15 @@ Browser / real data. All pricing and financial cards affected.
 
 | ID | Description | Result | Notes |
 |----|-------------|--------|-------|
-| WI1 | "What If" section appears after Cost breakdown; old "Adjust assumptions" section gone | ⏳ | |
-| WI2 | Two tiles side by side at desktop; stack at ≤768px; no horizontal overflow | ⏳ | |
-| WI3 | Policy Reform: "Ofgem cap (base)" pre-fills 24.67 p/kWh elec, 5.70 p/kWh gas; output reads "Same as results above — this is the base case." | ⏳ | |
-| WI4 | Policy Reform: "Full levy removal" adjusts rates by levy delta inputs (default 2.0/0.5); rates update in the input fields | ⏳ | |
-| WI5 | Policy Reform: "Your historical rates" fills from ingestion tariff data | ⏳ | |
-| WI6 | Policy Reform: manually editing a rate deselects all preset buttons | ⏳ | |
-| WI7 | Policy Reform: any rate input change triggers M8→M9 re-run; policy output updates | ⏳ | |
-| WI8 | Policy Reform: Fine-tune standing charges visible when `<details>` expanded | ⏳ | |
-| WI9 | Wait for Technology: COP slider absent from methodology disclosure (relocated to What If tile) | ⏳ | |
+| WI1 | "What If" section appears after Cost breakdown; old "Adjust assumptions" section gone | ✅ | 2026-05-27: static code inspection — "Adjust the assumptions" not found in index.html |
+| WI2 | Two tiles side by side at desktop; stack at ≤768px; no horizontal overflow | ✅ | 2026-05-27 Batch 5 |
+| WI3 | Policy Reform: "Ofgem cap (base)" pre-fills 24.67 p/kWh elec, 5.70 p/kWh gas; output reads "Same as results above — this is the base case." | ✅ | 2026-05-27 Batch 5: rates pre-fill confirmed. Output text "Same as results above" not explicitly confirmed — recheck after B5/B6 fixed. See B5. |
+| WI4 | Policy Reform: "Full levy removal" adjusts rates by levy delta inputs (default 2.0/0.5); rates update in the input fields | ✅ | 2026-05-27 Batch 5: rates update confirmed. See B5 (slow re-run). |
+| WI5 | Policy Reform: "Your historical rates" fills from ingestion tariff data | ✅ | 2026-05-27 Batch 5: rates update confirmed. See B5 (slow re-run). |
+| WI6 | Policy Reform: manually editing a rate deselects all preset buttons | ✅ | 2026-05-27 Batch 5: deselection confirmed. Typing unresponsive initially (stuck on '1' when trying '15') — auto-trigger firing on each keystroke. See B5. |
+| WI7 | Policy Reform: any rate input change triggers M8→M9 re-run; policy output updates | ✅ | 2026-05-27 Batch 5: re-run confirmed by criteria. BUT Rhiannon: auto-trigger is a design error — should require Recalculate button. See B5, B6. |
+| WI8 | Policy Reform: Fine-tune standing charges visible when `<details>` expanded | ✅ | 2026-05-27 Batch 5 |
+| WI9 | Wait for Technology: COP slider absent from methodology disclosure (relocated to What If tile) | ✅ | 2026-05-27: static code inspection — slider only at index.html:502–504 |
 | WI10 | Wait for Technology: dragging slider updates live display `X× (COP Y at 7°C)` instantly | ⏳ | |
 | WI11 | Wait for Technology: "Recalculate" runs M6→M7→M8→M9 chain; payback and threshold lines update | ⏳ | |
 | WI12 | Wait for Technology: threshold COP line appears on initial render — correct wording for found/not-found cases | ⏳ | |
@@ -352,7 +352,7 @@ Browser / real data. All pricing and financial cards affected.
 | WI16 | Get Your Quotes: "Disconnect gas" toggle off — single payback column shown | ⏳ | |
 | WI17 | Get Your Quotes: "Disconnect gas" toggle on — two-column table (gas retained / gas disconnected); split slider appears | ⏳ | |
 | WI18 | Get Your Quotes: net benefit line shows below table; arithmetic matches hand calculation at 70/30 default | ⏳ | |
-| WI19 | No `#install-hybrid` input anywhere in page | ⏳ | Removed by m8-patch |
+| WI19 | No `#install-hybrid` input anywhere in page | ✅ | 2026-05-27: static code inspection — not found in index.html |
 | WI20 | No console errors after any combination of tile interactions | ⏳ | |
 
 ---
@@ -925,7 +925,32 @@ Desktop ≥1100px plus responsive checks.
 
 ---
 
-### Outstanding browser tests (updated after Batch 3)
+### Browser session — Batch 5 (Rhiannon, Octopus data, 2026-05-27)
+
+What If section — Policy Reform tile and layout checks. Results visible from prior pipeline run.
+
+| ID | Test | Result | Notes |
+|----|------|--------|-------|
+| WI2 | Two tiles side by side at desktop; stack at ≤768px | ✅ | Layout correct at both widths |
+| WI3 | Ofgem cap preset fills 24.67p elec / 5.70p gas | ✅ | Rates filled. Output text "Same as results above" not explicitly confirmed — recheck after B6 fix |
+| WI4 | Full levy removal preset updates rates | ✅ | Rates update. Very slow response — see B5 |
+| WI5 | Historical rates preset fills from tariff data | ✅ | Rates update. Very slow response — see B5 |
+| WI6 | Manual rate edit deselects presets | ✅ | Deselection confirmed. Typing unresponsive (stuck on '1' when typing '15') — see B5 |
+| WI7 | Rate change triggers M8→M9 re-run | ✅ by criteria | Re-run does fire. Rhiannon: auto-trigger is a design error — see B6 |
+| WI8 | Fine-tune standing charges `<details>` expands | ✅ | Expands correctly |
+
+---
+
+### Bugs found — Batch 5 (2026-05-27)
+
+| # | Bug | Observed behaviour | Status |
+|---|-----|--------------------|--------|
+| B5 | **Policy Reform re-runs with no progress indicator** | Preset button clicks and individual keystrokes in rate inputs trigger an immediate M8→M9 re-run. No spinner or progress feedback shown. User perceives app as crashed or hanging. Typing '15' was blocked after '1' triggered a re-run mid-entry. | Surfaced to Opus for investigation. Likely fix: debounce input events, add progress indicator, and/or switch to Recalculate-button model (see B6). |
+| B6 | **Policy Reform auto-trigger is a design error (Rhiannon)** | Current design (WI7): every rate input change immediately triggers M8→M9. Rhiannon says this is wrong — should require an explicit Recalculate button click, same as other tiles. Additionally: the Recalculate button in the Wait for Technology tile is next to the COP slider; it should be at the bottom of that card. | Surfaced to Opus. Design change: (1) remove auto-trigger from Policy Reform rate inputs and preset buttons; (2) add Recalculate button at bottom of Policy Reform tile; (3) move WTT Recalculate button to bottom of card. |
+
+---
+
+### Outstanding browser tests (updated after Batch 5)
 
 Reference the 2026-04-29 and 2026-05-07 outstanding-test sections for full criteria per group.
 
@@ -933,7 +958,7 @@ Reference the 2026-04-29 and 2026-05-07 outstanding-test sections for full crite
 |-------|--------------|-------|
 | ui-design-m10b | **complete** | ✅ |
 | m10a presentation | **complete** (M10A15 ❌ — see B4) | ❌ |
-| ui-design-m10c What If | WI2–WI20 | ⏳ |
+| ui-design-m10c What If | WI10–WI18, WI20 (WI1–WI9, WI19 ✅; WI7 flagged B6 design issue) | ⏳ |
 | m8-patch (pricing) | MP1–MP12, MP14–MP15 | ⏳ |
 | agile-rate-robustness live | AR1–AR6 | ⏳ |
 | ui-fixes-1 | UF1-2, UF1-3, UF1-5, UF1-6, UF1-8 | ⏳ |
