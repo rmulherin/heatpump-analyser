@@ -314,17 +314,17 @@ Browser / real data. All pricing and financial cards affected.
 |----|-------------|--------|-------|
 | M10B1 | At desktop (≥1100px): verdict-card and drove-card side by side, equal width | ✅ | 2026-05-27: side by side confirmed. Top section unlabelled; graph card + "What drove this answer" side by side. |
 | M10B2 | At desktop: results-card and energy-summary-card side by side | ✅ | 2026-05-27: "Your data" + "How you use your energy" side by side in Your Home; heat loss + thermal char side by side in Methodology. Naming differs from spec but layout correct. |
-| M10B3 | At desktop: Methodology (when opened) shows 2×2 grid — heat-loss + thermal-char (row 1), hp-model + scenario (row 2); underheat-card full-width between rows | ⏳ | |
+| M10B3 | At desktop: Methodology (when opened) shows 2×2 grid — heat-loss + thermal-char (row 1), hp-model + scenario (row 2); underheat-card full-width between rows | ✅ | 2026-05-27: heat loss + thermal char side by side; "Heating to Comfort" full-width; HP sizing + energy by scenario side by side. 5 total items (4 technical + underheat) — consistent with spec. |
 | M10B4 | Cost breakdown section shows pricing-card and financial-card full-width stacked | ✅ | 2026-05-27: "Annual running costs" + "Savings and payback" both full-width in Cost breakdown. |
-| M10B5 | At ≤768px: every `.section-tiles` collapses to single column | ⏳ | |
+| M10B5 | At ≤768px: every `.section-tiles` collapses to single column | ✅ | 2026-05-27: single-column order at narrow width confirmed. |
 | M10B6 | drove-card populates four stat blocks: heat loss W/K, HP size kW, electricity context (region/rate), installation cost + grant | ✅ | 2026-05-27: four stats visible — Heat loss, Heat pump size, Electricity (Half-hourly), Installation. |
-| M10B7 | Stat 3 label and value adapt for `dumb_hp_svt` (flat rate, no region) vs HH scenarios (region + Agile D×W+P) | ⏳ | |
+| M10B7 | Stat 3 label and value adapt for `dumb_hp_svt` (flat rate, no region) vs HH scenarios (region + Agile D×W+P) | ✅ | 2026-05-27: HH path shows region C + Agile rate — adaptation confirmed. Presentation notes: (a) region shows letter "C" only, "London" absent; (b) "Ofgem cap" visible but no label clarifying this equals the SVT rate. See P1, P2. |
 | M10B8 | Section banner reads "Cost breakdown" (not "The verdict") | ✅ | Static (index.html:399) + browser confirmed 2026-05-27 |
 | M10B9 | Container max-width 1100px confirmed in DevTools | ✅ | 2026-05-27: `getComputedStyle(document.querySelector('.container')).maxWidth` → '1100px'. |
-| M10B10 | Bar chart renders correctly at ~520px tile width | ⏳ | |
-| M10B11 | Methodology disclosure still opens/closes; inner 2×2 grid visible when open | ⏳ | |
-| M10B12 | No layout breakage at desktop, tablet (768–1099px), mobile (≤375px) | ⏳ | |
-| M10B13 | No console errors | ⏳ | |
+| M10B10 | Bar chart renders correctly at ~520px tile width | ✅ | 2026-05-27: bars, labels and y-axis legible at tile width. |
+| M10B11 | Methodology disclosure still opens/closes; inner 2×2 grid visible when open | ✅ | 2026-05-27: opens/closes confirmed; 5 cards visible (4 technical + underheat). |
+| M10B12 | No layout breakage at desktop, tablet (768–1099px), mobile (≤375px) | ✅ | 2026-05-27: desktop and tablet confirmed; mobile collapse confirmed via M10B5. |
+| M10B13 | No console errors | ✅ | 2026-05-27: none. |
 
 ---
 
@@ -364,10 +364,10 @@ Implemented 2026-04-28 (commit 9d31cd3). Browser / real data.
 | ID | Description | Result | Notes |
 |----|-------------|--------|-------|
 | M10A1 | Verdict card appears above "Your home" section after analysis completes | ✅ | 2026-05-27 |
-| M10A2 | Verdict copy correctly identifies primary scenario; second paragraph appears when `smart_hp_hh` is primary and `dumb_hp_svt` also available | ⏳ | |
+| M10A2 | Verdict copy correctly identifies primary scenario; second paragraph appears when `smart_hp_hh` is primary and `dumb_hp_svt` also available | ✅ | 2026-05-27: primary scenario identified correctly; second paragraph present. |
 | M10A3 | All available scenarios appear as bars; scenarios with null `annual_cost_gbp` absent | ✅ | 2026-05-27: 3 bars on initial load (smart HP null → correctly absent); 4th bar appeared after thermal char recalculate once smart HP computed. Criteria met. See B3 (no loading indicator). |
 | M10A4 | Current-boiler bar is navy; HP bars are teal (positive saving) or coral (negative saving) | ✅ | 2026-05-27: navy current bar confirmed. |
-| M10A5 | Chart tooltip shows `£X/yr` on hover | ⏳ | |
+| M10A5 | Chart tooltip shows `£X/yr` on hover | ✅ | 2026-05-27: confirmed. |
 | M10A6 | Clicking "Show methodology" reveals four technical cards; clicking again collapses them | ⏳ | |
 | M10A7 | Four technical cards remain accessible inside closed disclosure | ⏳ | |
 | M10A8 | Section banners appear at correct pipeline moments: "Your home" with results-card, "The verdict" and "Adjust the assumptions" with pricing-card | 🚫 | Stale — banner renamed "Cost breakdown" by m10b; "Adjust the assumptions" replaced by What If (m10c); current banner check is M10B8 |
@@ -878,20 +878,45 @@ Desktop ≥1100px, full pipeline run, results visible, DevTools open.
 
 ---
 
-### Outstanding browser tests (updated after Batch 2)
+### Browser session — Batch 3 (Rhiannon, Octopus data, 2026-05-27)
+
+Desktop ≥1100px plus responsive checks.
+
+| ID | Test | Result | Notes |
+|----|------|--------|-------|
+| M10B3 | Methodology 2×2 grid + underheat full-width | ✅ | Heat loss + thermal char / Heating to Comfort / HP sizing + energy by scenario |
+| M10B5 | ≤768px: tiles collapse to single column | ✅ | |
+| M10B7 | Stat 3 adapts HH vs SVT | ✅ | Region C + Agile rate shown. Presentation notes P1, P2 (see below). |
+| M10B10 | Bar chart readable at tile width | ✅ | |
+| M10B11 | Methodology opens/closes; 5 cards inside | ✅ | 5 = 4 technical + underheat — consistent with spec |
+| M10B12 | No layout breakage desktop/tablet/mobile | ✅ | |
+| M10B13 | No console errors | ✅ | |
+| M10A2 | Verdict copy + second paragraph | ✅ | Primary scenario identified; second paragraph present |
+| M10A5 | Chart tooltip `£X/yr` on hover | ✅ | |
+
+**Presentation notes (not test failures — flagged for Opus review):**
+
+| # | Location | Issue |
+|---|----------|-------|
+| P1 | Drove card — Electricity stat | Region shows letter "C" only; "London" (human-readable name) absent |
+| P2 | Drove card — Electricity stat | "Ofgem cap" text visible but no label clarifying this equals the SVT rate used in dumb HP SVT scenario |
+
+---
+
+### Outstanding browser tests (updated after Batch 3)
 
 Reference the 2026-04-29 and 2026-05-07 outstanding-test sections for full criteria per group.
 
 | Group | IDs remaining | State |
 |-------|--------------|-------|
-| ui-day-view-charts | DV1–DV7, DV10–DV11 | ⏳ |
-| ui-design-m10b | M10B3, M10B5, M10B7, M10B10–M10B13 | ⏳ |
+| ui-design-m10b | **complete** | ✅ |
+| m10a presentation | M10A6, M10A7, M10A10, M10A13–M10A16 | ⏳ |
 | ui-design-m10c What If | WI2–WI20 | ⏳ |
 | m8-patch (pricing) | MP1–MP12, MP14–MP15 | ⏳ |
 | agile-rate-robustness live | AR1–AR6 | ⏳ |
-| agile-rate-robustness injection | AR-S2a–e, AR-S3a–d | ⏳ |
 | ui-fixes-1 | UF1-2, UF1-3, UF1-5, UF1-6, UF1-8 | ⏳ |
 | ui-fixes-2 | UF2-5, UF2-8 | ⏳ |
 | patch-agile-region-calibration | AC1, AC6, AC7 | ⏳ |
 | smart-scenario-fixes-1 Phase 3 | SF2–SF7 | ⏳ |
-| m10a presentation | M10A2, M10A5–M10A7, M10A10, M10A13–M10A16 | ⏳ |
+| ui-day-view-charts | DV1–DV7, DV10–DV11 | ⏳ |
+| agile-rate-robustness injection | AR-S2a–e, AR-S3a–d | ⏳ |
