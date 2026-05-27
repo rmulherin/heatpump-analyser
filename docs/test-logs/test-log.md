@@ -346,12 +346,12 @@ Browser / real data. All pricing and financial cards affected.
 | WI10 | Wait for Technology: dragging slider updates live display `X× (COP Y at 7°C)` instantly | ✅ | 2026-05-27 Batch 6 |
 | WI11 | Wait for Technology: "Recalculate" runs M6→M7→M8→M9 chain; payback and threshold lines update | ❌ | 2026-05-27 Batch 6: chain ran (results tile updated to 30y payback). Get Your Quotes tile not refreshed (still showed >40y). See B7. Button position not confirmed. |
 | WI12 | Wait for Technology: threshold COP line appears on initial render — correct wording for found/not-found cases | ✅ | 2026-05-27 Batch 6: line present in Savings & Payback tile; updated after WTT recalculate |
-| WI13 | Get Your Quotes: grant presets fill `#wi-grant` input; "Enhanced — £10,000 (proposed)" label correct | ⏳ | |
-| WI14 | Get Your Quotes: changing any input immediately updates condensed payback table (M9 re-run) | ⏳ | |
-| WI15 | Get Your Quotes: avoided AC info popout (ⓘ) opens and displays explainer text | ⏳ | |
-| WI16 | Get Your Quotes: "Disconnect gas" toggle off — single payback column shown | ⏳ | |
-| WI17 | Get Your Quotes: "Disconnect gas" toggle on — two-column table (gas retained / gas disconnected); split slider appears | ⏳ | |
-| WI18 | Get Your Quotes: net benefit line shows below table; arithmetic matches hand calculation at 70/30 default | ⏳ | |
+| WI13 | Get Your Quotes: grant presets fill `#wi-grant` input; "Enhanced — £10,000 (proposed)" label correct | ✅ | 2026-05-27 Batch 7: presets exist, clicking fills input and triggers re-calc. Auto-trigger noted as inconsistent — extends B6 scope. |
+| WI14 | Get Your Quotes: changing any input immediately updates condensed payback table (M9 re-run) | ✅ | 2026-05-27 Batch 7: auto-update confirmed by criteria. Causes typing lag — extends B6 (should require Recalculate button). |
+| WI15 | Get Your Quotes: avoided AC info popout (ⓘ) opens and displays explainer text | ✅ | 2026-05-27 Batch 7: popout opens. See B8 (no click-outside dismiss). Copy: add "and those connected to underfloor heating" alongside air-to-air. |
+| WI16 | Get Your Quotes: "Disconnect gas" toggle off — single payback column shown | ❌ | 2026-05-27 Batch 7: HP half-hourly (dumb_hp_hh) missing from Get Your Quotes payback table. See B9. |
+| WI17 | Get Your Quotes: "Disconnect gas" toggle on — two-column table (gas retained / gas disconnected); split slider appears | ✅ | 2026-05-27 Batch 7: new column appeared; slider appeared on toggle. BUT: main results, running costs, and savings cards did not update. See B10. Design issues for Opus: scenario list should be replaced with savings table update; slider should always be visible (not conditional on toggle). |
+| WI18 | Get Your Quotes: net benefit line shows below table; arithmetic matches hand calculation at 70/30 default | ⚠️ | 2026-05-27 Batch 7: net benefit note exists. Position wrong — appears above the slider, should be below. Arithmetic not checked. Recheck after B10/design fix. |
 | WI19 | No `#install-hybrid` input anywhere in page | ✅ | 2026-05-27: static code inspection — not found in index.html |
 | WI20 | No console errors after any combination of tile interactions | ⏳ | |
 
@@ -970,7 +970,38 @@ Wait for Technology tile — WI10–WI12.
 
 ---
 
-### Outstanding browser tests (updated after Batch 6)
+### Browser session — Batch 7 (Rhiannon, Octopus data, 2026-05-27)
+
+Get Your Quotes tile — WI13–WI18.
+
+| ID | Test | Result | Notes |
+|----|------|--------|-------|
+| WI13 | Grant presets fill input | ✅ | Auto-triggers re-calc — extends B6 |
+| WI14 | Input change auto-updates table | ✅ | Causes typing lag — extends B6 |
+| WI15 | ⓘ popout opens | ✅ | No click-outside dismiss — B8. Copy: add underfloor heating. |
+| WI16 | Toggle off — single column | ❌ | HP half-hourly missing from table — B9 |
+| WI17 | Toggle on — two columns + slider | ✅ | Main cards (results, running costs, savings) did not update — B10. Design issues for Opus (see below). |
+| WI18 | Net benefit line below table | ⚠️ | Net benefit exists; above slider not below — design issue. Arithmetic unchecked. |
+
+**Design issues raised — Opus scope (not bugs, require design decisions):**
+- Get Your Quotes should use Recalculate button model, not auto-trigger (extends B6 scope to all three What If tiles)
+- Scenario list in Get Your Quotes should be removed; savings table should update instead
+- Split slider should always be visible, not conditional on Disconnect gas toggle
+- Net benefit note should be below the slider, not above
+
+---
+
+### Bugs found — Batch 7 (2026-05-27)
+
+| # | Bug | Observed behaviour | Status |
+|---|-----|--------------------|--------|
+| B8 | **ⓘ popout (Get Your Quotes) does not dismiss on click-outside** | Clicking anywhere on the page other than the ⓘ icon does not close the popout. User had to click the ⓘ icon again to close it. | Surfaced to Opus. |
+| B9 | **HP half-hourly missing from Get Your Quotes payback table** | The condensed payback table in Get Your Quotes does not show the `dumb_hp_hh` scenario row. All other scenarios appear to be present. | Surfaced to Opus. |
+| B10 | **Disconnect gas toggle does not update main cards** | Toggling "Disconnect gas" on caused a new column to appear in the Get Your Quotes tile. The main results card, running costs card, and savings & payback card did not update to reflect the gas-disconnected scenario costs. | Surfaced to Opus. |
+
+---
+
+### Outstanding browser tests (updated after Batch 7)
 
 Reference the 2026-04-29 and 2026-05-07 outstanding-test sections for full criteria per group.
 
@@ -978,7 +1009,7 @@ Reference the 2026-04-29 and 2026-05-07 outstanding-test sections for full crite
 |-------|--------------|-------|
 | ui-design-m10b | **complete** | ✅ |
 | m10a presentation | **complete** (M10A15 ❌ — see B4) | ❌ |
-| ui-design-m10c What If | WI13–WI18, WI20 (WI11 ❌ B7; WI1–WI10, WI12, WI19 ✅) | ⏳ |
+| ui-design-m10c What If | WI20 (WI16 ❌ B9; WI18 ⚠️; WI11 ❌ B7; rest ✅) | ⏳ |
 | m8-patch (pricing) | MP1–MP12, MP14–MP15 | ⏳ |
 | agile-rate-robustness live | AR1–AR6 | ⏳ |
 | ui-fixes-1 | UF1-2, UF1-3, UF1-5, UF1-6, UF1-8 | ⏳ |
