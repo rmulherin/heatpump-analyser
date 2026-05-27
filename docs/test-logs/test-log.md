@@ -353,7 +353,7 @@ Browser / real data. All pricing and financial cards affected.
 | WI17 | Get Your Quotes: "Disconnect gas" toggle on — two-column table (gas retained / gas disconnected); split slider appears | ✅ | 2026-05-27 Batch 7: new column appeared; slider appeared on toggle. BUT: main results, running costs, and savings cards did not update. See B10. Design issues for Opus: scenario list should be replaced with savings table update; slider should always be visible (not conditional on toggle). |
 | WI18 | Get Your Quotes: net benefit line shows below table; arithmetic matches hand calculation at 70/30 default | ⚠️ | 2026-05-27 Batch 7: net benefit note exists. Position wrong — appears above the slider, should be below. Arithmetic not checked. Recheck after B10/design fix. |
 | WI19 | No `#install-hybrid` input anywhere in page | ✅ | 2026-05-27: static code inspection — not found in index.html |
-| WI20 | No console errors after any combination of tile interactions | ⏳ | |
+| WI20 | No console errors after any combination of tile interactions | ✅ | 2026-05-27 Batch 8 |
 
 ---
 
@@ -1009,7 +1009,7 @@ Reference the 2026-04-29 and 2026-05-07 outstanding-test sections for full crite
 |-------|--------------|-------|
 | ui-design-m10b | **complete** | ✅ |
 | m10a presentation | **complete** (M10A15 ❌ — see B4) | ❌ |
-| ui-design-m10c What If | WI20 (WI16 ❌ B9; WI18 ⚠️; WI11 ❌ B7; rest ✅) | ⏳ |
+| ui-design-m10c What If | **complete** (WI16 ❌ B9; WI18 ⚠️; WI11 ❌ B7; WI7 design B6) | ❌ |
 | m8-patch (pricing) | MP1–MP12, MP14–MP15 | ⏳ |
 | agile-rate-robustness live | AR1–AR6 | ⏳ |
 | ui-fixes-1 | UF1-2, UF1-3, UF1-5, UF1-6, UF1-8 | ⏳ |
