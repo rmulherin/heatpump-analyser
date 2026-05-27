@@ -282,9 +282,9 @@ Browser / real data. All pricing and financial cards affected.
 | ID | Description | Result | Notes |
 |----|-------------|--------|-------|
 | UF2-1 | Octopus tab: Account Number field appears above API Key field | ⏳ | |
-| UF2-2 | After single-meter fetch: gas toggle pre-checked to m³ if meter reported m³; pre-unchecked for kWh | ⏳ | Rhiannon's meters use m³ — expect pre-checked |
-| UF2-3 | Console shows `Tier 1 meter (gas): unit=m3` log line (or `unit=kwh`) | ⏳ | |
-| UF2-4 | Status notices hidden on page load; shows "N notices" summary when notices added; expands on click | ⏳ | |
+| UF2-2 | After single-meter fetch: gas toggle pre-checked to m³ if meter reported m³; pre-unchecked for kWh | ✅ | 2026-05-27: pre-checked; code inspection confirms driven by `gasResult.detectedUnit` — dynamic, not hardcoded |
+| UF2-3 | Console shows `Tier 1 meter (gas): unit=m3` log line (or `unit=kwh`) | ✅ | 2026-05-27: confirmed in console |
+| UF2-4 | Status notices hidden on page load; shows "N notices" summary when notices added; expands on click | ✅ | 2026-05-27: 11 notices, collapsed; expanded to show full list |
 | UF2-5 | Clearing and re-running resets notices to closed and hidden | ⏳ | |
 | UF2-6 | No cooling note text anywhere in verdict block | ⏳ | |
 | UF2-7 | Break-even verdict copy does not mention cooling | ⏳ | |
@@ -319,7 +319,7 @@ Browser / real data. All pricing and financial cards affected.
 | M10B5 | At ≤768px: every `.section-tiles` collapses to single column | ⏳ | |
 | M10B6 | drove-card populates four stat blocks: heat loss W/K, HP size kW, electricity context (region/rate), installation cost + grant | ⏳ | |
 | M10B7 | Stat 3 label and value adapt for `dumb_hp_svt` (flat rate, no region) vs HH scenarios (region + Agile D×W+P) | ⏳ | |
-| M10B8 | Section banner reads "Cost breakdown" (not "The verdict") | ⏳ | |
+| M10B8 | Section banner reads "Cost breakdown" (not "The verdict") | ✅ | Static (index.html:399) + browser confirmed 2026-05-27 |
 | M10B9 | Container max-width 1100px confirmed in DevTools | ⏳ | |
 | M10B10 | Bar chart renders correctly at ~520px tile width | ⏳ | |
 | M10B11 | Methodology disclosure still opens/closes; inner 2×2 grid visible when open | ⏳ | |
@@ -363,7 +363,7 @@ Implemented 2026-04-28 (commit 9d31cd3). Browser / real data.
 
 | ID | Description | Result | Notes |
 |----|-------------|--------|-------|
-| M10A1 | Verdict card appears above "Your home" section after analysis completes | ⏳ | |
+| M10A1 | Verdict card appears above "Your home" section after analysis completes | ✅ | 2026-05-27 |
 | M10A2 | Verdict copy correctly identifies primary scenario; second paragraph appears when `smart_hp_hh` is primary and `dumb_hp_svt` also available | ⏳ | |
 | M10A3 | All available scenarios appear as bars; scenarios with null `annual_cost_gbp` absent | ⏳ | |
 | M10A4 | Current-boiler bar is navy; HP bars are teal (positive saving) or coral (negative saving) | ⏳ | |
@@ -835,6 +835,25 @@ Tests verified by reading `index.html` and `js/app.js` directly. No browser requ
 
 ---
 
+### Bug found and fixed: favicon 404
+
+Browser auto-requested `/favicon.ico` (GitHub Pages URL) — no favicon had ever been declared. Fixed by adding `favicon.svg` (Praxis Insight PI swirl logo) to repo root and `<link rel="icon" type="image/svg+xml" href="favicon.svg">` to `<head>` (commit 902d6a6). No runtime impact on tool behaviour.
+
+### Browser session — Batch 1 (Rhiannon, Octopus data, 2026-05-27)
+
+Full pipeline run with real Octopus data. Results visible. DevTools open.
+
+| ID | Test | Result | Notes |
+|----|------|--------|-------|
+| UF2-2 | Gas toggle pre-checked to m³ | ✅ | Meter detected as m³; toggle set dynamically |
+| UF2-3 | Console: `Tier 1 meter (gas): unit=m3` | ✅ | Present in console |
+| UF2-4 | Status notices hidden on load; 11 notices shown collapsed | ✅ | Expands on click |
+| M10A1 | Verdict card above "Your home" | ✅ | |
+| M10B8 | Section banner reads "Cost breakdown" | ✅ | Browser confirms static check |
+| Console | No JS errors (favicon 404 aside) | ✅ | SP count for 2026-05-26 is expected console-only — yesterday's Elexon data incomplete |
+
+---
+
 ### Outstanding browser tests (unchanged — awaiting Rhiannon's live-data run)
 
 All groups below remain ⏳ Not yet run. Reference the 2026-04-29 and 2026-05-07 outstanding-test sections for full criteria per group.
@@ -848,7 +867,7 @@ All groups below remain ⏳ Not yet run. Reference the 2026-04-29 and 2026-05-07
 | agile-rate-robustness live | AR1–AR6 | ⏳ |
 | agile-rate-robustness injection | AR-S2a–e, AR-S3a–d | ⏳ |
 | ui-fixes-1 | UF1-2, UF1-3, UF1-5, UF1-6, UF1-8 | ⏳ |
-| ui-fixes-2 | UF2-2, UF2-3, UF2-5, UF2-8 | ⏳ |
+| ui-fixes-2 | UF2-5, UF2-8 | ⏳ |
 | patch-agile-region-calibration | AC1, AC6, AC7 | ⏳ |
 | smart-scenario-fixes-1 Phase 3 | SF2–SF7 | ⏳ |
-| m10a presentation | M10A1–M10A7, M10A10, M10A13–M10A16 | ⏳ |
+| m10a presentation | M10A2–M10A7, M10A10, M10A13–M10A16 | ⏳ |
