@@ -271,7 +271,7 @@ Browser / real data. All pricing and financial cards affected.
 | UF1-3 | Methodology DLs render in two columns (label left, value right) | ⚠️ | 2026-05-27 Batch 12: blue-text DL tables correct; black-text DL tables not rendering in two columns. Rhiannon plans to delete the black-text ones — recheck after that change. |
 | UF1-4 | BUS-eligibility note appears below the financial table | ✅ | 2026-05-27: static code inspection — app.js:1960 |
 | UF1-5 | When smart scenarios unavailable but HH dumb available: amber status line + "Provide that input ↓" link | ✅ | 2026-05-27 Batch 12: status line appeared when thermal char not yet entered; went away once input provided |
-| UF1-6 | Clicking "Provide that input ↓" link: opens methodology disclosure, scrolls to thermal char card, focuses first-empty M5b input, applies 1.5s highlight | ⏳ | Not yet tested — link click behaviour not checked |
+| UF1-6 | Clicking "Provide that input ↓" link: opens methodology disclosure, scrolls to thermal char card, focuses first-empty M5b input, applies 1.5s highlight | ✅ | 2026-05-27 Batch 13: link navigated to the correct place |
 | UF1-7 | When all data good: no status line in verdict card | ✅ | 2026-05-27 Batch 12: confirmed — status line absent after thermal char input provided |
 | UF1-8 | No console errors | ✅ | 2026-05-27 Batch 12 |
 
@@ -1098,7 +1098,7 @@ Reference the 2026-04-29 and 2026-05-07 outstanding-test sections for full crite
 | ui-design-m10c What If | **complete** (WI16 ❌ B9; WI18 ⚠️; WI11 ❌ B7; WI7 design B6) | ❌ |
 | m8-patch (pricing) | MP12 runnable; rest done or 🚫 blocked (MP10 ❌ B12; MP6 ❌ B11) | ❌ |
 | agile-rate-robustness live | **complete** (AR1–AR4 ❌ all B12; AR5 deferred CSV; AR6 ✅) | ❌ |
-| ui-fixes-1 | UF1-6 only (UF1-3 ⚠️ pending delete; rest ✅) | ⚠️ |
+| ui-fixes-1 | **complete** (UF1-3 ⚠️ pending black-text DL delete; rest ✅) | ⚠️ |
 | ui-fixes-2 | UF2-5, UF2-8 | ⏳ |
 | patch-agile-region-calibration | AC1, AC6, AC7 | ⏳ |
 | smart-scenario-fixes-1 Phase 3 | SF2–SF7 | ⏳ |
