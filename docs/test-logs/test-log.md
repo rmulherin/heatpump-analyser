@@ -368,17 +368,17 @@ Implemented 2026-04-28 (commit 9d31cd3). Browser / real data.
 | M10A3 | All available scenarios appear as bars; scenarios with null `annual_cost_gbp` absent | ✅ | 2026-05-27: 3 bars on initial load (smart HP null → correctly absent); 4th bar appeared after thermal char recalculate once smart HP computed. Criteria met. See B3 (no loading indicator). |
 | M10A4 | Current-boiler bar is navy; HP bars are teal (positive saving) or coral (negative saving) | ✅ | 2026-05-27: navy current bar confirmed. |
 | M10A5 | Chart tooltip shows `£X/yr` on hover | ✅ | 2026-05-27: confirmed. |
-| M10A6 | Clicking "Show methodology" reveals four technical cards; clicking again collapses them | ⏳ | |
-| M10A7 | Four technical cards remain accessible inside closed disclosure | ⏳ | |
+| M10A6 | Clicking "Show methodology" reveals four technical cards; clicking again collapses them | ✅ | 2026-05-27: confirmed. |
+| M10A7 | Four technical cards remain accessible inside closed disclosure | ✅ | 2026-05-27: `details .card` query returns 5 while closed (4 technical + underheat — all in DOM). |
 | M10A8 | Section banners appear at correct pipeline moments: "Your home" with results-card, "The verdict" and "Adjust the assumptions" with pricing-card | 🚫 | Stale — banner renamed "Cost breakdown" by m10b; "Adjust the assumptions" replaced by What If (m10c); current banner check is M10B8 |
 | M10A9 | Removed DL rows (validation status, days used, boiler efficiency, etc.) absent from all three technical cards | ⏳ | |
-| M10A10 | Scenario labels consistent across pricing table, financial table, and scenario consumption table | ⏳ | |
+| M10A10 | Scenario labels consistent across pricing table, financial table, and scenario consumption table | ✅ | 2026-05-27: confirmed. |
 | M10A11 | Financial table column headers: "Annual saving", "Net cost (after grant)", "Payback period" | ⏳ | |
 | M10A12 | Cooling note hidden when avoided AC > £0; not shown at all post-ui-fixes-2 cooling-note removal | 🚫 | Stale — ui-fixes-2 removed cooling note entirely; covered by UF2-6 and UF2-7 |
-| M10A13 | Data-quality footnote reflects correct R² band | ⏳ | |
-| M10A14 | No Chart.js console errors; no JS console errors | ⏳ | |
-| M10A15 | Chart readable at 375px — bars visible, y-axis labels legible | ⏳ | |
-| M10A16 | Body text in Roboto; headings and buttons in Montserrat (confirm in DevTools) | ⏳ | |
+| M10A13 | Data-quality footnote reflects correct R² band | ✅ | 2026-05-27: confirmed. |
+| M10A14 | No Chart.js console errors; no JS console errors | ✅ | 2026-05-27: confirmed. |
+| M10A15 | Chart readable at 375px — bars visible, y-axis labels legible | ❌ | 2026-05-27: results card (bar chart) and drove card cut off horizontally at minimum browser width. Day-view chart cards ("when heating ran", "indoor temperature") also cut off. Annual running costs scrollbar is acceptable. See B4. |
+| M10A16 | Body text in Roboto; headings and buttons in Montserrat (confirm in DevTools) | ✅ | 2026-05-27: p → 'Roboto, arial, sans-serif'; h2 → 'Montserrat, sans-serif'; button → 'Montserrat, sans-serif'. |
 | M10A17 | Pricing-params and financial-params cards appear below pricing-card and financial-card | 🚫 | Stale — m10c replaced params-card area with What If section; page structure entirely different |
 
 ---
@@ -903,6 +903,28 @@ Desktop ≥1100px plus responsive checks.
 
 ---
 
+### Browser session — Batch 4 (Rhiannon, Octopus data, 2026-05-27)
+
+| ID | Test | Result | Notes |
+|----|------|--------|-------|
+| M10A6 | Methodology opens/closes | ✅ | |
+| M10A7 | Cards in DOM while closed | ✅ | 5 cards (4 technical + underheat) present in DOM |
+| M10A10 | Scenario labels consistent | ✅ | |
+| M10A13 | Data-quality footnote R² band | ✅ | |
+| M10A14 | No Chart.js/JS errors | ✅ | |
+| M10A15 | Chart readable at 375px | ❌ | Results card (bar chart), drove card, day-view chart cards cut off horizontally. See B4. |
+| M10A16 | Roboto body; Montserrat headings/buttons | ✅ | Confirmed via DevTools computed styles |
+
+---
+
+### Bug found — Batch 4 (2026-05-27)
+
+| # | Bug | Observed behaviour | Status |
+|---|-----|--------------------|--------|
+| B4 | **Cards overflow at minimum browser width** | Results card (bar chart), drove card, day-view "when heating ran" and "indoor temperature" cards extend beyond viewport at minimum width. Annual running costs table scrollbar is acceptable (expected). | Surfaced to Opus. Core cards (results, drove) are M10 layout; day-view cards may be separate DV issue. |
+
+---
+
 ### Outstanding browser tests (updated after Batch 3)
 
 Reference the 2026-04-29 and 2026-05-07 outstanding-test sections for full criteria per group.
@@ -910,7 +932,7 @@ Reference the 2026-04-29 and 2026-05-07 outstanding-test sections for full crite
 | Group | IDs remaining | State |
 |-------|--------------|-------|
 | ui-design-m10b | **complete** | ✅ |
-| m10a presentation | M10A6, M10A7, M10A10, M10A13–M10A16 | ⏳ |
+| m10a presentation | **complete** (M10A15 ❌ — see B4) | ❌ |
 | ui-design-m10c What If | WI2–WI20 | ⏳ |
 | m8-patch (pricing) | MP1–MP12, MP14–MP15 | ⏳ |
 | agile-rate-robustness live | AR1–AR6 | ⏳ |
