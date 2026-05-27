@@ -244,20 +244,20 @@ Browser / real data. All pricing and financial cards affected.
 
 | ID | Description | Result | Notes |
 |----|-------------|--------|-------|
-| MP1 | Annual running costs table has 4 scenario rows (no hybrid), 5 cost columns + total | ⏳ | `current`, `dumb_hp_svt`, `dumb_hp_hh`, `smart_hp_hh` |
-| MP2 | Non-heating gas column identical across all 4 scenarios | ⏳ | Same baseload gas + standing charge |
-| MP3 | Non-heating elec column identical across all 4 scenarios | ⏳ | Standing charge only |
-| MP4 | Heating gas column: non-zero for `current` only; HP scenarios show `—` | ⏳ | |
-| MP5 | Heating elec column: `—` for `current`; non-zero for three HP scenarios | ⏳ | |
-| MP6 | Total per scenario reconciles to ≈ actual annual bill | ⏳ | Sense check |
-| MP7 | Gas-connection-retained footnote visible below the table | ⏳ | |
-| MP8 | Ofgem cap note reads: "Heat pump scenario electricity costs use the current Ofgem price cap rate (electricity: 24.67p/kWh). Gas costs (for the retained connection and baseload) and your current boiler costs use your actual historical tariff rates." | ⏳ | Exact wording check |
-| MP9 | Table scrolls horizontally on mobile; no layout break | ⏳ | |
+| MP1 | Annual running costs table has 4 scenario rows (no hybrid), 5 cost columns + total | 🚫 | Deferred — table needs reformatting and fixing (B11) |
+| MP2 | Non-heating gas column identical across all 4 scenarios | 🚫 | Deferred — blocked on B11 |
+| MP3 | Non-heating elec column identical across all 4 scenarios | 🚫 | Deferred — blocked on B11 |
+| MP4 | Heating gas column: non-zero for `current` only; HP scenarios show `—` | 🚫 | Deferred — blocked on B11 |
+| MP5 | Heating elec column: `—` for `current`; non-zero for three HP scenarios | 🚫 | Deferred — blocked on B11 |
+| MP6 | Total per scenario reconciles to ≈ actual annual bill | ❌ | 2026-05-27 Batch 8: total does not match actual bill; non-heating energy cost suspected missing. See B11. |
+| MP7 | Gas-connection-retained footnote visible below the table | 🚫 | Deferred — blocked on B11 (table reformatting) |
+| MP8 | Ofgem cap note reads: "Heat pump scenario electricity costs use the current Ofgem price cap rate (electricity: 24.67p/kWh). Gas costs (for the retained connection and baseload) and your current boiler costs use your actual historical tariff rates." | ⏳ | |
+| MP9 | Table scrolls horizontally on mobile; no layout break | 🚫 | Deferred — blocked on B11 (table reformatting) |
 | MP10 | `agile_calibration.D` in range 2.0–2.4 (devtools console) | ⏳ | |
 | MP11 | `agile_calibration.P_peak_p_kwh` in range 8–16 p/kWh | ⏳ | |
 | MP12 | Off-peak HH rate = D × wholesale; peak (16–19h) = D × wholesale + P (spot-check one period each) | ⏳ | |
-| MP13 | `hh_overhead` input field gone from UI | ⏳ | Removed by m8-patch |
-| MP14 | `dumb_hp_svt` uses Ofgem cap rate 24.67 p/kWh, not historical rate | ⏳ | |
+| MP13 | `hh_overhead` input field gone from UI | ✅ | 2026-05-27: static code inspection — not found in index.html |
+| MP14 | `dumb_hp_svt` uses Ofgem cap rate 24.67 p/kWh, not historical rate | 🚫 | Deferred — blocked on B11 |
 | MP15 | No console errors | ⏳ | |
 
 ---
@@ -1001,7 +1001,27 @@ Get Your Quotes tile — WI13–WI18.
 
 ---
 
-### Outstanding browser tests (updated after Batch 7)
+### Browser session — Batch 8 (Rhiannon, Octopus data, 2026-05-27)
+
+Pricing table (MP group) — MP1–MP7 asked; table issues prevent individual assertion checks.
+
+| ID | Test | Result | Notes |
+|----|------|--------|-------|
+| MP1–MP5 | Table structure and column contents | 🚫 | Table needs reformatting — cannot assess individual columns. See B11. |
+| MP6 | Total reconciles to actual bill | ❌ | Total incorrect; non-heating energy cost suspected missing. B11. |
+| MP7 | Gas-connection-retained footnote visible | 🚫 | Not checked due to table issues. |
+
+---
+
+### Bug found — Batch 8 (2026-05-27)
+
+| # | Bug | Observed behaviour | Status |
+|---|-----|--------------------|--------|
+| B11 | **Annual running costs table: total incorrect, non-heating energy cost likely missing** | Table needs reformatting and the scenario totals do not reconcile to the actual annual energy bill. Rhiannon suspects non-heating energy cost (baseload gas + baseload electricity + standing charges) is absent from the total column. MP1–MP5, MP7, MP9, MP14 all deferred until this is fixed. | Surfaced to Opus for investigation. High priority — the table is a core financial output. |
+
+---
+
+### Outstanding browser tests (updated after Batch 8)
 
 Reference the 2026-04-29 and 2026-05-07 outstanding-test sections for full criteria per group.
 
@@ -1010,7 +1030,7 @@ Reference the 2026-04-29 and 2026-05-07 outstanding-test sections for full crite
 | ui-design-m10b | **complete** | ✅ |
 | m10a presentation | **complete** (M10A15 ❌ — see B4) | ❌ |
 | ui-design-m10c What If | **complete** (WI16 ❌ B9; WI18 ⚠️; WI11 ❌ B7; WI7 design B6) | ❌ |
-| m8-patch (pricing) | MP1–MP12, MP14–MP15 | ⏳ |
+| m8-patch (pricing) | MP8, MP10–MP12, MP15 runnable; rest 🚫 blocked on B11 | ❌ |
 | agile-rate-robustness live | AR1–AR6 | ⏳ |
 | ui-fixes-1 | UF1-2, UF1-3, UF1-5, UF1-6, UF1-8 | ⏳ |
 | ui-fixes-2 | UF2-5, UF2-8 | ⏳ |
