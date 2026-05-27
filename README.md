@@ -44,18 +44,17 @@ heatpump-analyser/
 ├── css/
 │   └── styles.css
 ├── js/
-│   ├── app.js              ← orchestration
+│   ├── app.js              ← orchestration, Chart.js rendering, and UI wiring
 │   ├── constants.js        ← shared cross-module constants (HDD/CDD base temps)
 │   ├── data-ingestion.js   ← Octopus API + CSV parser
 │   ├── external-data.js    ← weather + wholesale prices
 │   ├── baseload.js         ← heating/hot water/cooking separation
 │   ├── heat-loss.js        ← Siviour regression (HTC)
 │   ├── thermal-character.js ← setpoint, thermal mass, time constant, occupancy weights
-│   ├── scenario-consumption.js ← RC model + DP optimiser + six-scenario arrays
+│   ├── scenario-consumption.js ← RC model + greedy LP optimiser + scenario arrays
 │   ├── heatpump-model.js   ← COP curves + HP sizing
 │   ├── pricing-engine.js   ← 6-scenario cost calculation
-│   ├── financial.js        ← payback + sensitivity analysis
-│   └── charts.js           ← Chart.js configuration + rendering
+│   └── financial.js        ← payback + sensitivity analysis
 ├── docs/
 │   └── plans/              ← Claude Code implementation plans
 ├── CLAUDE.md               ← Claude Code operational rules

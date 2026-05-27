@@ -776,6 +776,79 @@ Note on Rhiannon's data: `thermal_mass=null` → `validation_status.smart` is no
 | DV6 | With `validation_status.smart` not `'ok'`/`'hp_undersized'` (Rhiannon's data): smart HP trace absent from right tile; temp note shown below right chart. Left tile smart HP area shown if `elec_kwh` non-null, else dispatch note shown. | ⏳ | Expected on Rhiannon's data (thermal_mass=null) |
 | DV7 | Selecting an absence day (all `heating_kwh = null`): canvases hidden, "No heating data for this day." shown. No Chart.js console error. | ⏳ | Pick a summer absence day from the known absence list |
 | DV8 | With `current.indoor_temp_c` all null (HTC unavailable — not applicable on Rhiannon's data): right tile shows outdoor only; note shown. | 🚫 | Rhiannon's data has HTC — cannot test this path without synthetic injection |
-| DV9 | Section is hidden on page load and revealed only when analysis completes. | ⏳ | |
+| DV9 | Section is hidden on page load and revealed only when analysis completes. | ✅ | `class="hidden"` on `#day-view-section` in HTML — code inspection 2026-05-27 |
 | DV10 | On mobile (375px): tiles stack vertically; date picker full width below heading. | ⏳ | |
 | DV11 | No new console errors. | ⏳ | |
+
+---
+
+## 2026-05-27 — Node re-run + static code inspection
+
+**Environment:** Windows 11, Node v24.14.1. Code inspection against commit `ce2d9d5` (HEAD).
+
+### Node test suites — full re-run
+
+All suites pass unchanged from 2026-05-07.
+
+| Suite | Assertions | Result |
+|-------|-----------|--------|
+| test-m3-step-f.mjs | 18/18 | ✅ |
+| test-m5.mjs | 39/39 | ✅ |
+| test-m5b.mjs | 29/29 | ✅ |
+| test-m6.mjs | 24/24 | ✅ |
+| test-m7.mjs | 39/39 | ✅ |
+| test-m8.mjs | 24/24 | ✅ |
+| test-m9.mjs | 24/24 | ✅ |
+
+---
+
+### Static verification — HTML and code inspection
+
+Tests verified by reading `index.html` and `js/app.js` directly. No browser required.
+
+| ID | Description | Result | Method |
+|----|-------------|--------|--------|
+| SF1 | `#scenario-controls` absent from HTML | ✅ | Not found in index.html |
+| WI19 | `#install-hybrid` absent from HTML | ✅ | Not found in index.html |
+| MP13 | `hh_overhead` input absent from HTML | ✅ | Not found in index.html |
+| WI1 | "Adjust the assumptions" section absent | ✅ | Not found in index.html |
+| UF2-1 | Account Number field above API Key field | ✅ | Lines 35/41 in index.html |
+| UF2-4 | Status notices panel hidden on load | ✅ | `class="status-details hidden"` line 88 |
+| UF2-6 | No cooling note text in verdict block | ✅ | Only cooling ref is in heat-loss card (line 1196); no cooling in `buildAndDisplayVerdict` |
+| UF2-7 | Break-even copy does not mention cooling | ✅ | No cooling ref in `displayFinancialResults` or `buildAndDisplayVerdict` |
+| UF1-1 | Savings: `£X` (no `+`); negative `−£X` | ✅ | `fmtGbpSaving` at app.js:1904 |
+| UF1-4 | BUS eligibility note present | ✅ | app.js:1960 |
+| UF1-5/6 | `#verdict-status` element + fix-handler wired | ✅ | index.html:179; `buildVerdictStatusMessage` app.js:1991–2023 |
+| WI9 | COP scalar slider only in What If (not methodology) | ✅ | index.html:502–504 only; not present in methodology disclosure |
+| WI3 | Ofgem presets: elec 24.67 p/kWh, gas 5.70 p/kWh | ✅ | `OFGEM_CAP_ELEC_P_KWH`/`OFGEM_CAP_GAS_P_KWH` app.js:78,81; applied at 2338–2339 |
+| WI8 | Fine-tune `<details>` present in Policy Reform tile | ✅ | index.html:478 |
+| WI12 | `#cop-threshold-line` DOM element present | ✅ | index.html:508 |
+| MP8 | Ofgem cap note exact wording (electricity 24.67p/kWh + gas retained) | ✅ | app.js:1785 — matches spec |
+| M10A9 | Removed DL rows (validation status, days used, boiler efficiency) absent from display functions | ✅ | Not found in any `displayHeatLoss*` or `displayThermalChar*` rendering |
+| M10A11 | Financial headers: "Annual saving" / "Net cost (after grant)" / "Payback period" | ✅ | app.js:1951–1953 |
+| M10B8 | Section banner reads "Cost breakdown" | ✅ | index.html:399 |
+| AC2 | Read-only region display (`#gsp-region-readonly`) in Octopus tab | ✅ | index.html:83–84 |
+| AC3 | Region `<select>` with London=C in CSV tab | ✅ | index.html:109–126 |
+| DV9 | Day-view section hidden on load | ✅ | `class="hidden"` on `#day-view-section` — index.html:425 |
+
+**Documentation defect corrected this session:** README listed `charts.js` as a separate module. File does not exist — chart code lives in `app.js`. README corrected (commit this session).
+
+---
+
+### Outstanding browser tests (unchanged — awaiting Rhiannon's live-data run)
+
+All groups below remain ⏳ Not yet run. Reference the 2026-04-29 and 2026-05-07 outstanding-test sections for full criteria per group.
+
+| Group | IDs | State |
+|-------|-----|-------|
+| ui-day-view-charts | DV1–DV7, DV10–DV11 | ⏳ |
+| ui-design-m10b | M10B1–M10B13 | ⏳ |
+| ui-design-m10c What If | WI2–WI20 | ⏳ |
+| m8-patch (pricing) | MP1–MP12, MP14–MP15 | ⏳ |
+| agile-rate-robustness live | AR1–AR6 | ⏳ |
+| agile-rate-robustness injection | AR-S2a–e, AR-S3a–d | ⏳ |
+| ui-fixes-1 | UF1-2, UF1-3, UF1-5, UF1-6, UF1-8 | ⏳ |
+| ui-fixes-2 | UF2-2, UF2-3, UF2-5, UF2-8 | ⏳ |
+| patch-agile-region-calibration | AC1, AC6, AC7 | ⏳ |
+| smart-scenario-fixes-1 Phase 3 | SF2–SF7 | ⏳ |
+| m10a presentation | M10A1–M10A7, M10A10, M10A13–M10A16 | ⏳ |
