@@ -251,14 +251,14 @@ Browser / real data. All pricing and financial cards affected.
 | MP5 | Heating elec column: `—` for `current`; non-zero for three HP scenarios | 🚫 | Deferred — blocked on B11 |
 | MP6 | Total per scenario reconciles to ≈ actual annual bill | ❌ | 2026-05-27 Batch 8: total does not match actual bill; non-heating energy cost suspected missing. See B11. |
 | MP7 | Gas-connection-retained footnote visible below the table | 🚫 | Deferred — blocked on B11 (table reformatting) |
-| MP8 | Ofgem cap note reads: "Heat pump scenario electricity costs use the current Ofgem price cap rate (electricity: 24.67p/kWh). Gas costs (for the retained connection and baseload) and your current boiler costs use your actual historical tariff rates." | ⏳ | |
+| MP8 | Ofgem cap note reads: "Heat pump scenario electricity costs use the current Ofgem price cap rate (electricity: 24.67p/kWh). Gas costs (for the retained connection and baseload) and your current boiler costs use your actual historical tariff rates." | ✅ | 2026-05-27 Batch 10: note present. Exact wording not verified — recheck after B11 table fix. |
 | MP9 | Table scrolls horizontally on mobile; no layout break | 🚫 | Deferred — blocked on B11 (table reformatting) |
 | MP10 | `agile_calibration.D` in range 2.0–2.4 (devtools console) | ❌ | 2026-05-27 Batch 9: D = 1.745 — below expected range. Also `calibration_source` is undefined (should be 'live' or 'default'). See B12. |
 | MP11 | `agile_calibration.P_peak_p_kwh` in range 8–16 p/kWh | ✅ | 2026-05-27 Batch 9: P_peak = 13.01 p/kWh |
 | MP12 | Off-peak HH rate = D × wholesale; peak (16–19h) = D × wholesale + P (spot-check one period each) | ⏳ | |
 | MP13 | `hh_overhead` input field gone from UI | ✅ | 2026-05-27: static code inspection — not found in index.html |
 | MP14 | `dumb_hp_svt` uses Ofgem cap rate 24.67 p/kWh, not historical rate | 🚫 | Deferred — blocked on B11 |
-| MP15 | No console errors | ⏳ | |
+| MP15 | No console errors | ✅ | 2026-05-27 Batch 10 |
 
 ---
 
@@ -666,8 +666,8 @@ Implemented 2026-04-30. Sub-step 1 live gate was called PASS at implementation t
 
 | ID | Description | Result | Notes |
 |----|-------------|--------|-------|
-| AR1 | Drove tile electricity rate in 21–28 p/kWh band on Rhiannon's data | ⏳ | Sub-step 1 gate: P_peak_p_kwh restored to 13.0 p/kWh ✅ (at implementation); full drove tile rate not confirmed |
-| AR2 | `dumb_hp_hh` total cost > `dumb_hp_svt` total cost on Rhiannon's data | ⏳ | Pre-launch gate |
+| AR1 | Drove tile electricity rate in 21–28 p/kWh band on Rhiannon's data | ⚠️ | 2026-05-27 Batch 10: Agile rate visible in drove tile but specific p/kWh value not confirmed; scenario attribution (HP vs Smart HP) unclear. Need rate value to check range. |
+| AR2 | `dumb_hp_hh` total cost > `dumb_hp_svt` total cost on Rhiannon's data | ❌ | 2026-05-27 Batch 10: HH total LOWER than SVT — expected higher on peak-heavy data. Likely consequence of B12 (D=1.745 suppresses HH rates below SVT). |
 | AR3 | No unusual-result panel on Rhiannon's peak-heavy heating data | ⏳ | Weighted mean > cap expected |
 | AR4 | Drove tile electricity context shows region only (no plausibility note) on Rhiannon's data | ⏳ | |
 | AR5 | CSV path (no GSP region): tier-1 "couldn't fetch" coverage warning visible above pricing table | ⏳ | |
@@ -1042,7 +1042,20 @@ Result: `D: 1.745231607629428 | P_peak: 13.014950272479561 | source: undefined`
 
 ---
 
-### Outstanding browser tests (updated after Batch 9)
+### Browser session — Batch 10 (Rhiannon, Octopus data, 2026-05-27)
+
+MP8, MP15 confirmed; AR1–AR2 checked.
+
+| ID | Test | Result | Notes |
+|----|------|--------|-------|
+| MP8 | Ofgem cap note present | ✅ | Note visible. Exact wording not verified. |
+| MP15 | No console errors | ✅ | |
+| AR1 | Drove tile rate in 21–28 p/kWh band | ⚠️ | Agile rate visible but p/kWh value not confirmed; scenario attribution unclear |
+| AR2 | `dumb_hp_hh` total > `dumb_hp_svt` total | ❌ | HH total is LOWER than SVT — expected higher. Likely B12 (D=1.745 too low). |
+
+---
+
+### Outstanding browser tests (updated after Batch 10)
 
 Reference the 2026-04-29 and 2026-05-07 outstanding-test sections for full criteria per group.
 
@@ -1051,8 +1064,8 @@ Reference the 2026-04-29 and 2026-05-07 outstanding-test sections for full crite
 | ui-design-m10b | **complete** | ✅ |
 | m10a presentation | **complete** (M10A15 ❌ — see B4) | ❌ |
 | ui-design-m10c What If | **complete** (WI16 ❌ B9; WI18 ⚠️; WI11 ❌ B7; WI7 design B6) | ❌ |
-| m8-patch (pricing) | MP8, MP12, MP15 runnable; rest 🚫 blocked on B11 (MP10 ❌ B12) | ❌ |
-| agile-rate-robustness live | AR1–AR6 | ⏳ |
+| m8-patch (pricing) | MP12 runnable; rest done or 🚫 blocked (MP10 ❌ B12; MP6 ❌ B11) | ❌ |
+| agile-rate-robustness live | AR1 ⚠️, AR3–AR6 | ⏳ |
 | ui-fixes-1 | UF1-2, UF1-3, UF1-5, UF1-6, UF1-8 | ⏳ |
 | ui-fixes-2 | UF2-5, UF2-8 | ⏳ |
 | patch-agile-region-calibration | AC1, AC6, AC7 | ⏳ |
