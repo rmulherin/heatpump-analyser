@@ -343,9 +343,9 @@ Browser / real data. All pricing and financial cards affected.
 | WI7 | Policy Reform: any rate input change triggers M8→M9 re-run; policy output updates | ✅ | 2026-05-27 Batch 5: re-run confirmed by criteria. BUT Rhiannon: auto-trigger is a design error — should require Recalculate button. See B5, B6. |
 | WI8 | Policy Reform: Fine-tune standing charges visible when `<details>` expanded | ✅ | 2026-05-27 Batch 5 |
 | WI9 | Wait for Technology: COP slider absent from methodology disclosure (relocated to What If tile) | ✅ | 2026-05-27: static code inspection — slider only at index.html:502–504 |
-| WI10 | Wait for Technology: dragging slider updates live display `X× (COP Y at 7°C)` instantly | ⏳ | |
-| WI11 | Wait for Technology: "Recalculate" runs M6→M7→M8→M9 chain; payback and threshold lines update | ⏳ | |
-| WI12 | Wait for Technology: threshold COP line appears on initial render — correct wording for found/not-found cases | ⏳ | |
+| WI10 | Wait for Technology: dragging slider updates live display `X× (COP Y at 7°C)` instantly | ✅ | 2026-05-27 Batch 6 |
+| WI11 | Wait for Technology: "Recalculate" runs M6→M7→M8→M9 chain; payback and threshold lines update | ❌ | 2026-05-27 Batch 6: chain ran (results tile updated to 30y payback). Get Your Quotes tile not refreshed (still showed >40y). See B7. Button position not confirmed. |
+| WI12 | Wait for Technology: threshold COP line appears on initial render — correct wording for found/not-found cases | ✅ | 2026-05-27 Batch 6: line present in Savings & Payback tile; updated after WTT recalculate |
 | WI13 | Get Your Quotes: grant presets fill `#wi-grant` input; "Enhanced — £10,000 (proposed)" label correct | ⏳ | |
 | WI14 | Get Your Quotes: changing any input immediately updates condensed payback table (M9 re-run) | ⏳ | |
 | WI15 | Get Your Quotes: avoided AC info popout (ⓘ) opens and displays explainer text | ⏳ | |
@@ -950,7 +950,27 @@ What If section — Policy Reform tile and layout checks. Results visible from p
 
 ---
 
-### Outstanding browser tests (updated after Batch 5)
+### Browser session — Batch 6 (Rhiannon, Octopus data, 2026-05-27)
+
+Wait for Technology tile — WI10–WI12.
+
+| ID | Test | Result | Notes |
+|----|------|--------|-------|
+| WI10 | COP slider live display updates instantly | ✅ | |
+| WI11 | Recalculate runs M6→M7→M8→M9; payback updates | ❌ | Results tile updated (30y payback); Get Your Quotes tile did not refresh (still >40y). See B7. |
+| WI12 | Threshold COP line present on initial render | ✅ | Line in Savings & Payback tile; updated after WTT recalculate |
+
+---
+
+### Bug found — Batch 6 (2026-05-27)
+
+| # | Bug | Observed behaviour | Status |
+|---|-----|--------------------|--------|
+| B7 | **WTT Recalculate does not refresh Get Your Quotes tile** | After clicking Recalculate in the Wait for Technology tile, the main results tile updated to show 30y payback. The Get Your Quotes condensed payback table still showed >40y (pre-recalculate value). `updateQuotesOutput` likely not called in the WTT recalculate handler. | Surfaced to Opus for investigation. |
+
+---
+
+### Outstanding browser tests (updated after Batch 6)
 
 Reference the 2026-04-29 and 2026-05-07 outstanding-test sections for full criteria per group.
 
@@ -958,7 +978,7 @@ Reference the 2026-04-29 and 2026-05-07 outstanding-test sections for full crite
 |-------|--------------|-------|
 | ui-design-m10b | **complete** | ✅ |
 | m10a presentation | **complete** (M10A15 ❌ — see B4) | ❌ |
-| ui-design-m10c What If | WI10–WI18, WI20 (WI1–WI9, WI19 ✅; WI7 flagged B6 design issue) | ⏳ |
+| ui-design-m10c What If | WI13–WI18, WI20 (WI11 ❌ B7; WI1–WI10, WI12, WI19 ✅) | ⏳ |
 | m8-patch (pricing) | MP1–MP12, MP14–MP15 | ⏳ |
 | agile-rate-robustness live | AR1–AR6 | ⏳ |
 | ui-fixes-1 | UF1-2, UF1-3, UF1-5, UF1-6, UF1-8 | ⏳ |
