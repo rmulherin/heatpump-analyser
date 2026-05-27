@@ -285,10 +285,10 @@ Browser / real data. All pricing and financial cards affected.
 | UF2-2 | After single-meter fetch: gas toggle pre-checked to m³ if meter reported m³; pre-unchecked for kWh | ✅ | 2026-05-27: pre-checked; code inspection confirms driven by `gasResult.detectedUnit` — dynamic, not hardcoded |
 | UF2-3 | Console shows `Tier 1 meter (gas): unit=m3` log line (or `unit=kwh`) | ✅ | 2026-05-27: confirmed in console |
 | UF2-4 | Status notices hidden on page load; shows "N notices" summary when notices added; expands on click | ✅ | 2026-05-27: 11 notices, collapsed; expanded to show full list |
-| UF2-5 | Clearing and re-running resets notices to closed and hidden | ⏳ | |
-| UF2-6 | No cooling note text anywhere in verdict block | ⏳ | |
-| UF2-7 | Break-even verdict copy does not mention cooling | ⏳ | |
-| UF2-8 | No console errors | ⏳ | |
+| UF2-5 | Clearing and re-running resets notices to closed and hidden | 🚫 | 2026-05-27 Batch 13: no clear/reset button exists on page. Test criteria assumes one. Reset-on-fresh-load covered by UF2-4 ✅. Surfaced to Opus: confirm whether clear button is needed or criterion should be dropped. |
+| UF2-6 | No cooling note text anywhere in verdict block | ✅ | 2026-05-27: static code inspection — cooling refs only in heat-loss card; absent from `buildAndDisplayVerdict` |
+| UF2-7 | Break-even verdict copy does not mention cooling | ✅ | 2026-05-27: static code inspection — no cooling refs in `displayFinancialResults` or `buildAndDisplayVerdict` |
+| UF2-8 | No console errors | ✅ | 2026-05-27: confirmed across multiple batches |
 
 ---
 
@@ -1099,7 +1099,7 @@ Reference the 2026-04-29 and 2026-05-07 outstanding-test sections for full crite
 | m8-patch (pricing) | MP12 runnable; rest done or 🚫 blocked (MP10 ❌ B12; MP6 ❌ B11) | ❌ |
 | agile-rate-robustness live | **complete** (AR1–AR4 ❌ all B12; AR5 deferred CSV; AR6 ✅) | ❌ |
 | ui-fixes-1 | **complete** (UF1-3 ⚠️ pending black-text DL delete; rest ✅) | ⚠️ |
-| ui-fixes-2 | UF2-5, UF2-8 | ⏳ |
+| ui-fixes-2 | **complete** (UF2-5 🚫 criteria unclear — Opus to confirm) | ⚠️ |
 | patch-agile-region-calibration | AC1, AC6, AC7 | ⏳ |
 | smart-scenario-fixes-1 Phase 3 | SF2–SF7 | ⏳ |
 | ui-day-view-charts | DV1–DV7, DV10–DV11 | ⏳ |
