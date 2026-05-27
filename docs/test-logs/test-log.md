@@ -666,12 +666,12 @@ Implemented 2026-04-30. Sub-step 1 live gate was called PASS at implementation t
 
 | ID | Description | Result | Notes |
 |----|-------------|--------|-------|
-| AR1 | Drove tile electricity rate in 21–28 p/kWh band on Rhiannon's data | ⚠️ | 2026-05-27 Batch 10: Agile rate visible in drove tile but specific p/kWh value not confirmed; scenario attribution (HP vs Smart HP) unclear. Need rate value to check range. |
-| AR2 | `dumb_hp_hh` total cost > `dumb_hp_svt` total cost on Rhiannon's data | ❌ | 2026-05-27 Batch 10: HH total LOWER than SVT — expected higher on peak-heavy data. Likely consequence of B12 (D=1.745 suppresses HH rates below SVT). |
-| AR3 | No unusual-result panel on Rhiannon's peak-heavy heating data | ⏳ | Weighted mean > cap expected |
-| AR4 | Drove tile electricity context shows region only (no plausibility note) on Rhiannon's data | ⏳ | |
-| AR5 | CSV path (no GSP region): tier-1 "couldn't fetch" coverage warning visible above pricing table | ⏳ | |
-| AR6 | No console errors on any path | ⏳ | |
+| AR1 | Drove tile electricity rate in 21–28 p/kWh band on Rhiannon's data | ❌ | 2026-05-27 Batch 11: rate = 15.6 p/kWh — below expected range. B12 consequence (D=1.745 too low). |
+| AR2 | `dumb_hp_hh` total cost > `dumb_hp_svt` total cost on Rhiannon's data | ❌ | 2026-05-27 Batch 10: HH total LOWER than SVT — expected higher. B12 consequence. |
+| AR3 | No unusual-result panel on Rhiannon's peak-heavy heating data | ❌ | 2026-05-27 Batch 11: plausibility note IS showing in drove tile: "the displayed average (15.6 p/kWh) is below the Ofgem cap (24.67 p/kWh)." Correct behaviour given B12 — note fires because rate < 0.85×cap (20.97p). Will pass once B12 fixed. |
+| AR4 | Drove tile electricity context shows region only (no plausibility note) on Rhiannon's data | ❌ | 2026-05-27 Batch 11: plausibility note present alongside "Agile tariff — region C". B12 consequence — same as AR3. |
+| AR5 | CSV path (no GSP region): tier-1 "couldn't fetch" coverage warning visible above pricing table | ⏳ | Requires CSV path — deferred |
+| AR6 | No console errors on any path | ✅ | 2026-05-27: confirmed across multiple batches |
 
 ---
 
@@ -1055,7 +1055,23 @@ MP8, MP15 confirmed; AR1–AR2 checked.
 
 ---
 
-### Outstanding browser tests (updated after Batch 10)
+### Browser session — Batch 11 (Rhiannon, Octopus data, 2026-05-27)
+
+AR1 rate value and AR3/AR4 unusual-result check.
+
+| ID | Test | Result | Notes |
+|----|------|--------|-------|
+| AR1 | Drove tile rate in 21–28 p/kWh band | ❌ | Rate = 15.6 p/kWh. Below range. B12 consequence. |
+| AR3 | No unusual-result panel | ❌ | Plausibility note fires in drove tile (rate 15.6 < floor 20.97p). Correct behaviour given B12 — will pass once D fixed. |
+| AR4 | Region only shown (no plausibility note) | ❌ | Plausibility note present. B12 consequence — same as AR3. |
+
+Plausibility note text observed: *"Agile tariff — region C. Note: the displayed average (15.6 p/kWh) is below the Ofgem cap (24.67 p/kWh). This suggests either an off-peak-heavy heating pattern or a data quality issue. See coverage warning above for details."*
+
+AR1, AR2, AR3, AR4 all fail as B12 consequences. The plausibility logic itself is working correctly.
+
+---
+
+### Outstanding browser tests (updated after Batch 11)
 
 Reference the 2026-04-29 and 2026-05-07 outstanding-test sections for full criteria per group.
 
@@ -1065,7 +1081,7 @@ Reference the 2026-04-29 and 2026-05-07 outstanding-test sections for full crite
 | m10a presentation | **complete** (M10A15 ❌ — see B4) | ❌ |
 | ui-design-m10c What If | **complete** (WI16 ❌ B9; WI18 ⚠️; WI11 ❌ B7; WI7 design B6) | ❌ |
 | m8-patch (pricing) | MP12 runnable; rest done or 🚫 blocked (MP10 ❌ B12; MP6 ❌ B11) | ❌ |
-| agile-rate-robustness live | AR1 ⚠️, AR3–AR6 | ⏳ |
+| agile-rate-robustness live | **complete** (AR1–AR4 ❌ all B12; AR5 deferred CSV; AR6 ✅) | ❌ |
 | ui-fixes-1 | UF1-2, UF1-3, UF1-5, UF1-6, UF1-8 | ⏳ |
 | ui-fixes-2 | UF2-5, UF2-8 | ⏳ |
 | patch-agile-region-calibration | AC1, AC6, AC7 | ⏳ |
