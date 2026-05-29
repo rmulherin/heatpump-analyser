@@ -1,7 +1,7 @@
 # Investigation Instrumentation — Diagnostic Getters
 
 **Date:** 2026-05-28
-**Status:** Awaiting review — Opus architect review pending.
+**Status:** ⏸ Blocked — 2026-05-29. See Design Review below; rewrite required.
 
 ---
 
@@ -386,3 +386,121 @@ Status values (canonical, from plan-reviewer.md):
 - ⏸ Blocked — yyyy-mm-dd. See Design Review below; rewrite required.
 - Implemented — yyyy-mm-dd, commit <hash>.            (implementer sets)
 -->
+
+---
+
+## Design Review
+
+**Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Date:** 2026-05-29
+**Review type:** Plan review (pre-implementation)
+**Authoritative design:** `praxis-claude-hub/projects/tools/heatpump-analyser/design/investigation-instrumentation.md`
+
+### Context
+
+Review of the diagnostic-instrumentation plan against the parent design doc. The plan
+is well-researched — load-bearing code-claim assertions were verified by an
+Opus-spawned read-only Explore sub-agent (gas-standing bundling at
+`pricing-engine.js:246–255`; M9 component-free shape at `financial.js:75–80`; Path B
+overwrite at `thermal-character.js:606`; `getRateMetadata` fields at
+`pricing-engine.js:190–192`; external-data field names at `external-data.js:366–367`;
+getter locations at `app.js:3164–3165`). Two HIGH findings require new code logic
+beyond the hygiene bright line, so the verdict is Blocked: the plan returns to the
+planner for revision.
+
+Notable strength worth elevating: the plan's research uncovered a substantive
+refinement to INV-1's hypothesis. If `current.annual_cost_gbp` flows untransformed
+M8 → M9 → display, M8 and M9 should *agree* on stored values, and the displayed-£
+discrepancy must come from display logic — not from M9 dropping a component. The
+revised `__reconcileCosts` (H1 below) operationalises this insight.
+
+### Required changes for implementation
+
+**1. H1 — Add a `verdict` field to `__reconcileCosts()` output, per scenario.** Make
+the M8↔M9 diagnostic conclusion explicit rather than left to a reader's
+interpretation. Values: `'no_model_level_mismatch'` (|diff| ≤ £1; routes to
+display-logic investigation), `'m9_total_differs'` (|diff| > £1; routes to
+`effectivePricingResult` / `financial.js`), or `'m8_only'` (M9 absent). Add a brief
+`note: string` paraphrasing the verdict in plain English. Update Success Criterion 3
+to reflect the two-path diagnostic.
+
+**2. H2 — Add `comfort_demand_kwh` to `__getScenarioDiagnostics()` output.** Design
+D3 called for the comfort-demand figure to be exposed alongside its inputs; the plan
+exposes inputs (setpoint, HTC, solar aperture) but not the figure itself (the
+10,100 kWh "Modelled comfort demand at 17.6°C" shown in the Heating-to-comfort
+card). Without it, INV-3 cannot be diagnosed against the model's actual demand
+value. Verify whether `comfort_demand_kwh` is stored in a module result first; if
+stored, pass through; if not, derive using the exact formula the model uses to
+produce the displayed value, documenting the source. Do not invent a new
+computation. Update Success Criterion 4 to include `comfort_demand_kwh`.
+
+**3. M3 — Document the post-hoc limit in Success Criteria.** Add: "`heat_balance_kwh`
+is computed post-hoc from stored arrays (HTC × ΔT × time; R × W/m² × time), not from
+the RC model's per-step internal terms. Any mismatch from the model's internal
+accounting IS the finding for INV-3."
+
+**4. M4 — Document the runtime-vs-code-reading split in Step 6 or Risks.** Add: "The
+v1 surface reveals the Path A ↔ Path B τ discrepancy at runtime; root-causing why
+Path A returns ~2h on the 14°C winter-return input is architect code-reading, not
+runtime instrumentation."
+
+**5. M5 — Single-pass reduce in `__getScenarioDiagnostics`.** Replace
+`Math.min(...validIndoor)` and `Math.max(...validIndoor)` with a single-pass reduce
+computing `min`, `max`, `mean`, `n_hh`, and `fraction_below_setpoint` together.
+Removes the spread-to-apply cliff on large arrays.
+
+**6. L6 — `Object.keys(pr.scenarios)` for scenario iteration in `__reconcileCosts`.**
+Replace the hardcoded `['current', 'dumb_hp_svt', 'dumb_hp_hh', 'smart_hp_hh']` so
+the getter survives scenario renames.
+
+**7. L8 — Computed residual for `non_heating_elec` in `__reconcileCosts`.** Replace
+`non_heating_elec: { m8: 0 }` with `non_heating_elec: { m8: (ps.non_heating_elec_gbp
+?? 0) - elecScAnnual }`. Same expected output today; surfaces any future bundling
+change rather than hiding it.
+
+**8. L9 — Code comment locking the Path A capture assumption.** In
+`thermal-character.js` Step 1, add a one-line comment immediately before the Path A
+capture noting that the capture must occur before any potential Path B override.
+
+### Resolution of review changes
+
+*To be completed by the planner during revision.*
+
+### Items noted but not edited
+
+- **LOW — L7 — `boiler_efficiency_used ?? 0.9` silent default.** Changing to
+  fail-loud would be a new behaviour change, not hygiene; explicitly out of scope per
+  agreed dispositions. Keep the default.
+
+## Review Summary
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| CRITICAL | 0     | — |
+| HIGH     | 2     | ✘ block |
+| MEDIUM   | 3     | ⚠ warn |
+| LOW      | 4     | — note |
+
+Verdict: ⏸ BLOCKED — two HIGH findings require new code logic beyond the hygiene
+bright line; plan returns to the planner for revision per the Required Changes above.
+
+---
+
+## Approval
+
+**Status:** ⏸ Blocked — 2026-05-29
+**Approved by:** Rhiannon (via Opus review)
+**Clarifications confirmed:**
+- H1 (verdict field in `__reconcileCosts`) accepted as required.
+- H2 (`comfort_demand_kwh` in `__getScenarioDiagnostics`) accepted as required.
+- L7 (fail-loud on missing `boiler_efficiency_used`) explicitly dropped — keep the
+  `?? 0.9` default.
+- "No v2" applies to this instrumentation: the build must be complete in one pass.
+  The documented runtime/code-reading split (M3, M4) is the deliberate scope
+  boundary between runtime instrumentation and the architect's standard
+  investigation tools, not a future build.
+- All code-claim research findings in the plan were independently verified by an
+  Opus-spawned read-only Explore sub-agent on 2026-05-29; the plan's key insight
+  (that `buildEffectivePricingResult` leaves `current` untouched, so any displayed-£
+  divergence on `current` is in display logic) is accepted as the working hypothesis
+  the instrumentation will test.
