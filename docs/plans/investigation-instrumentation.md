@@ -1,7 +1,7 @@
 # Investigation Instrumentation — Diagnostic Getters
 
 **Date:** 2026-05-28
-**Status:** ⏸ Blocked — 2026-05-29. See Design Review below; rewrite required.
+**Status:** Awaiting review — Opus architect review pending.
 
 ---
 
@@ -90,7 +90,7 @@ In `estimateThermalCharacter`, after the `estimateThermalMass` destructuring blo
 (immediately after the `if (setpoint_c !== null)` call), insert:
 
 ```javascript
-// Diagnostic: capture Path A value before Path B may override
+// Capture Path A value before Path B block — must precede the Path B override
 const path_a_kj_per_k = thermal_mass_kj_per_k;
 const path_a_tau_h    = (path_a_kj_per_k !== null && htc !== null)
   ? path_a_kj_per_k / (htc * 3.6) : null;
@@ -194,39 +194,51 @@ window.__reconcileCosts = () => {
   const MISMATCH_THRESHOLD = 1; // £1
 
   const out = { available: true };
-  for (const name of ['current', 'dumb_hp_svt', 'dumb_hp_hh', 'smart_hp_hh']) {
-    const ps = pr.scenarios?.[name];
+  for (const name of Object.keys(pr.scenarios ?? {})) {
+    const ps = pr.scenarios[name];
     const fs = fr.scenarios?.[name];
     if (!ps || ps.annual_cost_gbp === null) {
       out[name] = { available: false };
       continue;
     }
-    const m8Total = ps.annual_cost_gbp;
-    const m9Total = fs?.annual_cost_gbp ?? null;
+    const m8Total   = ps.annual_cost_gbp;
+    const m9Total   = fs?.annual_cost_gbp ?? null;
     const totalDiff = (m9Total !== null) ? m8Total - m9Total : null;
+
+    let verdict, note;
+    if (m9Total === null) {
+      verdict = 'm8_only';
+      note    = 'M9 has no figure for this scenario — nullified by effectivePricingResult or scenario unavailable.';
+    } else if (Math.abs(totalDiff) <= MISMATCH_THRESHOLD) {
+      verdict = 'no_model_level_mismatch';
+      note    = 'M8 and M9 stored values agree — if a visual discrepancy was observed, investigate display logic.';
+    } else {
+      verdict = 'm9_total_differs';
+      note    = `M9 uses a different total (diff = £${totalDiff.toFixed(2)}) — investigate effectivePricingResult or financial.js.`;
+    }
 
     out[name] = {
       heating_gas:      { m8: ps.heating_gas_gbp ?? 0 },
       non_heating_gas:  { m8: (ps.non_heating_gas_gbp ?? 0) - gasScAnnual },
       gas_standing:     { m8: gasScAnnual },
       heating_elec:     { m8: ps.heating_elec_gbp ?? 0 },
-      non_heating_elec: { m8: 0 },
+      non_heating_elec: { m8: (ps.non_heating_elec_gbp ?? 0) - elecScAnnual },
       elec_standing:    { m8: elecScAnnual },
-      total:            {
-        m8: m8Total,
-        m9: m9Total,
-        diff: totalDiff,
-        mismatch: totalDiff !== null && Math.abs(totalDiff) > MISMATCH_THRESHOLD,
-      },
+      total:            { m8: m8Total, m9: m9Total, diff: totalDiff,
+                          mismatch: totalDiff !== null && Math.abs(totalDiff) > MISMATCH_THRESHOLD,
+                          verdict, note },
     };
   }
   return out;
 };
 ```
 
-Note: `non_heating_elec_gbp` in M8 equals elec standing charge (as confirmed in research),
-so `non_heating_elec` energy = 0. If this assumption is wrong it will show up in the total
-mismatch.
+Changes from original: (L6) iterates `Object.keys(pr.scenarios)` rather than a hardcoded
+array, so the getter survives scenario renames; (L8) `non_heating_elec.m8` is computed as
+`non_heating_elec_gbp − elecScAnnual` rather than a hardcoded `0`, surfacing any future
+bundling change; (H1) `total` now includes `verdict` and `note` fields that route the
+investigator to the right layer — `'no_model_level_mismatch'` points to display logic,
+`'m9_total_differs'` points to `effectivePricingResult` / `financial.js`.
 
 ### Step 5 — Add `window.__getScenarioDiagnostics` (`app.js`)
 
@@ -248,17 +260,30 @@ window.__getScenarioDiagnostics = () => {
   const solarR      = hl?.solar_aperture_m2 ?? null;
   const externalArr = ext?.external ?? null;  // array of { temp_c, solar_w_m2, ... }
 
+  // Single-pass stats to avoid spread-to-apply cliff on large arrays (M5)
   const validIndoor = indoorArr.filter(v => v !== null && v !== undefined);
-  const indoorStats = validIndoor.length > 0 ? {
-    min:                   Math.min(...validIndoor),
-    max:                   Math.max(...validIndoor),
-    mean:                  validIndoor.reduce((a, b) => a + b, 0) / validIndoor.length,
-    fraction_below_setpoint: setpoint !== null
-      ? validIndoor.filter(v => v < setpoint).length / validIndoor.length : null,
-    n_hh: validIndoor.length,
-  } : null;
+  let indoorStats = null;
+  if (validIndoor.length > 0) {
+    let min = Infinity, max = -Infinity, sum = 0, countBelow = 0;
+    for (const v of validIndoor) {
+      if (v < min) min = v;
+      if (v > max) max = v;
+      sum += v;
+      if (setpoint !== null && v < setpoint) countBelow++;
+    }
+    const n = validIndoor.length;
+    indoorStats = {
+      min,
+      max,
+      mean: sum / n,
+      fraction_below_setpoint: setpoint !== null ? countBelow / n : null,
+      n_hh: n,
+    };
+  }
 
-  // Aggregate heat balance from stored arrays (kWh per HH, 0.5 h slots)
+  // Aggregate heat balance from stored arrays (kWh per HH, 0.5 h slots).
+  // Post-hoc approximation: HTC × ΔT × time and R × W/m² × time — not the
+  // RC model's per-step internal terms (see Risks).
   let totalHeatDeliveredKwh = null;
   let totalHeatLossKwh      = null;
   let totalSolarGainKwh     = null;
@@ -290,11 +315,13 @@ window.__getScenarioDiagnostics = () => {
       solar_gain:     totalSolarGainKwh,
     },
     comfort_demand_inputs: {
-      setpoint_c:    setpoint,
-      htc_w_per_k:   htc,
+      setpoint_c:        setpoint,
+      htc_w_per_k:       htc,
       solar_aperture_m2: solarR,
       boiler_efficiency: boilerEff,
     },
+    // Stored in thermal character result (annual_modelled_demand_kwh); pass through (H2)
+    comfort_demand_kwh: tc?.annual_modelled_demand_kwh ?? null,
   };
 };
 ```
@@ -328,6 +355,11 @@ window.__getThermalDiagnostics = () => {
 };
 ```
 
+Note on scope boundary (M4): this getter exposes the Path A ↔ Path B τ discrepancy at
+runtime. Root-causing *why* Path A returns ~2 h on a given winter-return-temp input
+(INV-4) is architect code-reading work, not runtime instrumentation — that investigation
+uses `__getThermalDiagnostics()` as its evidence source, not an extended getter.
+
 ### Step 7 — Verify not-available behaviour
 
 In `js/app.js`, the `{ available: false }` return is already the early-exit path for each
@@ -343,7 +375,7 @@ check in each getter body.
 | Risk | Mitigation |
 |------|-----------|
 | `gas_energy_gbp` goes negative if gas standing derivation is off | The design doc acknowledges this is display-only. A negative value is itself diagnostic information (signals bundling mismatch). No guard needed. |
-| `simulateCurrentRcTrace` heat-loss aggregate mismatches stored RC model internals | Getter computes from stored arrays only; any mismatch from the RC model's internal state IS the finding, not a bug. Document in plan. |
+| `heat_balance_kwh` is a post-hoc approximation | Computed from stored arrays (HTC × ΔT × time; R × W/m² × time), not from the RC model's per-step internal terms. Any discrepancy between this getter's aggregate and the model's internal accounting IS the finding for INV-3 — not a bug in the getter. |
 | Step 1 adds fields to `estimateThermalCharacter` return; tests may not cover them | `_path_diagnostics` is additive — no test assertions change. No test file changes needed. |
 | External data field names | Confirmed: `getExternalResult().external` is an array of `{ temp_c, solar_w_m2, ... }` objects (external-data.js). Step 5 uses these paths. |
 
@@ -354,10 +386,16 @@ check in each getter body.
 - [ ] `window.__getPricingResult()` returns `gas_standing_gbp`, `gas_energy_gbp`, `elec_standing_gbp`
       per scenario after pipeline run; returns `{ available: false }` before.
 - [ ] `window.__getFinancialResult()` returns `m8_components` per scenario after pipeline run.
-- [ ] `window.__reconcileCosts()` flags the current-boiler total mismatch (INV-1 hypothesis:
-      `|diff| > £1`) and localises it to a named component or confirms M8=M9 (points to display logic).
-- [ ] `window.__getScenarioDiagnostics()` returns `indoor_temp_stats` with min/mean/max/
-      fraction_below_setpoint; no console errors.
+- [ ] `window.__reconcileCosts()` returns a `verdict` per scenario: `'no_model_level_mismatch'`
+      confirms M8 and M9 stored values agree (routes INV-1 to display logic); `'m9_total_differs'`
+      (|diff| > £1) routes to `effectivePricingResult` / `financial.js`; `'m8_only'` when M9 has
+      no figure. Each verdict has a `note` in plain English.
+- [ ] `window.__getScenarioDiagnostics()` returns `indoor_temp_stats` (min/mean/max/
+      fraction_below_setpoint) and `comfort_demand_kwh` (from
+      `getThermalCharacterResult().annual_modelled_demand_kwh`); no console errors.
+      `heat_balance_kwh` values are post-hoc approximations from stored arrays, not the RC
+      model's per-step internal terms — a discrepancy between getter output and model internals
+      is expected and is itself diagnostic information for INV-3.
 - [ ] `window.__getThermalDiagnostics()` returns `path_a.kj_per_k` and `path_b.kj_per_k` (one
       may be null depending on which path was used); `selected_kj_per_k` matches the final
       thermal character result.
@@ -464,7 +502,41 @@ capture noting that the capture must occur before any potential Path B override.
 
 ### Resolution of review changes
 
-*To be completed by the planner during revision.*
+**H1** — `verdict` and `note` fields added to `total` in `__reconcileCosts()` per scenario.
+Three values: `'no_model_level_mismatch'` (routes to display logic), `'m9_total_differs'`
+(routes to effectivePricingResult/financial.js), `'m8_only'` (M9 absent). `note` is a
+plain-English string. Success Criterion 3 updated to reflect the two-path diagnostic.
+
+**H2** — `comfort_demand_kwh` added to `__getScenarioDiagnostics()` return. Field is a
+pass-through from `getThermalCharacterResult().annual_modelled_demand_kwh` — already
+stored in the module result (no new computation). The `annual_modelled_demand_kwh` field
+is the same figure shown in the Heating-to-comfort card. Success Criterion 4 updated.
+
+**M3** — Risk row rewritten to name `heat_balance_kwh` as a post-hoc approximation and
+clarify that any mismatch from the RC model's internal terms is the diagnostic finding,
+not a getter bug. Same note added inline in the Step 5 code comment and in Success
+Criterion 4.
+
+**M4** — Note added after Step 6 code block: the v1 getter surfaces the Path A ↔ Path B
+τ discrepancy at runtime; root-causing why Path A returns ~2 h on a given input is
+architect code-reading (INV-4), not runtime instrumentation.
+
+**M5** — `indoorStats` computation replaced with a single-pass `for…of` loop computing
+min, max, sum, and `countBelow` together. Removes the spread-to-apply cliff on large
+arrays (17,000+ HH slots).
+
+**L6** — `for (const name of Object.keys(pr.scenarios ?? {}))` replaces the hardcoded
+scenario array in `__reconcileCosts()`.
+
+**L8** — `non_heating_elec: { m8: (ps.non_heating_elec_gbp ?? 0) - elecScAnnual }`
+replaces `{ m8: 0 }`. Expected output is unchanged today (elec SC is the only component);
+future bundling changes will surface rather than be hidden.
+
+**L9** — Comment updated in Step 1 thermal-character.js snippet: `// Capture Path A value
+before Path B block — must precede the Path B override`.
+
+**L7** — Not applied per agreed dispositions (Items noted but not edited). `?? 0.9`
+default retained.
 
 ### Items noted but not edited
 
