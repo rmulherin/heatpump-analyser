@@ -3161,5 +3161,192 @@ window.__getHeatPumpModelResult       = () => getHeatPumpModelResult();
 window.__getScenarioConsumptionResult = () => getScenarioConsumptionResult();
 window.__buildRateArrays              = (cs, ex, tr) => buildRateArrays(cs, ex, tr);
 window.__getRateMetadata              = () => getRateMetadata();
-window.__getPricingResult             = () => getPricingResult();
-window.__getFinancialResult           = () => getFinancialResult();
+window.__getPricingResult = () => {
+  const pr   = getPricingResult();
+  const meta = getRateMetadata();
+  if (!pr || !meta) return { available: false };
+  const gasScAnnual  = meta.gas_standing_charge_p_per_day  * 365 / 100;
+  const elecScAnnual = meta.elec_standing_charge_p_per_day * 365 / 100;
+  const scenarios = {};
+  for (const [name, s] of Object.entries(pr.scenarios)) {
+    if (!s || s.annual_cost_gbp === null) {
+      scenarios[name] = { ...s, gas_standing_gbp: null, gas_energy_gbp: null, elec_standing_gbp: null };
+      continue;
+    }
+    scenarios[name] = {
+      ...s,
+      gas_standing_gbp:  gasScAnnual,
+      gas_energy_gbp:    (s.non_heating_gas_gbp ?? 0) - gasScAnnual,
+      elec_standing_gbp: elecScAnnual,
+    };
+  }
+  return { ...pr, scenarios, available: true };
+};
+
+window.__getFinancialResult = () => {
+  const fr   = getFinancialResult();
+  const pr   = getPricingResult();
+  const meta = getRateMetadata();
+  if (!fr) return { available: false };
+  const scale = meta ? 365 / (meta.data_period_days || 365) : null;
+  const scenarios = {};
+  for (const [name, fs] of Object.entries(fr.scenarios)) {
+    const ps  = pr?.scenarios?.[name];
+    const m8Components = (ps && scale !== null && ps.annual_cost_gbp !== null) ? {
+      gas_energy:   (ps.gas_energy_cost_gbp ?? 0) * scale,
+      elec_energy:  (ps.elec_energy_cost_gbp ?? 0) * scale,
+      standing:     (ps.standing_charge_gbp  ?? 0) * scale,
+    } : null;
+    scenarios[name] = { ...fs, m8_components: m8Components };
+  }
+  return { ...fr, scenarios, available: true };
+};
+
+window.__reconcileCosts = () => {
+  const pr   = getPricingResult();
+  const fr   = getFinancialResult();
+  const meta = getRateMetadata();
+  if (!pr || !fr || !meta) return { available: false };
+
+  const gasScAnnual  = meta.gas_standing_charge_p_per_day  * 365 / 100;
+  const elecScAnnual = meta.elec_standing_charge_p_per_day * 365 / 100;
+  const MISMATCH_THRESHOLD = 1;
+
+  const out = { available: true };
+  for (const name of Object.keys(pr.scenarios ?? {})) {
+    const ps = pr.scenarios[name];
+    const fs = fr.scenarios?.[name];
+    if (!ps || ps.annual_cost_gbp === null) {
+      out[name] = { available: false };
+      continue;
+    }
+    const m8Total   = ps.annual_cost_gbp;
+    const m9Total   = fs?.annual_cost_gbp ?? null;
+    const totalDiff = (m9Total !== null) ? m8Total - m9Total : null;
+
+    let verdict, note;
+    if (m9Total === null) {
+      verdict = 'm8_only';
+      note    = 'M9 has no figure for this scenario — nullified by effectivePricingResult or scenario unavailable.';
+    } else if (Math.abs(totalDiff) <= MISMATCH_THRESHOLD) {
+      verdict = 'no_model_level_mismatch';
+      note    = 'M8 and M9 stored values agree — if a visual discrepancy was observed, investigate display logic.';
+    } else {
+      verdict = 'm9_total_differs';
+      note    = `M9 uses a different total (diff = £${totalDiff.toFixed(2)}) — investigate effectivePricingResult or financial.js.`;
+    }
+
+    out[name] = {
+      heating_gas:      { m8: ps.heating_gas_gbp ?? 0 },
+      non_heating_gas:  { m8: (ps.non_heating_gas_gbp ?? 0) - gasScAnnual },
+      gas_standing:     { m8: gasScAnnual },
+      heating_elec:     { m8: ps.heating_elec_gbp ?? 0 },
+      non_heating_elec: { m8: (ps.non_heating_elec_gbp ?? 0) - elecScAnnual },
+      elec_standing:    { m8: elecScAnnual },
+      total:            { m8: m8Total, m9: m9Total, diff: totalDiff,
+                          mismatch: totalDiff !== null && Math.abs(totalDiff) > MISMATCH_THRESHOLD,
+                          verdict, note },
+    };
+  }
+  return out;
+};
+
+window.__getScenarioDiagnostics = () => {
+  const sc  = getScenarioConsumptionResult();
+  const tc  = getThermalCharacterResult();
+  const hl  = getHeatLossResult();
+  const ext = getExternalResult();
+  if (!sc) return { available: false };
+
+  const indoorArr = sc.scenarios.current?.indoor_temp_c ?? [];
+  const gasArr    = sc.scenarios.current?.gas_kwh ?? [];
+  const setpoint  = tc?.setpoint_c ?? null;
+  const htc       = hl?.htc_w_per_k ?? null;
+  const boilerEff = hl?.boiler_efficiency_used ?? 0.9;
+  const solarR      = hl?.solar_aperture_m2 ?? null;
+  const externalArr = ext?.external ?? null;
+
+  const validIndoor = indoorArr.filter(v => v !== null && v !== undefined);
+  let indoorStats = null;
+  if (validIndoor.length > 0) {
+    let min = Infinity, max = -Infinity, sum = 0, countBelow = 0;
+    for (const v of validIndoor) {
+      if (v < min) min = v;
+      if (v > max) max = v;
+      sum += v;
+      if (setpoint !== null && v < setpoint) countBelow++;
+    }
+    const n = validIndoor.length;
+    indoorStats = {
+      min,
+      max,
+      mean: sum / n,
+      fraction_below_setpoint: setpoint !== null ? countBelow / n : null,
+      n_hh: n,
+    };
+  }
+
+  // Post-hoc approximation from stored arrays — not the RC model's per-step internal
+  // terms. Any mismatch from model internal accounting IS the finding for INV-3.
+  let totalHeatDeliveredKwh = null;
+  let totalHeatLossKwh      = null;
+  let totalSolarGainKwh     = null;
+  if (gasArr.length > 0) {
+    totalHeatDeliveredKwh = gasArr.reduce((s, v) => s + (v ?? 0) * boilerEff, 0);
+  }
+  if (htc !== null && validIndoor.length > 0 && externalArr) {
+    totalHeatLossKwh = 0;
+    for (let i = 0; i < indoorArr.length; i++) {
+      const tIn  = indoorArr[i];
+      const tOut = externalArr[i]?.temp_c;
+      if (tIn !== null && tOut !== undefined) {
+        totalHeatLossKwh += htc * (tIn - tOut) * 0.5 / 1000;
+      }
+    }
+  }
+  if (solarR !== null && externalArr) {
+    totalSolarGainKwh = externalArr.reduce(
+      (s, slot) => s + solarR * (slot?.solar_w_m2 ?? 0) * 0.5 / 1000, 0
+    );
+  }
+
+  return {
+    available: true,
+    indoor_temp_stats: indoorStats,
+    heat_balance_kwh: {
+      heat_delivered: totalHeatDeliveredKwh,
+      heat_loss:      totalHeatLossKwh,
+      solar_gain:     totalSolarGainKwh,
+    },
+    comfort_demand_inputs: {
+      setpoint_c:        setpoint,
+      htc_w_per_k:       htc,
+      solar_aperture_m2: solarR,
+      boiler_efficiency: boilerEff,
+    },
+    comfort_demand_kwh: tc?.annual_modelled_demand_kwh ?? null,
+  };
+};
+
+window.__getThermalDiagnostics = () => {
+  const tc = getThermalCharacterResult();
+  if (!tc) return { available: false };
+  const pd = tc._path_diagnostics ?? {};
+  return {
+    available: true,
+    thermal_mass_source:  tc.thermal_mass_source,
+    selected_kj_per_k:    tc.thermal_mass_kj_per_k,
+    selected_tau_h:       tc.time_constant_hours,
+    path_a: {
+      kj_per_k: pd.path_a_kj_per_k ?? null,
+      tau_h:    pd.path_a_tau_h    ?? null,
+      events_used: tc.thermal_mass_events_used,
+    },
+    path_b: {
+      kj_per_k: pd.path_b_kj_per_k ?? null,
+      tau_h:    pd.path_b_tau_h    ?? null,
+    },
+    setpoint_c:        tc.setpoint_c,
+    validation_status: tc.validation_status,
+  };
+};

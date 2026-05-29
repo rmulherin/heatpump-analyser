@@ -598,6 +598,11 @@ export function estimateThermalCharacter(heating, external, heatLoss, baseloadMe
        long_event_discarded_for_missing_user_temp } = massResult);
   }
 
+  // Capture Path A value before Path B block — must precede the Path B override
+  const path_a_kj_per_k = thermal_mass_kj_per_k;
+  const path_a_tau_h    = (path_a_kj_per_k !== null && htc !== null)
+    ? path_a_kj_per_k / (htc * 3.6) : null;
+
   // Path B: lived-experience τ_bucket fallback when Path A produced insufficient events
   let pathBWarning = null;
   if (thermal_mass_source === null && tauBucket && htc !== null) {
@@ -611,6 +616,10 @@ export function estimateThermalCharacter(heating, external, heatLoss, baseloadMe
                    + 'would normally be more precise.';
     }
   }
+
+  const path_b_kj_per_k = (thermal_mass_source === 'user_tau') ? thermal_mass_kj_per_k : null;
+  const path_b_tau_h    = (path_b_kj_per_k !== null && htc !== null)
+    ? path_b_kj_per_k / (htc * 3.6) : null;
 
   // Step 4c: failure-path warnings (only when both paths failed)
   // thermal_mass_events_used reflects Path A's data-driven count even when Path B supplied the value
@@ -681,5 +690,11 @@ export function estimateThermalCharacter(heating, external, heatLoss, baseloadMe
     underheat_ratio:            underheat.underheat_ratio,
     underheat_status:           underheat.underheat_status,
     underheat_narrative:        underheatNarrative,
+    _path_diagnostics: {
+      path_a_kj_per_k,
+      path_a_tau_h,
+      path_b_kj_per_k,
+      path_b_tau_h,
+    },
   };
 }

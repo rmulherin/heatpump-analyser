@@ -407,8 +407,8 @@ check in each getter body.
 
 ## Implementation Deviations
 
-**Date:** yyyy-mm-dd
-**Commit:** [commit hash]
+**Date:** 2026-05-29
+**Commit:** [see git log]
 
 None.
 
