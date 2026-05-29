@@ -1,7 +1,7 @@
 # Investigation Instrumentation — Diagnostic Getters
 
 **Date:** 2026-05-28
-**Status:** ✅ Approved — 2026-05-29. Implementation may begin.
+**Status:** Implemented — 2026-05-29, commit 7a6c6fd.
 
 ---
 
@@ -408,7 +408,7 @@ check in each getter body.
 ## Implementation Deviations
 
 **Date:** 2026-05-29
-**Commit:** [see git log]
+**Commit:** 7a6c6fd
 
 None.
 
