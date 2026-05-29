@@ -1,7 +1,7 @@
 # Investigation Instrumentation — Diagnostic Getters
 
 **Date:** 2026-05-28
-**Status:** Awaiting review — Opus architect review pending.
+**Status:** ✅ Approved — 2026-05-29. Implementation may begin.
 
 ---
 
@@ -549,18 +549,19 @@ default retained.
 | Severity | Count | Status |
 |----------|-------|--------|
 | CRITICAL | 0     | — |
-| HIGH     | 2     | ✘ block |
-| MEDIUM   | 3     | ⚠ warn |
-| LOW      | 4     | — note |
+| HIGH     | 2     | ✅ resolved |
+| MEDIUM   | 3     | ✅ resolved |
+| LOW      | 4     | ✅ resolved (L6/L8/L9 actioned; L7 retained per dispositions) |
 
-Verdict: ⏸ BLOCKED — two HIGH findings require new code logic beyond the hygiene
-bright line; plan returns to the planner for revision per the Required Changes above.
+Verdict: ✅ APPROVED — all eight Required Changes resolved in the revision
+(commit `c4e18d5`); H2's pass-through claim (`annual_modelled_demand_kwh`)
+independently verified end-to-end by a second Opus-spawned read-only Explore sub-agent.
 
 ---
 
 ## Approval
 
-**Status:** ⏸ Blocked — 2026-05-29
+**Status:** ✅ Approved — 2026-05-29
 **Approved by:** Rhiannon (via Opus review)
 **Clarifications confirmed:**
 - H1 (verdict field in `__reconcileCosts`) accepted as required.
@@ -576,3 +577,10 @@ bright line; plan returns to the planner for revision per the Required Changes a
   (that `buildEffectivePricingResult` leaves `current` untouched, so any displayed-£
   divergence on `current` is in display logic) is accepted as the working hypothesis
   the instrumentation will test.
+- Revision (commit `c4e18d5`) addressed all eight Required Changes from the prior
+  review round; the H2 pass-through claim
+  (`getThermalCharacterResult().annual_modelled_demand_kwh` equals the UI's displayed
+  comfort-demand figure) was independently verified end-to-end by a second
+  Opus-spawned read-only Explore sub-agent on 2026-05-29 (chain:
+  `thermal-character.js:679–680` → `getThermalCharacterResult()` at
+  `thermal-character.js:9` → `app.js:1273` → `#underheat-modelled` in `index.html:321–322`).
