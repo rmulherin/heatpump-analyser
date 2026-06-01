@@ -1,0 +1,44 @@
+{
+  "slug": "big-old-draughty",
+  "label": "Big old draughty house",
+  "bio": "A pre-1940s detached with a large family. Poor insulation, high heat demand, significant seasonal swing.",
+  "display_order": 4,
+  "archetype_source": "strategy §E — big-old-draughty",
+  "building": {
+    "htc_w_per_k": 380,
+    "thermal_mass_kj_per_k": 18000,
+    "boiler_efficiency": 0.84,
+    "solar_aperture_m2": 6.0,
+    "setpoint_c": 20
+  },
+  "schedule": {
+    "kind": "twin_peak",
+    "weekday_windows": [
+      { "start_mins": 360, "end_mins": 540 },
+      { "start_mins": 960, "end_mins": 1380 }
+    ],
+    "weekend_windows": [
+      { "start_mins": 420, "end_mins": 1380 }
+    ]
+  },
+  "baseload": {
+    "gas_hot_water_kwh_per_day": 5.0,
+    "gas_cooking_kwh_per_day": 1.2,
+    "elec_baseload_kwh_per_day": 7.5,
+    "elec_appliance_events_per_week": 14
+  },
+  "location": {
+    "postcode": "SW1A 1AA"
+  },
+  "time_window": {
+    "start": "2025-01-01",
+    "end": "2025-12-31"
+  },
+  "noise_overrides": {
+    "hh_residual_autocorr_lag1": 0.65,
+    "weekday_weekend_elec_ratio": 1.12
+  },
+  "prng_seed": 1004,
+  "annual_gas_target_kwh": 17239,
+  "annual_elec_target_kwh": 3089
+}

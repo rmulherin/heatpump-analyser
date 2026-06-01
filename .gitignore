@@ -10,10 +10,22 @@ desktop.ini
 *~
 
 # Test data (never commit user consumption data)
-test-data/
+test-data/*
+!test-data/noise-config.json
 *.csv
 !docs/**/*.csv
 
 # Environment
 .env
 .env.local
+
+# Bake working directories (not shipped)
+bake-output/
+bake-input/
+
+# Shipped demo files (exempt from *.csv exclusion)
+!data/demos/*.csv
+!data/demos/*.json
+
+# Committable noise calibration output (exempt from test-data/ exclusion)
+!test-data/noise-config.json

@@ -1,0 +1,44 @@
+{
+  "slug": "small-and-efficient",
+  "label": "Small efficient flat",
+  "bio": "A modern one-bedroom flat with a single occupant. Well-insulated, small floor area, low heat demand.",
+  "display_order": 3,
+  "archetype_source": "strategy §E — small-and-efficient",
+  "building": {
+    "htc_w_per_k": 90,
+    "thermal_mass_kj_per_k": 4500,
+    "boiler_efficiency": 0.90,
+    "solar_aperture_m2": 1.5,
+    "setpoint_c": 20
+  },
+  "schedule": {
+    "kind": "twin_peak",
+    "weekday_windows": [
+      { "start_mins": 390, "end_mins": 480 },
+      { "start_mins": 1050, "end_mins": 1320 }
+    ],
+    "weekend_windows": [
+      { "start_mins": 480, "end_mins": 1320 }
+    ]
+  },
+  "baseload": {
+    "gas_hot_water_kwh_per_day": 2.4,
+    "gas_cooking_kwh_per_day": 0.4,
+    "elec_baseload_kwh_per_day": 2.8,
+    "elec_appliance_events_per_week": 4
+  },
+  "location": {
+    "postcode": "SW1A 1AA"
+  },
+  "time_window": {
+    "start": "2025-01-01",
+    "end": "2025-12-31"
+  },
+  "noise_overrides": {
+    "hh_residual_autocorr_lag1": 0.70,
+    "weekday_weekend_elec_ratio": 1.06
+  },
+  "prng_seed": 1003,
+  "annual_gas_target_kwh": 4266,
+  "annual_elec_target_kwh": 1555
+}

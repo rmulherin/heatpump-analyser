@@ -1,0 +1,43 @@
+{
+  "slug": "average-in-all-day",
+  "label": "Average home, in all day",
+  "bio": "A 1970s terraced house with one adult working from home. Heating runs a long continuous window. Average insulation.",
+  "display_order": 2,
+  "archetype_source": "strategy §E — average-in-all-day",
+  "building": {
+    "htc_w_per_k": 230,
+    "thermal_mass_kj_per_k": 10000,
+    "boiler_efficiency": 0.86,
+    "solar_aperture_m2": 3.0,
+    "setpoint_c": 20
+  },
+  "schedule": {
+    "kind": "continuous",
+    "weekday_windows": [
+      { "start_mins": 420, "end_mins": 1320 }
+    ],
+    "weekend_windows": [
+      { "start_mins": 420, "end_mins": 1380 }
+    ]
+  },
+  "baseload": {
+    "gas_hot_water_kwh_per_day": 3.6,
+    "gas_cooking_kwh_per_day": 0.8,
+    "elec_baseload_kwh_per_day": 5.2,
+    "elec_appliance_events_per_week": 9
+  },
+  "location": {
+    "postcode": "SW1A 1AA"
+  },
+  "time_window": {
+    "start": "2025-01-01",
+    "end": "2025-12-31"
+  },
+  "noise_overrides": {
+    "hh_residual_autocorr_lag1": 0.75,
+    "weekday_weekend_elec_ratio": 1.15
+  },
+  "prng_seed": 1002,
+  "annual_gas_target_kwh": 10236,
+  "annual_elec_target_kwh": 2586
+}

@@ -1,0 +1,51 @@
+{
+  "source_note": "Derived from one (WFH + dehumidifier) household's real Octopus HH data over a 12-month window. Statistics only — no consumption values in this file, no specific dates that could identify the household. Sanitised version of the full extraction output, which lives locally only. See test-data-strategy.md §C and the corresponding noise-calibration design doc for methodology.",
+  "extraction_metadata": {
+    "input_year": 2025,
+    "whole_days_used": 308,
+    "true_absence_days": 53,
+    "boiler_fault_days": 4,
+    "summer_baseload_median_kwh_per_day": 5.58,
+    "absence_threshold_kwh_per_day": 1.12,
+    "baseline_daily_total_kwh_per_day": 5.98
+  },
+  "measurement_noise": {
+    "smart_meter_relative_sd": 0.02,
+    "_note": "Hardcoded per UK smart-meter spec (~1-2% measurement noise). Not data-calibrated."
+  },
+  "behavioural_noise": {
+    "hh_residual_autocorr_lag1": 0.735,
+    "_hh_residual_autocorr_lag1_note": "Per-day median (P50) of within-day lag-1 autocorrelation. RECOMMENDED to override per-archetype rather than use this default. Synthesiser archetype config should include optional `noise_overrides.hh_residual_autocorr_lag1` to override.",
+    "hh_residual_autocorr_lag1_distribution": {
+      "p10": 0.435,
+      "p25": 0.588,
+      "p50": 0.735,
+      "p75": 0.838,
+      "p90": 0.898,
+      "_note": "Per-day within-day autocorr distribution from the calibration household. Demos can pick values in [P10, P90] within this empirical envelope. Higher autocorr = smoother noise (more consistent activity backbone). Lower = more variable noise (more discrete events / sharp transitions). Suggested per-archetype values are in test-data-strategy.md §E."
+    },
+    "daily_residual_cv": 0.354,
+    "daily_activity_cv": 0.657,
+    "_note_on_cv": "daily_residual_cv computed on total elec after elec~gas linear detrending (proxy for weather detrending). daily_activity_cv computed on activity elec (total minus 24/7 baseline). For synthesiser use, daily_activity_cv isolates the human-activity variance signal — but treat as a lower bound, since the calibration household has a stable dehumidifier-driven baseline that may understate variance versus higher-event archetypes (e.g. families)."
+  },
+  "weekday_weekend_elec_ratio_calibration_household": {
+    "ratio": 1.31,
+    "_warning": "NOT transferable across archetypes. The calibration household is WFH-based; its weekday/weekend ratio is atypical (weekdays > weekends because work-at-home loads dominate weekdays, weekends often involve being out). Recorded for reference only. Demos must set this per archetype based on the occupancy schedule chosen for that demo."
+  },
+  "schedule_jitter": {
+    "boiler_start_sd_minutes": 15.0,
+    "_note": "Hardcoded default — modern timers are precise (~5 min) but occupants frequently override (cold morning, etc.), giving effective SD of ~15 min. Not data-calibrated (cumulative-fraction approach conflates weather effects with timing variance)."
+  },
+  "holiday_weeks": {
+    "events_per_year": 7,
+    "mean_duration_days": 7.6,
+    "_note": "Aggregate count and mean duration of true-absence events from the calibration household. Specific dates are not included in this file. Synthesiser uses these aggregates to inject N absence runs of mean length D into demo CSVs, with M3 absence-detection then picking them up during round-trip validation."
+  },
+  "baseline_signature_calibration_household": {
+    "daily_total_kwh": 5.98,
+    "per_hh_kwh_min": 0.11,
+    "per_hh_kwh_max": 0.15,
+    "per_hh_kwh_mean": 0.12,
+    "_warning": "Per-HH 24/7 baseline (dehumidifier + fridge + standby) from the calibration household. NOT transferred to demos — each demo sets its own baseline parametrically per archetype config (gas_hot_water_kwh_per_day + elec_baseload_kwh_per_day + appliance events). Recorded here for methodological reference only."
+  }
+}

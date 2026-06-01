@@ -323,5 +323,6 @@ there is no spot-instance risk, but mid-session context exhaustion is still poss
 - [x] Module 8: Pricing Engine (tariff application)
 - [x] Module 9: Financial Analysis (payback, sensitivity)
 - [x] Module 10a: UI & Presentation v1 (verdict block, section structure, copy rewrite, methodology disclosure)
+- [x] test-data-synthesiser implemented (2026-06-02): Node.js library + CLI that produces per-archetype demo CSVs. scripts/lib/synthesiser.mjs (PRNG, configs, weather fetch+cache, schedule, holidays, forward model, HW/cooking, elec baseload, noise injection, clamp, stats, CSV+JSON+MD outputs); scripts/synthesise.mjs CLI wrapper; 4 demo-configs (modern-out-for-work, average-in-all-day, small-and-efficient, big-old-draughty); test-data/noise-config.json vendored from praxis-hub; test-synthesiser.mjs TCs 1,2,3,5,6,10 pass offline; TC7 skips until real weather cache populated. Deviations D1-D4 in plan.
 
 Update this checklist as modules complete.

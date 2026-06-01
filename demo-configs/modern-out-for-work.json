@@ -1,0 +1,44 @@
+{
+  "slug": "modern-out-for-work",
+  "label": "Modern home, out for work",
+  "bio": "A 1990s semi-detached with two working adults. Well-insulated but not a new-build. Empty weekdays, busier at weekends.",
+  "display_order": 1,
+  "archetype_source": "strategy §E — modern-out-for-work",
+  "building": {
+    "htc_w_per_k": 160,
+    "thermal_mass_kj_per_k": 8000,
+    "boiler_efficiency": 0.88,
+    "solar_aperture_m2": 3.5,
+    "setpoint_c": 20
+  },
+  "schedule": {
+    "kind": "twin_peak",
+    "weekday_windows": [
+      { "start_mins": 390, "end_mins": 510 },
+      { "start_mins": 1020, "end_mins": 1320 }
+    ],
+    "weekend_windows": [
+      { "start_mins": 450, "end_mins": 1320 }
+    ]
+  },
+  "baseload": {
+    "gas_hot_water_kwh_per_day": 3.2,
+    "gas_cooking_kwh_per_day": 0.6,
+    "elec_baseload_kwh_per_day": 3.8,
+    "elec_appliance_events_per_week": 7
+  },
+  "location": {
+    "postcode": "SW1A 1AA"
+  },
+  "time_window": {
+    "start": "2025-01-01",
+    "end": "2025-12-31"
+  },
+  "noise_overrides": {
+    "hh_residual_autocorr_lag1": 0.55,
+    "weekday_weekend_elec_ratio": 0.85
+  },
+  "prng_seed": 1001,
+  "annual_gas_target_kwh": 7237,
+  "annual_elec_target_kwh": 1946
+}

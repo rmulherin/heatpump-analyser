@@ -1,7 +1,7 @@
 # Test Data Synthesiser — Implementation Plan
 
 **Date:** 2026-06-01
-**Status:** ✅ Approved — 2026-06-01. Implementation may begin.
+**Status:** Implemented — 2026-06-02, commit pending.
 
 ---
 
@@ -689,7 +689,36 @@ The lighting model in Step 11 has no occupancy gate — winter midday lighting w
 
 ## Implementation Deviations
 
-*To be filled in after implementation.*
+**D1 — TC3 assertion changed from mean-based to probability-based.**
+Plan specified "verify mean start time within ±1 min of 08:00." With 30-minute HH
+resolution, a positive jitter always shifts the detected first heated HH from 480→510
+(one full slot), while an equal negative jitter keeps it at 480. This creates a
+structural ~14-minute positive bias in the mean regardless of jitter symmetry. The
+jitter mechanism is correct. Test changed to: P(first_HH ≤ 480) ≈ P(first_HH > 480)
+≈ 50% ± 2%, which is the correct unbiased test for zero-mean jitter symmetry.
+
+**D2 — TC7 skips when real weather cache absent; synthetic weather not used for TC7.**
+Plan states TC7 runs offline with pre-populated weather cache. Archetype targets were
+calibrated for real London weather. Any synthetic weather profile produces totals
+outside ±20% of targets (solar floor, temperature profile mismatches). TC7 now checks
+for a real cached weather file at `bake-input/weather/sw1a1aa-2025-01-01-2025-12-31.json`
+and skips with a clear instruction if absent. On first run with network, running any
+archetype bake via the CLI populates the cache; subsequent offline runs pass TC7.
+
+**D3 — weekday_weekend_elec_ratio applied as weekend multiplier per plan Step 11.**
+Plan Step 3 describes the ratio as `weekday/weekend` (e.g. 0.85 for modern-out-for-work
+meaning weekday < weekend). Plan Step 11 says "multiply weekend HH by effectiveWwRatio."
+These are inconsistent: applying 0.85 as a weekend multiplier makes weekends less than
+weekdays, contradicting the Step 3 description. Implemented per Step 11 (literal
+instruction). Face validity range [1.03, 1.20] (weekday/weekend) will fail for
+archetypes with ratio > 1.0 (average-in-all-day, small-and-efficient, big-old-draughty)
+because those weekends come out higher than weekdays. Face validity is informational
+in the bake report; no hard test fails on this. Flag to Opus for next iteration.
+
+**D4 — Three review fixes applied inline (not blocking).**
+Code review found: (a) O(n²) weather alignment in synthesise() replaced with Map
+lookup; (b) dead `jHH` variable removed from generateSchedule; (c) guard added to
+generateHolidayWeeks for totalDays < 15 (short time windows in unit tests).
 
 <!--
 The Design Review section is appended by the Opus reviewer when the plan is
