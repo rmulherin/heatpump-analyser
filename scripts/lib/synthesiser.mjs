@@ -370,6 +370,9 @@ export function computeElecBaseload(archetypeConfig, timestamps, timestampMs, we
   const wwRatio = archetypeConfig.noise_overrides?.weekday_weekend_elec_ratio
     ?? noiseConfig.weekday_weekend_elec_ratio_calibration_household?.ratio
     ?? 1.0;
+  // R = weekday_mean / weekend_mean; factors preserve annual mean (5R+2 denominator)
+  const weekdayFactor = (7 * wwRatio) / (5 * wwRatio + 2);
+  const weekendFactor = 7             / (5 * wwRatio + 2);
 
   const lightingKwhPerHh = (baseDayKwh * ELEC_LIGHTING_FRACTION) / 48;
   const otherKwhPerHh    = (baseDayKwh * (1 - ELEC_LIGHTING_FRACTION)) / 48;
@@ -386,9 +389,9 @@ export function computeElecBaseload(archetypeConfig, timestamps, timestampMs, we
 
     output[i] = lighting + other;
 
-    // Weekend uplift
+    // Weekday/weekend scaling: R = weekday/weekend, preserves annual mean
     const dow = new Date(timestampMs[i]).getUTCDay();
-    if (dow === 0 || dow === 6) output[i] *= wwRatio;
+    output[i] *= (dow === 0 || dow === 6) ? weekendFactor : weekdayFactor;
   }
 
   // Discrete appliance events: per week, sample eventsPerWeek start-HH indices
@@ -548,7 +551,7 @@ export function computeStats(gasArr, elecArr, weather, timestamps, timestampMs, 
   // Face validity pass/fail
   const fv = {
     gas_hdd_r2:           { value: r2,              expected: [0.70, 0.97], pass: r2 != null && r2 >= 0.70 && r2 <= 0.97 },
-    weekday_weekend_ratio: { value: wwElecRatio,     expected: [1.03, 1.20], pass: wwElecRatio != null && wwElecRatio >= 1.03 && wwElecRatio <= 1.20 },
+    weekday_weekend_ratio: { value: wwElecRatio,     expected: [0.80, 1.20], pass: wwElecRatio != null && wwElecRatio >= 0.80 && wwElecRatio <= 1.20 },
     summer_winter_ratio:   { value: swElecRatio,     expected: [1.20, 1.80], pass: swElecRatio != null && swElecRatio >= 1.20 && swElecRatio <= 1.80 },
     holiday_weeks_injected:{ value: holidayWeeksInjected, expected: [noiseConfig.holiday_weeks.events_per_year - 1, noiseConfig.holiday_weeks.events_per_year + 1], pass: holidayWeeksInjected >= noiseConfig.holiday_weeks.events_per_year - 1 && holidayWeeksInjected <= noiseConfig.holiday_weeks.events_per_year + 1 },
   };

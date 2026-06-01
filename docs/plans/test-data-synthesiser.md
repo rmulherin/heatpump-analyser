@@ -705,15 +705,14 @@ for a real cached weather file at `bake-input/weather/sw1a1aa-2025-01-01-2025-12
 and skips with a clear instruction if absent. On first run with network, running any
 archetype bake via the CLI populates the cache; subsequent offline runs pass TC7.
 
-**D3 — weekday_weekend_elec_ratio applied as weekend multiplier per plan Step 11.**
-Plan Step 3 describes the ratio as `weekday/weekend` (e.g. 0.85 for modern-out-for-work
-meaning weekday < weekend). Plan Step 11 says "multiply weekend HH by effectiveWwRatio."
-These are inconsistent: applying 0.85 as a weekend multiplier makes weekends less than
-weekdays, contradicting the Step 3 description. Implemented per Step 11 (literal
-instruction). Face validity range [1.03, 1.20] (weekday/weekend) will fail for
-archetypes with ratio > 1.0 (average-in-all-day, small-and-efficient, big-old-draughty)
-because those weekends come out higher than weekdays. Face validity is informational
-in the bake report; no hard test fails on this. Flag to Opus for next iteration.
+**D3 — weekday_weekend_elec_ratio: Step 11 corrected to mean-preserving weekday/weekend scaling (resolved 2026-06-02).**
+Plan Step 3 describes the ratio as `weekday/weekend`; plan Step 11 incorrectly applied it
+as a weekend-only multiplier. Opus confirmed Step 3 semantic is canonical: R = weekday_mean /
+weekend_mean. Fix: compute mean-preserving factors before the loop —
+`weekdayFactor = (7R) / (5R+2)`, `weekendFactor = 7 / (5R+2)` — and apply to all HH slots.
+Annual mean is unchanged (5/7 × weekdayFactor + 2/7 × weekendFactor = 1 for all R).
+Face validity range updated from [1.03, 1.20] to [0.80, 1.20] to span both out-at-work
+(~0.85) and continuous-occupancy (~1.15) archetypes. Commit: see D3 resolution commit.
 
 **D4 — Three review fixes applied inline (not blocking).**
 Code review found: (a) O(n²) weather alignment in synthesise() replaced with Map
