@@ -7,7 +7,7 @@
 
 ## Task description
 
-Implement the test-data synthesiser as a Node.js library + CLI script that produces per-archetype demo consumption CSVs for the heatpump analyser tool. The library runs a building-physics forward model against Open-Meteo historical weather (cached), applies schedule jitter, holiday-week injection, parametric HW/cooking pulses, and calibrated AR(1) + multiplicative noise, then writes a CSV (17,520 HH rows), a stats JSON, and a markdown bake report. A thin CLI wrapper (`scripts/synthesise.mjs`) exposes the library to Opus's iteration loop. The four archetype config files and a placeholder `noise-config.json` are also created as part of this plan.
+Implement the test-data synthesiser as a Node.js library + CLI script that produces per-archetype demo consumption CSVs for the heatpump analyser tool. The library runs a building-physics forward model against Open-Meteo historical weather (cached), applies schedule jitter, holiday-week injection, parametric HW/cooking pulses, and calibrated AR(1) + multiplicative noise, then writes a CSV (17,520 HH rows), a stats JSON, and a markdown bake report. A thin CLI wrapper (`scripts/synthesise.mjs`) exposes the library to Opus's iteration loop. The four archetype config files and a vendored copy of the real `noise-config.json` (from praxis-claude-hub) are also created as part of this plan.
 
 Design doc: `~/Documents/git-repos/praxis-claude-hub/projects/tools/heatpump-analyser/design/test-data-synthesiser.md`
 Parent strategy: `~/Documents/git-repos/praxis-claude-hub/projects/tools/heatpump-analyser/test-data-strategy.md`
@@ -71,8 +71,8 @@ The `.mjs` extension signals Node.js ESM mode without requiring a `package.json`
 | CREATE | `demo-configs/average-in-all-day.json` | Archetype config |
 | CREATE | `demo-configs/small-and-efficient.json` | Archetype config |
 | CREATE | `demo-configs/big-old-draughty.json` | Archetype config |
-| CREATE | `test-data/noise-config.json` | Placeholder noise config (illustrative values from design doc §Inputs) |
-| CREATE | `test-synthesiser.mjs` | Unit tests TCs 1–6 (+ TC10 reproducibility) |
+| CREATE | `test-data/noise-config.json` | Vendored copy of real calibration output from praxis-claude-hub (no PII — derived stats only) |
+| CREATE | `test-synthesiser.mjs` | Unit tests TCs 1–3, 5–7, TC10 |
 
 ---
 
@@ -99,52 +99,52 @@ Also create `data/demos/.gitkeep` so the directory is tracked before any CSVs la
 
 ---
 
-### Step 2 — Placeholder noise-config.json
+### Step 2 — Vendor real noise-config.json from praxis-claude-hub
 
-Write `test-data/noise-config.json` with the illustrative values from the design doc. These are placeholders for development; real values come from the noise-calibration step (strategy §V1 Step 0c) run before any production bake.
-
-```json
-{
-  "_note": "Illustrative placeholder values — replace with output of noise-calibration step before production bake.",
-  "source_note": "Derived from calibration step. Statistics only — no consumption values.",
-  "measurement_noise": {
-    "smart_meter_relative_sd": 0.018
-  },
-  "behavioural_noise": {
-    "hh_residual_autocorr_lag1": 0.42,
-    "daily_residual_cv": 0.11,
-    "weekday_weekend_elec_ratio": 1.08
-  },
-  "schedule_jitter": {
-    "boiler_start_sd_minutes": 14
-  },
-  "holiday_weeks": {
-    "events_per_year": 3,
-    "mean_duration_days": 5
-  },
-  "cooking_event_time_distribution": {
-    "evening_peak_hour_utc": 18,
-    "evening_peak_sd_hours": 1.1,
-    "morning_peak_hour_utc": 7,
-    "morning_peak_sd_hours": 0.6
-  }
-}
+The real calibrated noise config lives at:
 ```
+~/Documents/git-repos/praxis-claude-hub/projects/tools/heatpump-analyser/test-data/noise-config.json
+```
+
+**Do not write a placeholder.** Copy this file verbatim to `test-data/noise-config.json` in the tool repo. It is committable — the file contains only derived statistics with no consumption values (strategy §V1 Step 0c contract). The `.gitignore` exception added in Step 1 (`!test-data/noise-config.json`) allows it to be tracked.
+
+The real file does **not** contain `cooking_event_time_distribution.*` fields — those were design-doc placeholders that were never added to the calibration output. The synthesiser uses hardcoded pulse-timing defaults instead (see Step 10 and H1 fix). The real calibrated values are:
+
+| Field | Real value |
+|-------|-----------|
+| `behavioural_noise.hh_residual_autocorr_lag1` | 0.735 |
+| `behavioural_noise.daily_residual_cv` | 0.354 |
+| `schedule_jitter.boiler_start_sd_minutes` | 15 |
+| `holiday_weeks.events_per_year` | 7 |
+| `holiday_weeks.mean_duration_days` | 7.6 |
+
+These values, not the illustrative ones in the design doc, drive all bakes.
 
 ---
 
 ### Step 3 — Demo archetype config files
 
-Write four JSON files in `demo-configs/` using the starting values from strategy §E. Each includes `noise_overrides` with the per-archetype `hh_residual_autocorr_lag1` value (strategy §E final column). The `weekday_weekend_elec_ratio` noise override is also set per archetype (strategy §C: not transferable).
+Write four JSON files in `demo-configs/` using the starting values from strategy §E. Each includes `noise_overrides` with the per-archetype `hh_residual_autocorr_lag1` value (strategy §E final column) and `weekday_weekend_elec_ratio` (per-archetype — strategy §C: not transferable from calibration household).
 
-**modern-out-for-work.json** (noise_overrides: autocorr 0.55, ww_ratio 1.08)
-**average-in-all-day.json** (noise_overrides: autocorr 0.75, ww_ratio 1.15 — in-all-day continuous occupancy, more uniform weekday/weekend)
-**small-and-efficient.json** (noise_overrides: autocorr 0.70, ww_ratio 1.06 — single occupant, mild weekday/weekend difference)
-**big-old-draughty.json** (noise_overrides: autocorr 0.65, ww_ratio 1.12 — multi-occupant, more discrete events)
+Per-archetype `noise_overrides` values and reasoning:
 
-Weekend/weekday ratios for the non-calibration-household archetypes are set from first principles: "modern out for work" gets the calibration value (1.08) since the pattern is most similar; the others are estimated from CIBSE-style occupancy schedules. These will be adjusted through the iteration loop.
+| Archetype | autocorr | ww_ratio | ww_ratio reasoning |
+|-----------|----------|----------|--------------------|
+| modern-out-for-work | 0.55 | **0.85** | Out all day on weekdays → weekday elec is lower than weekend. Opposite occupancy to the calibration household (WFH). Ratio < 1.0. |
+| average-in-all-day | 0.75 | 1.15 | Continuous occupancy; mild weekday/weekend difference. |
+| small-and-efficient | 0.70 | 1.06 | Single occupant; minimal weekday/weekend variation. |
+| big-old-draughty | 0.65 | 1.12 | Multi-occupant; weekend is busier than weekday but less than calibration household. |
 
-Each config file includes all fields specified in the design doc §Inputs schema: `slug`, `label`, `bio`, `display_order`, `archetype_source`, `building`, `schedule`, `baseload`, `location`, `time_window`, `noise_overrides`, `prng_seed`.
+Each config file includes all fields required by `readConfigs` validation (see Step 4): `slug`, `label`, `bio`, `display_order`, `archetype_source`, `building`, `schedule`, `baseload`, `location`, `time_window`, `noise_overrides`, `prng_seed`, **plus** `annual_gas_target_kwh` and `annual_elec_target_kwh` (used by `computeStats` and TC7).
+
+Annual targets per strategy §E:
+
+| Archetype | annual_gas_target_kwh | annual_elec_target_kwh |
+|-----------|----------------------|----------------------|
+| modern-out-for-work | 7237 | 1946 |
+| average-in-all-day | 10236 | 2586 |
+| small-and-efficient | 4266 | 1555 |
+| big-old-draughty | 17239 | 3089 |
 
 ---
 
@@ -179,8 +179,9 @@ function boxMuller(prng) {
 - Read both files via `fs.readFileSync`
 - `JSON.parse` each
 - Validate required fields manually (no Ajv — matches "no dependency" spirit):
-  - Archetype: `slug`, `label`, `building.htc_w_per_k`, `building.thermal_mass_kj_per_k`, `building.boiler_efficiency`, `building.solar_aperture_m2`, `building.setpoint_c`, `schedule.kind`, `baseload.gas_hot_water_kwh_per_day`, `baseload.gas_cooking_kwh_per_day`, `baseload.elec_baseload_kwh_per_day`, `baseload.elec_appliance_events_per_week`, `location.postcode`, `time_window.start`, `time_window.end`, `prng_seed`
-  - Noise: `measurement_noise.smart_meter_relative_sd`, `behavioural_noise.hh_residual_autocorr_lag1`, `behavioural_noise.daily_residual_cv`, `schedule_jitter.boiler_start_sd_minutes`, `holiday_weeks.events_per_year`, `holiday_weeks.mean_duration_days`, `cooking_event_time_distribution.evening_peak_hour_utc`, `cooking_event_time_distribution.morning_peak_hour_utc`
+  - Archetype: `slug`, `label`, `building.htc_w_per_k`, `building.thermal_mass_kj_per_k`, `building.boiler_efficiency`, `building.solar_aperture_m2`, `building.setpoint_c`, `schedule.kind`, `baseload.gas_hot_water_kwh_per_day`, `baseload.gas_cooking_kwh_per_day`, `baseload.elec_baseload_kwh_per_day`, `baseload.elec_appliance_events_per_week`, `location.postcode`, `time_window.start`, `time_window.end`, `prng_seed`, `annual_gas_target_kwh`, `annual_elec_target_kwh`
+  - Noise: `measurement_noise.smart_meter_relative_sd`, `behavioural_noise.hh_residual_autocorr_lag1`, `behavioural_noise.daily_residual_cv`, `schedule_jitter.boiler_start_sd_minutes`, `holiday_weeks.events_per_year`, `holiday_weeks.mean_duration_days`
+  - Note: `cooking_event_time_distribution.*` fields are **not** in the real noise config and are **not** validated. HW/cooking pulse timing uses hardcoded defaults (see Step 10).
 - Merge `archetypeConfig.noise_overrides` into noise config (overrides take precedence for their fields)
 - Throw with `Error('Missing required field: <path>')` if any required field absent
 
@@ -300,24 +301,65 @@ Helper **`gaussianPulse(msArray, centreMins, sdMins, totalKwhPerDay)`**:
 - Normalise weights so they sum to 1 across the day's 48 HH
 - Multiply normalised weight by `totalKwhPerDay` to get per-HH kWh
 
+Pulse-timing defaults (hardcoded — `cooking_event_time_distribution.*` fields are not in the real noise config):
+```js
+const HW_MORNING_PEAK_MINS = 7 * 60;    // 07:00 UTC
+const HW_MORNING_SD_MINS   = 0.6 * 60;  // 36 min SD
+const HW_EVENING_PEAK_MINS = 18 * 60;   // 18:00 UTC
+const HW_EVENING_SD_MINS   = 1.1 * 60;  // 66 min SD
+const HW_MORNING_FRACTION  = 0.35;
+```
+
 Main function: per day:
 1. Draw daily residual: `dailyFactor = 1 + boxMuller(prng) × noiseConfig.behavioural_noise.daily_residual_cv`, clamped to [0.1, 3.0]
 2. Total HW+cooking for this day = `(archetypeConfig.baseload.gas_hot_water_kwh_per_day + archetypeConfig.baseload.gas_cooking_kwh_per_day) × dailyFactor`
-3. Split into morning fraction (fixed at 0.35) and evening (0.65)
-4. Jitter morning centre: `centre = noiseConfig.cooking_event_time_distribution.morning_peak_hour_utc × 60 + boxMuller(prng) × noiseConfig.cooking_event_time_distribution.morning_peak_sd_hours × 60`
-5. Same for evening centre
+3. Split into morning (HW_MORNING_FRACTION) and evening (1 − HW_MORNING_FRACTION)
+4. Jitter morning centre: `centre = HW_MORNING_PEAK_MINS + boxMuller(prng) × HW_MORNING_SD_MINS`, clipped to [0, 1440]
+5. Same for evening using `HW_EVENING_PEAK_MINS` and `HW_EVENING_SD_MINS`
 6. Apply `gaussianPulse` for morning and evening, add to output array
 
 ---
 
 ### Step 11 — Library: electricity baseload
 
-**`computeElecBaseload(archetypeConfig, timestamps, timestampMs, noiseConfig, prng)`** → `Float64Array`
+**`computeElecBaseload(archetypeConfig, timestamps, timestampMs, weather, noiseConfig, prng)`** → `Float64Array`
 
-- **Steady baseline**: `archetypeConfig.baseload.elec_baseload_kwh_per_day / 48` per HH
-- **Occupancy modulation**: multiply by factor based on time-of-day. Approximate lighting+fridge+TV pattern: factor = 0.6 during 02:00–08:00 UTC, 1.3 during 18:00–22:00 UTC, 1.0 otherwise. (Simplified; refines through iteration loop.)
-- **Weekend uplift**: multiply all weekend HH by `noiseConfig.behavioural_noise.weekday_weekend_elec_ratio` (or `archetypeConfig.noise_overrides.weekday_weekend_elec_ratio` if present — this field is per-archetype per strategy §C).
-- **Discrete appliance events**: per week, sample `archetypeConfig.baseload.elec_appliance_events_per_week` start times from the evening-peak distribution (cooking_event_time_distribution); each event delivers `0.5 + prng() × 1.5` kWh spread over `1 + Math.round(prng())` hours (so 1 or 2 hours). Add to the relevant HH.
+Named constants at top of library (not inlined):
+```js
+const ELEC_NIGHT_FACTOR   = 0.6;   // 02:00–08:00 UTC occupancy multiplier
+const ELEC_EVENING_FACTOR = 1.3;   // 18:00–22:00 UTC occupancy multiplier
+const ELEC_LIGHTING_FRACTION = 0.35;      // fraction of base kWh that is lighting
+const SOLAR_LIGHTING_THRESHOLD_WM2 = 50;  // solar irradiance above which lights off
+```
+
+Baseload split:
+- `lightingKwhPerHh  = (elec_baseload_kwh_per_day × ELEC_LIGHTING_FRACTION) / 48`
+- `otherKwhPerHh     = (elec_baseload_kwh_per_day × (1 − ELEC_LIGHTING_FRACTION)) / 48`
+
+Per HH `i`:
+1. **Lighting component** (solar/daylight modulated):
+   ```js
+   const solarFactor = 1 - Math.min(1, weather[i].solar_w_m2 / SOLAR_LIGHTING_THRESHOLD_WM2);
+   lighting[i] = lightingKwhPerHh * solarFactor;
+   ```
+   Lights are fully on when dark (solar = 0), off when irradiance ≥ 50 W/m². This introduces realistic winter/summer seasonality: winter sees ~35% more lighting load than summer.
+
+2. **Other load** (occupancy-modulated by time of day):
+   ```js
+   const hour = new Date(timestampMs[i]).getUTCHours();
+   const occFactor = (hour >= 2 && hour < 8)  ? ELEC_NIGHT_FACTOR
+                   : (hour >= 18 && hour < 22) ? ELEC_EVENING_FACTOR
+                   : 1.0;
+   other[i] = otherKwhPerHh * occFactor;
+   ```
+
+3. Combine: `elec[i] = lighting[i] + other[i]`
+
+4. **Weekend uplift**: For HH on Sat/Sun, multiply `elec[i]` by `effectiveWwRatio` = `archetypeConfig.noise_overrides?.weekday_weekend_elec_ratio ?? noiseConfig.behavioural_noise.weekday_weekend_elec_ratio`.
+
+5. **Discrete appliance events**: per week, sample `elec_appliance_events_per_week` event-start HH indices uniformly from the full week; each event delivers `0.5 + prng() × 1.5` kWh spread over `1 + Math.round(prng())` consecutive HH. Add to the relevant HH indices.
+
+Note: `weather` array is now a required parameter (passed from the main `synthesise()` flow alongside `timestampMs`).
 
 ---
 
@@ -457,7 +499,7 @@ Flow:
 6. `generateHolidayWeeks` → `isAbsence[]`
 7. `computeForwardModel` → `{ gasHeating, heatDemand }`
 8. `computeHWandCooking` → `gasBaseload`
-9. `computeElecBaseload` → `elec`
+9. `computeElecBaseload` (passes `weather` array for solar modulation) → `elec`
 10. Combine: `gasArr[i] = gasHeating[i] + gasBaseload[i]`; `elecArr[i] = elec[i]`; override both to 0 if `isAbsence[i]`
 11. `injectNoise` → modifies `gasArr`, `elecArr`
 12. `clampNonNeg(gasArr)`; `clampNonNeg(elecArr)`
@@ -527,7 +569,7 @@ Call the forward model with one HH and verify `gasHeating[0] === 1.4`.
 
 **TC3 — Schedule jitter symmetric**: Generate 10,000 days worth of schedule with configured window `08:00–09:00`, jitter SD = 30 min. Extract the jitter-shifted start time for each day. Verify mean start time is within ±1 minute of 08:00.
 
-**TC4 — Weather cache hit**: Call `fetchWeatherCached` twice with a real postcode + year window using the placeholder noise config. Verify the second call returns the same data without a second network request (check by verifying the cache file is written on first call and that timing of second call is <50ms, consistent with file read not network).
+**TC4 — Weather cache hit**: Call `fetchWeatherCached` twice with a real postcode + year window (integration test — requires network on first call). Verify the cache file is written after the first call and that the second call completes in <50ms (file read, not network round-trip). Mark as integration test; allow skip via `--offline` flag.
 
 **TC5 — CSV format**: Run a minimal bake (with small synthetic weather: one day of data), then read the CSV back. Verify:
 - Header row is exactly `datetime,gas_kwh,electricity_kwh`
@@ -537,9 +579,11 @@ Call the forward model with one HH and verify `gasHeating[0] === 1.4`.
 
 **TC6 — No nulls, all non-negative**: Run the synthesiser with a synthetic weather stub (avoid network in unit tests). Verify every `gas_kwh` and `electricity_kwh` value is a finite non-negative number.
 
+**TC7 — Annual totals within ±20% of target**: Run the synthesiser with a pre-populated weather cache (no network). Read `{slug}-stats.json`. Verify `|gas_delta_pct| ≤ 20` and `|elec_delta_pct| ≤ 20` for all four archetypes. Catches forward-model bugs (wrong HTC unit, wrong time factor, etc.) before any manual upload step.
+
 **TC10 — Reproducibility**: Run the full bake for `modern-out-for-work.json` twice (network call skipped by pre-populating the weather cache). Verify the two output CSV files are byte-identical.
 
-Note: TC4 requires a real network call (Postcodes.io + Open-Meteo). It is an integration test; mark it clearly and allow it to be skipped via `--offline` flag. TCs 1, 2, 3, 5, 6, 10 should work offline with stubbed/synthetic weather.
+Note: TC4 requires a real network call (Postcodes.io + Open-Meteo). It is an integration test; allow skip via `--offline` flag. TCs 1, 2, 3, 5, 6, 7, 10 should work offline with pre-cached weather.
 
 ---
 
@@ -553,7 +597,7 @@ Note: TC4 requires a real network call (Postcodes.io + Open-Meteo). It is an int
 | Box-Muller can return ±∞ if `u1 = 0` | Guard: `while (u1 === 0) u1 = prng()` before computing log. Mulberry32 produces uniform values that rarely hit 0 (2^-32 probability), but the guard is cheap. |
 | `node:util` `parseArgs` availability | Available in Node 18+. Node v24 confirmed. |
 | `data/demos/*.csv` in .gitignore | Step 1 adds explicit exception. Verify with `git check-ignore -v data/demos/test.csv` after Step 1. |
-| Holiday absence windows may fail to find N non-overlapping slots if the window (days 14–330) is densely packed | Max 100 attempts per event, then move on. With 3 events × 5 days = 15 days out of 317, collisions are rare. Warn in bake report if fewer events injected than configured. |
+| Holiday absence windows may fail to find N non-overlapping slots if the window (days 14–330) is densely packed | Real values: 7 events × 7.6 days ≈ 53 absence days out of 317 available (~17% density). Collisions are more likely than the design-doc illustrative values suggested. 100-attempt limit is kept; synthesiser warns in bake report if fewer events injected than configured. At 17% density, 7 non-overlapping placements are feasible but may require several retries. |
 | `computeStats` R² uses heating-season days only — what counts as heating season? | Use Oct–Mar (months 10, 11, 12, 1, 2, 3) to exclude summer. Filter to days where HDD > 0 to avoid div-by-zero in the through-origin regression. |
 | scheduleConfig `kind: 'continuous'` has different structure from `twin_peak` | `generateSchedule` must handle both: `twin_peak` has separate weekday/weekend window arrays; `continuous` has a single all-day window. Both are in the JSON config as `weekday_windows` / `weekend_windows` — the `kind` field is informational. The loop works the same way for both. |
 
@@ -565,7 +609,7 @@ Note: TC4 requires a real network call (Postcodes.io + Open-Meteo). It is an int
 - [ ] Generated CSV has exactly the right row count for the configured time window (17,520 for full 2025), correct header `datetime,gas_kwh,electricity_kwh`, 4 decimal places, no nulls, no negatives
 - [ ] Stats JSON includes all required top-level keys: `slug`, `bake_timestamp`, `prng_seed`, `annual_totals`, `face_validity`, `input_parameters_for_audit`, `warnings`
 - [ ] Bake report includes annual totals table, face validity table with expected ranges, and console snippet
-- [ ] `node test-synthesiser.mjs` — TCs 1, 2, 3, 5, 6, 10 pass without network access
+- [ ] `node test-synthesiser.mjs` — TCs 1, 2, 3, 5, 6, 7, 10 pass without network access (pre-cached weather)
 - [ ] TC2 hand-verify: `gasHeating = 1.4 kWh` for the specified inputs
 - [ ] Second run with same inputs (warm weather cache) produces byte-identical CSV (TC10)
 - [ ] `.gitignore` updated: `git status` after `git add bake-output/` shows it excluded; `git status` after writing a CSV to `data/demos/` shows it included
