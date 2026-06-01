@@ -1,7 +1,7 @@
 # Test Data Synthesiser — Implementation Plan
 
 **Date:** 2026-06-01
-**Status:** Awaiting review — Opus architect review pending.
+**Status:** ✅ Approved — 2026-06-01. Implementation may begin.
 
 ---
 
@@ -614,6 +614,76 @@ Note: TC4 requires a real network call (Postcodes.io + Open-Meteo). It is an int
 - [ ] Second run with same inputs (warm weather cache) produces byte-identical CSV (TC10)
 - [ ] `.gitignore` updated: `git status` after `git add bake-output/` shows it excluded; `git status` after writing a CSV to `data/demos/` shows it included
 - [ ] 4 demo-config JSON files pass `readConfigs` validation without errors
+
+---
+
+## Design Review
+
+**Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Date:** 2026-06-01
+**Review type:** Plan review (pre-implementation)
+**Authoritative design:** `~/Documents/git-repos/praxis-claude-hub/projects/tools/heatpump-analyser/design/test-data-synthesiser.md`
+**Parent strategy:** `~/Documents/git-repos/praxis-claude-hub/projects/tools/heatpump-analyser/test-data-strategy.md`
+
+### Context
+
+First-cut plan written against the design doc immediately after the design was committed. Review caught one critical issue (stale placeholder noise-config) and three high-severity issues (validation schema mismatch, missing solar/lighting modulation, wrong weekday/weekend ratio for one archetype). Two medium and one low rounded out the findings.
+
+### Required changes for implementation
+
+**1. C1 — Vendor the real noise-config instead of writing a placeholder.**
+Step 2 was writing illustrative values from the design-doc draft (autocorr 0.42, CV 0.11, etc.). The real calibrated values from praxis-hub Step 0c (autocorr 0.735, CV 0.354, boiler SD 15, 7 events × 7.6 days) must be used.
+
+**2. H1 — Remove `cooking_event_time_distribution.*` from `readConfigs` validation.**
+The real noise-config doesn't contain these fields. Hardcode the pulse-timing constants inside the HW/cooking subroutine instead.
+
+**3. H2 — Add solar/daylight modulation to elec lighting load.**
+Without it, demos will have no seasonal elec variation and the tool's M3 Step H will report 0 cold-weather uplift — missing a real feature (3-16% in actual households).
+
+**4. H3 — Fix weekday/weekend ratio for modern-out-for-work.**
+1.08 (matching calibration household) was wrong reasoning — calibration is WFH (opposite of "out for work"). Set to ~0.85 (weekday < weekend).
+
+**5. M1 — Add `annual_gas_target_kwh` / `annual_elec_target_kwh` to archetype config schema.**
+Referenced by Step 13 stats but not specified in Step 3 schema.
+
+**6. M2 — Add TC7 (annual totals within ±20% of target).**
+Useful offline smoke test for forward-model bugs.
+
+**7. L1 — Name occupancy/lighting factors as module constants.**
+Step 11's 0.6/1.3 should be named, not inlined.
+
+### Resolution of review changes
+
+1. **C1** — ✅ Resolved. Step 2 rewritten to vendor real noise-config from praxis-hub with real values documented in a table.
+2. **H1** — ✅ Resolved. `cooking_event_time_distribution.*` removed from required-noise-fields; Step 10 uses hardcoded `HW_MORNING_PEAK_MINS = 7×60`, `HW_MORNING_SD_MINS = 0.6×60`, `HW_EVENING_PEAK_MINS = 18×60`, `HW_EVENING_SD_MINS = 1.1×60`, `HW_MORNING_FRACTION = 0.35`.
+3. **H2** — ✅ Resolved. Step 11 split baseload into lighting (35%, solar-modulated via `1 - min(1, solar/SOLAR_LIGHTING_THRESHOLD_WM2)` with threshold = 50 W/m²) and other (65%, occupancy-modulated). Weather array added as parameter to `computeElecBaseload`.
+4. **H3** — ✅ Resolved. modern-out-for-work `weekday_weekend_elec_ratio` set to 0.85 with explicit reasoning in per-archetype table.
+5. **M1** — ✅ Resolved. `annual_gas_target_kwh` and `annual_elec_target_kwh` added to required archetype-config fields + per-archetype values listed in a new table.
+6. **M2** — ✅ Resolved. TC7 added to Step 18 test list; included in offline-runnable success criteria.
+7. **L1** — ✅ Resolved. `ELEC_NIGHT_FACTOR`, `ELEC_EVENING_FACTOR`, `ELEC_LIGHTING_FRACTION`, `SOLAR_LIGHTING_THRESHOLD_WM2` defined as named module constants in Step 11.
+
+## Review Summary
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| CRITICAL | 1 | ✅ resolved |
+| HIGH     | 3 | ✅ resolved |
+| MEDIUM   | 2 | ✅ resolved |
+| LOW      | 1 | ✅ resolved |
+
+Verdict: ✅ APPROVED — all seven findings addressed in the revised plan body.
+
+### Note for implementer (not blocking)
+
+The lighting model in Step 11 has no occupancy gate — winter midday lighting will be on even when the demo's occupants would be out at work. Realistic enough for v1 (M3 will detect the seasonality and report cold-weather uplift correctly). Refine in iteration loop if face validity demands it. Out of scope for first implementation.
+
+---
+
+## Approval
+
+**Status:** ✅ Approved — 2026-06-01
+**Approved by:** Rhiannon (via Opus review)
+**Clarifications confirmed:** Real noise-config values are authoritative (not design-doc illustrative placeholders); lighting seasonality drives elec cold-weather uplift; modern-out-for-work has weekday < weekend (opposite of calibration household pattern).
 
 ---
 
