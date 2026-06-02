@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-02
 **Reporter:** Rhiannon (surfaced during Demo 1 verdict-coherence step, after F14 unblocked CSV upload)
-**Status:** F18 scoped (boiler-capacity cap) — addresses unrealistic single-HH gas spikes surfaced during user-test. F15+F16+F17 verified working; tool-side waste-heat fix from Rhiannon needed for parameter recovery. Sonnet implementer pickup pending.
+**Status:** Returned to architect — F18 applied (commits bb48785 + 451b257); combined per-HH gas max exceeds boiler capacity × 0.5h in all four archetypes due to HW/cooking coincidence with warmup HHs. Heating-only cap is working as designed; acceptance criterion ambiguity needs architect resolution.
 **Investigator:** Opus architect window
 **Related:** [`2026-06-02-bug-synthesiser-face-validity.md`](./2026-06-02-bug-synthesiser-face-validity.md) (RESOLVED — F1–F9, face-validity); [`2026-06-02-bug-m1-csv-timezone-handling.md`](./2026-06-02-bug-m1-csv-timezone-handling.md) (RESOLVED — F14, M1 timezone)
 
@@ -620,3 +620,75 @@ All four archetypes:
 - Gas clamps still ≤200
 
 If acceptance met, doc moves to "awaiting tool fix" wait state until Rhiannon's waste-heat fix lands.
+
+---
+
+## Round 3: F18 verification — code-side (2026-06-02)
+
+**Commits:** synthesiser F18 `bb48785`, demo-configs F18 `451b257`. Re-baked all four archetypes.
+
+### Annual totals vs Nesta targets (±15% acceptance)
+
+| Archetype | Gas kWh | Target | Delta | Pass? | vs F17 | Elec kWh | Target | Delta |
+|---|---|---|---|---|---|---|---|---|
+| modern-out-for-work | 8,134 | 7,237 | +12.4% | ✓ | −0.7% | 1,853 | 1,946 | −4.8% |
+| average-in-all-day | 10,806 | 10,236 | +5.6% | ✓ | −0.9% | 2,041 | 2,586 | −21.1% |
+| small-and-efficient | 4,185 | 4,266 | −1.9% | ✓ | −0.8% | 1,000 | 1,555 | −35.7% |
+| big-old-draughty | 18,136 | 17,239 | +5.2% | ✓ | −0.3% | 2,633 | 3,089 | −14.8% |
+
+Annual gas shifts vs F17 baseline are all ≤1% — within the expected range for F18's partial-warmup heat-balance approximation.
+
+### Face-validity metrics
+
+Gas clamp counts: no bake triggered the 0.5% stderr warning (threshold = 88 HHs), so all have gas clamps < 88 ✓.
+
+| Archetype | gas_hdd_r² | ≥0.60? | vs F17 | summer_winter_ratio | ≥0.95? | weekday_weekend_ratio | [0.8,1.2]? | holiday_weeks | Gas clamps |
+|---|---|---|---|---|---|---|---|---|---|
+| modern-out-for-work | 0.792 | ✓ | +0.012 | 1.668 | ✓ | 0.910 | ✓ | 7 ✓ | <88 ✓ |
+| average-in-all-day | 0.619 | ✓ | −0.024 | 1.173 | ✓ | 1.107 | ✓ | 7 ✓ | <88 ✓ |
+| small-and-efficient | 0.790 | ✓ | +0.031 | 1.005 | ✓ | 0.977 | ✓ | 7 ✓ | <88 ✓ |
+| big-old-draughty | 0.758 | ✓ | +0.020 | 1.514 | ✓ | 1.068 | ✓ | 7 ✓ | <88 ✓ |
+
+R² is stable or improved for three archetypes. `average-in-all-day` dips slightly (0.643 → 0.619) but remains above the 0.60 acceptance floor. All four pass the full face-validity suite.
+
+### Per-HH max gas — FAILING criterion
+
+Heating-only cap (capacity × 0.5 / efficiency):
+
+| Archetype | boiler_capacity_kw | Heating cap (kWh gas) | CSV max (kWh) | CSV max thermal (kWh) | Cap (thermal) | Pass? |
+|---|---|---|---|---|---|---|
+| modern-out-for-work | 24 | 13.04 | **17.81** | 16.39 | 12.00 | ❌ |
+| average-in-all-day | 30 | 16.67 | **26.41** | 23.77 | 15.00 | ❌ |
+| small-and-efficient | 18 | 9.78 | **13.48** | 12.40 | 9.00 | ❌ |
+| big-old-draughty | 35 | 20.59 | **33.50** | 28.47 | 17.50 | ❌ |
+
+### Diagnosis of per-HH max failure
+
+The F18 cap **is working** on the heating-gas component. Inspection of each archetype's max-gas row confirms the pattern: two near-zero HHs (off-period) → large spike → tapering decay. This is cold-start warmup, not a heating-gas breakthrough.
+
+The exceedance above the heating cap is from **HW/cooking coinciding with the first warmup HH**. The morning HW peak (a shower or bath, 3–6 kWh gas equivalent) aligns with the heating system's first HH after the overnight off-period, because both peaks are scheduled around 06:00–07:30. The AR(1) noise (capped at 50% of combined signal by F17) adds further headroom on top.
+
+Approximate breakdown for `average-in-all-day` worst case (26.41 kWh observed):
+- Heating warmup (capped): ≤16.67 kWh
+- Coincident HW burst (morning peak): ~5–7 kWh
+- AR(1) noise on combined ≈22–24 kWh signal (cap 50%): up to +6 kWh
+- Total: 22–30 kWh — consistent with observed 26.41
+
+The pre-F18 heating-only spike of 19.4 kWh (the finding from the user-test) is now capped at ≤13.04 kWh for modern-out-for-work. F18 resolved the finding it was designed to address.
+
+### Outcome
+
+**Returned to architect.**
+
+F18 correctly caps heating-only gas. All face-validity metrics and annual totals pass. The formal per-HH max criterion fails because the acceptance criterion (`per-HH max ≤ capacity × 0.5 / efficiency`) applies to the combined CSV gas (heating + HW/cooking + noise), and HW morning coincidence with warmup HHs pushes combined values above the heating cap.
+
+**Decision needed from architect:**
+
+1. **Criterion clarification:** Was the acceptance criterion intended for heating-only gas (in which case F18 passes) or combined CSV gas (in which case further work is needed)?
+
+2. **If combined cap is required**, options include:
+   - Cap the combined per-HH gas array after combining heating + HW, before noise (single post-combine clamp)
+   - Shift HW morning peak window earlier (e.g. 05:00–06:30) to reduce overlap with heating start
+   - Accept the combined exceedance as physically plausible (a combi boiler serving HW demand during a heating ramp-up fires at max for the duration; the combined flow isn't separately metered)
+
+3. **Elec annual undershoot** for small-and-efficient (−35.7%) and average-in-all-day (−21.1%) persists — pre-F15 issue, separate investigation still needed.
