@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-02
 **Reporter:** Rhiannon (surfaced during Demo 1 verdict-coherence step, after F14 unblocked CSV upload)
-**Status:** Returned to architect — code-side verification partial fail (see Phase verification below)
+**Status:** F15+F16 applied; round 2 F17 scoped (noise cascade fix) — awaiting Sonnet implementation
 **Investigator:** Opus architect window
 **Related:** [`2026-06-02-bug-synthesiser-face-validity.md`](./2026-06-02-bug-synthesiser-face-validity.md) (RESOLVED — F1–F9, face-validity); [`2026-06-02-bug-m1-csv-timezone-handling.md`](./2026-06-02-bug-m1-csv-timezone-handling.md) (RESOLVED — F14, M1 timezone)
 
@@ -283,3 +283,130 @@ Suggested architect actions:
 - Inspect the noise-config.json HH clamp parameters and consider raising the per-HH clamp threshold to accommodate thermodynamic warmup bursts
 - Or apply noise only to the non-warmup HH residuals (separate warmup gas from steady-state before noise injection)
 - Investigate why small-and-efficient elec is −34.7% off target (this pre-dates F15 — may be a baseload config issue unrelated to the thermodynamic model)
+
+---
+
+## Round 2 — Architect diagnosis (2026-06-02)
+
+Sonnet's hypothesis confirmed by math. The clamping is not from `clampNonNeg` clipping warmup HHs directly — it's the AR(1) residual state from warmup HHs cascading into subsequent maintenance HHs and driving them negative.
+
+### Numerical trace — big-old-draughty as worst case
+
+- Overnight off-period: 7h (23:00→06:00), τ at config (mass 30,000, HTC 230) = 36h. Indoor cools from 20 → ~16.5°C (3.5K drop)
+- 06:00 warmup HH gas demand: `(3.5K × 30,000 kJ/K) / 3600 + ongoing_loss = 29 + 4 = 33 kWh thermal in one HH → ~39 kWh gas at η=0.85`
+- Per-HH local sigma: `σ_local = 39 × cv × ar1Factor = 39 × 0.354 × 0.379 = 5.4 kWh`
+- AR(1) state after one draw: `rGas ≈ ±15 kWh` for 3-sigma excursions
+- Next HH (steady-state maintenance): gas ≈ 3 kWh, σ_local = 0.4 kWh
+  - Inherited residual: `rGas_next = phi × (−15) + small_new = −8.25 kWh`
+  - Apply: `3 − 8.25 = −5.25 → clampNonNeg clips to 0` ❌
+
+The cascade extends ~3–5 HHs before AR(1) decay (phi=0.55, decay factor ~0.55/HH) brings the residual back to maintenance scale.
+
+### Why archetype variation matches the data
+
+| Archetype | Schedule | Off-period | Warmup peak (estimated) | Observed clamps |
+|---|---|---|---|---|
+| modern-out-for-work | twin-peak | 8h overnight + 9h daytime | ~8 kWh | **125** ✓ |
+| small-and-efficient | twin-peak | 8h overnight + 9h daytime | ~6 kWh | 311 ❌ |
+| big-old-draughty | continuous | 7h overnight | ~39 kWh | 258 ❌ |
+| average-in-all-day | continuous | 9h overnight | ~25 kWh | **515 ❌** |
+
+average-in-all-day is the worst: longest overnight off + Sheffield's colder weather + heavy thermal mass → biggest warmup bursts → most cascade clamping. R² hits 0.39 because the clamping is systematically larger on cold days (more overnight cooling → more warmup → more cascade), which distorts the daily-gas-vs-HDD slope.
+
+modern-out-for-work passes because its twin-peak schedule produces smaller individual warmup bursts (shorter off-periods) → less cascade damage.
+
+### RC10 — AR(1) residual state from warmup HHs cascades into subsequent maintenance HHs
+
+The signal-floor gate (F6) prevents cascade into zero-signal HHs (off-windows). But within heating windows, after the warmup HH, signal drops by ~5–10× while AR(1) state still carries the large excursion from the warmup HH. The state takes 3–5 HHs to decay back to maintenance scale, and during that decay the residual exceeds the maintenance signal magnitude, driving HHs negative.
+
+## F17 — Cap AR(1) residual magnitude at fraction of local signal
+
+**File:** [scripts/lib/synthesiser.mjs](../../scripts/lib/synthesiser.mjs), `injectNoise` function (the per-HH noise loop)
+
+**Change:** add a symmetric cap on `rGas` and `rElec` after the AR(1) update step, so a big-sigma residual from a warmup HH can't drive subsequent small-sigma HHs out of physically plausible range.
+
+```diff
+   for (let i = 0; i < n; i++) {
+     if (gasArr[i] > SIGNAL_FLOOR_KWH) {
+       const sigmaGasLocal = gasArr[i] * cv * ar1Factor;
+       rGas = phi * rGas + sigmaGasLocal * boxMuller(prng);
++      // Cap residual at fraction of local signal to prevent warmup→maintenance cascade.
++      // AR(1) steady-state SD ≈ local × 0.16 (3-sigma ≈ ±48%), so 0.5 cap rarely binds
++      // during normal flow but bites hard during cascade from large-sigma warmup HHs.
++      const gasCap = gasArr[i] * 0.5;
++      if (rGas < -gasCap) rGas = -gasCap;
++      else if (rGas > gasCap) rGas = gasCap;
+       gasArr[i] += rGas;
+     } else {
+       rGas = 0;
+     }
+     if (elecArr[i] > SIGNAL_FLOOR_KWH) {
+       const sigmaElecLocal = elecArr[i] * cv * ar1Factor;
+       rElec = phi * rElec + sigmaElecLocal * boxMuller(prng);
++      const elecCap = elecArr[i] * 0.5;
++      if (rElec < -elecCap) rElec = -elecCap;
++      else if (rElec > elecCap) rElec = elecCap;
+       elecArr[i] += rElec;
+     } else {
+       rElec = 0;
+     }
+   }
+```
+
+**Why 0.5 is the right cap factor:**
+
+- AR(1) steady-state SD = `σ_local / √(1−φ²) = local_signal × cv × ar1Factor / √(1−0.55²) ≈ local_signal × 0.354 × 0.379 / 0.835 ≈ local_signal × 0.16`
+- ±3 SD ≈ ±48% of local signal — within typical steady-state operation
+- Cap at 0.5 (50%) sits just above the 3-sigma steady-state envelope: rare binding under normal operation, hard binding during cascade
+- Symmetric cap maintains `mean(rGas) ≈ 0`, no bias to annual totals
+
+**Why this is the targeted fix:**
+
+- F6's signal-floor gate handled `gas → 0` transitions (off-window boundaries)
+- F17 handles `gas → small` transitions (warmup → maintenance within heating window)
+- Together they cover both classes of "AR(1) state cascading into smaller-signal HHs"
+
+**Same-pattern check:** the noise pass at [scripts/lib/synthesiser.mjs:446](../../scripts/lib/synthesiser.mjs#L446) is the only place AR(1) state is propagated. No other sites need this cap.
+
+**Effort:** ~6 lines across two parallel branches (gas + elec).
+
+### Predicted outcomes after F17
+
+| Archetype | Current clamps | Predicted clamps | Current R² | Predicted R² | Annual gas |
+|---|---|---|---|---|---|
+| modern-out-for-work | 125 ✓ | ~50 | 0.757 ✓ | 0.78–0.82 | ~unchanged (+13.5%) |
+| average-in-all-day | 515 ❌ | **~80** | 0.390 ❌ | **0.70–0.80** | ~unchanged (+10.6%) |
+| small-and-efficient | 311 ❌ | ~80 | 0.624 grey | 0.70–0.78 | ~unchanged (+1.3%) |
+| big-old-draughty | 258 ❌ | ~80 | 0.641 grey | 0.70–0.78 | ~unchanged (+5.9%) |
+
+Annual gas totals shouldn't shift materially because the cap is symmetric (mean residual stays near zero); only the negative-tail clipping prevented by avoiding clamps changes the distribution.
+
+### Acceptance criteria for F17 round 2
+
+After F17 applied + all four re-baked:
+
+- All four archetypes: gas clamps ≤ 200 (with target ~80)
+- All four archetypes: gas_hdd_r² ≥ 0.65
+- Other face-validity metrics still pass (summer_winter_ratio ≥ 0.95, weekday_weekend_ratio ∈ [0.8, 1.2], holiday_weeks_injected = 7)
+- Annual gas totals remain within ±15% of Nesta targets (F16 calibration preserved)
+
+If all four pass: status → "Code-side verified; awaiting user browser-side verification" and hand off to Rhiannon for the indoor-temp-chart + smart-HP-renders + no-underheat-banner user-test.
+
+If any archetype fails: surface back to architect with the specific failure. Do NOT attempt further automatic adjustments — the cap factor (0.5) is the tunable knob, but its value should change in the architect window with discussion, not iteratively in the implementer window.
+
+### Out of scope for F17 round
+
+- Browser-side verification (user-test step for Rhiannon, per F14 process lesson)
+- The elec issues Sonnet flagged for small-and-efficient (−34.7%) — pre-dates F15, separate investigation
+- M5b UI flag wording — separate small ticket, deferred
+- Strategy doc §E recalibration — architect follow-up after all four archetypes pass
+
+### Implementation order (for Sonnet)
+
+1. Apply F17 to `scripts/lib/synthesiser.mjs` per the diff above. Commit as `fix(synthesiser): F17 — cap AR(1) residual to prevent cascade clamping`.
+2. Re-bake all four archetypes (same commands as F15/F16 round).
+3. Capture per-archetype metric grid (annual gas + delta, all four face-validity metrics, gas clamps, elec clamps).
+4. Append a "Round 2: F17 verification — code-side" block to this debug doc.
+5. Set status to one of:
+   - `Code-side verified; awaiting user browser-side verification` if all four pass per acceptance criteria above
+   - `Returned to architect` with specific failure detail otherwise
