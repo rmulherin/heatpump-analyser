@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-02
 **Reporter:** Rhiannon (surfaced during Demo 1 verdict-coherence step, after F14 unblocked CSV upload)
-**Status:** Root cause confirmed — F15 + F16 scoped
+**Status:** Returned to architect — code-side verification partial fail (see Phase verification below)
 **Investigator:** Opus architect window
 **Related:** [`2026-06-02-bug-synthesiser-face-validity.md`](./2026-06-02-bug-synthesiser-face-validity.md) (RESOLVED — F1–F9, face-validity); [`2026-06-02-bug-m1-csv-timezone-handling.md`](./2026-06-02-bug-m1-csv-timezone-handling.md) (RESOLVED — F14, M1 timezone)
 
@@ -241,3 +241,45 @@ If all four archetypes pass this user-test, Demo 1–4 are unblocked for verdict
 - **M4 continuous-heating assumption.** Discussed and concluded it's acceptable in context: M4 + underheating diagnostic + absence detection together form a complete and correct interpretation for real users. After F15 lands, our synthesiser produces data consistent with M4's assumption, so the issue is moot for our demos.
 
 - **The five status-note paragraphs in this repo's CLAUDE.md should be updated after F15+F16 land** to reflect the new synthesiser state. Process note for Sonnet's Document+Learn phase.
+
+## Phase verification — code-side (2026-06-02)
+
+**Commits:** F15 `dff6456`, F16 `b970698`. Re-baked all four archetypes using real weather cache (Sheffield/Cambridge/London/Dumfries 2025).
+
+### Annual totals vs Nesta targets (±15% acceptance)
+
+| Archetype | Gas kWh | Target | Delta | Pass? | Elec kWh | Target | Delta |
+|---|---|---|---|---|---|---|---|
+| modern-out-for-work | 8,214 | 7,237 | +13.5% | ✓ | 1,855 | 1,946 | −4.7% |
+| average-in-all-day | 11,325 | 10,236 | +10.6% | ✓ | 2,051 | 2,586 | −20.7% |
+| small-and-efficient | 4,322 | 4,266 | +1.3% | ✓ | 1,016 | 1,555 | −34.7% |
+| big-old-draughty | 18,250 | 17,239 | +5.9% | ✓ | 2,643 | 3,089 | −14.4% |
+
+All four gas totals within ±15%. Elec totals are off-target for small-and-efficient (−34.7%) — this is outside the informational warning threshold but elec is not in the code-side gas acceptance gate.
+
+### Face-validity metrics
+
+| Archetype | gas_hdd_r2 | ≥ 0.65? | ≥ 0.60? | summer_winter_ratio | ≥ 0.95? | weekday_weekend_ratio | [0.8, 1.2]? | Gas clamps | ≤ 200? |
+|---|---|---|---|---|---|---|---|---|---|
+| modern-out-for-work | 0.757 | ✓ | ✓ | 1.662 | ✓ | 0.913 | ✓ | 125 | ✓ |
+| average-in-all-day | 0.390 | ❌ | ❌ | 1.169 | ✓ | 1.089 | ✓ | 515 | ❌ |
+| small-and-efficient | 0.624 | ❌ | ✓ | 1.016 | ✓ | 0.955 | ✓ | 311 | ❌ |
+| big-old-draughty | 0.641 | ❌ | ✓ | 1.503 | ✓ | 1.064 | ✓ | 258 | ❌ |
+
+Gas clamp counts reported in synthesiser stderr (>0.5% threshold).
+
+### Escalation triggers
+
+1. **average-in-all-day gas_hdd_r2 = 0.390** — below both the 0.65 acceptance gate AND the 0.60 regression floor from the face-validity debug doc. This is a material regression, not a marginal miss.
+2. **Gas clamps exceed 200** for three of four archetypes (515 / 311 / 258). Only modern-out-for-work passes (125). In the pre-F15 baseline, all four archetypes had ≤200 gas clamps.
+
+### Hypothesis for architect investigation
+
+Both failures are consistent with a single root cause: F15's thermodynamic model produces large morning warmup bursts (15–25 kWh delivered in a single HH for the continuous-schedule and twin-peak archetypes respectively). The noise model's HH-level clamp was calibrated for the kinematic model, where individual HH gas was bounded by `HTC × ΔT × 0.5 × 0.001`. Under the new model, morning warmup HHs can be 5–10× that value and are hitting the clamp, distorting the daily gas total and reducing gas_hdd_r2.
+
+The effect is worst for average-in-all-day (continuous, Sheffield, HTC 145) where the overnight off-period is only 9 h but mass is large (18,000 kJ/K), producing very large warmup gas values that the noise model clips heavily. modern-out-for-work (twin-peak, Cambridge, HTC 125) is unaffected (r2 = 0.757) possibly because the twin-peak pattern has shorter individual warmup bursts relative to total daily gas, or because Cambridge weather produces more moderate warmup magnitudes.
+
+Suggested architect actions:
+- Inspect the noise-config.json HH clamp parameters and consider raising the per-HH clamp threshold to accommodate thermodynamic warmup bursts
+- Or apply noise only to the non-warmup HH residuals (separate warmup gas from steady-state before noise injection)
+- Investigate why small-and-efficient elec is −34.7% off target (this pre-dates F15 — may be a baseload config issue unrelated to the thermodynamic model)
