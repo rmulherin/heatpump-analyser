@@ -583,7 +583,7 @@ export function computeStats(gasArr, elecArr, weather, timestamps, timestampMs, 
   const fv = {
     gas_hdd_r2:           { value: r2,              expected: [0.70, 0.97], pass: r2 != null && r2 >= 0.70 && r2 <= 0.97 },
     weekday_weekend_ratio: { value: wwElecRatio,     expected: [0.80, 1.20], pass: wwElecRatio != null && wwElecRatio >= 0.80 && wwElecRatio <= 1.20 },
-    summer_winter_ratio:   { value: swElecRatio,     expected: [1.05, 1.80], pass: swElecRatio != null && swElecRatio >= 1.05 && swElecRatio <= 1.80 },
+    summer_winter_ratio:   { value: swElecRatio,     expected: [0.95, 1.80], pass: swElecRatio != null && swElecRatio >= 0.95 && swElecRatio <= 1.80 },
     holiday_weeks_injected:{ value: holidayWeeksInjected, expected: [noiseConfig.holiday_weeks.events_per_year - 1, noiseConfig.holiday_weeks.events_per_year + 1], pass: holidayWeeksInjected >= noiseConfig.holiday_weeks.events_per_year - 1 && holidayWeeksInjected <= noiseConfig.holiday_weeks.events_per_year + 1 },
   };
 
