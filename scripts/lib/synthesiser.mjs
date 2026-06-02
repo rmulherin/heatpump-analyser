@@ -558,6 +558,14 @@ export function clampNonNeg(arr) {
   return clamps;
 }
 
+export function clampMax(arr, ceiling) {
+  let count = 0;
+  for (let i = 0; i < arr.length; i++) {
+    if (arr[i] > ceiling) { arr[i] = ceiling; count++; }
+  }
+  return count;
+}
+
 export function computeStats(gasArr, elecArr, weather, timestamps, timestampMs, heatingOn, isAbsence, archetypeConfig, noiseConfig, injectedEvents) {
   const n = gasArr.length;
   const gasKwh  = gasArr.reduce((a, b)  => a + b, 0);
@@ -694,7 +702,7 @@ export function computeStats(gasArr, elecArr, weather, timestamps, timestampMs, 
 // Step 14 — Output writing
 // ─────────────────────────────────────────────
 
-export function writeOutputs(timestamps, gasArr, elecArr, stats, archetypeConfig, noiseConfigPath, opts) {
+export function writeOutputs(timestamps, gasArr, elecArr, stats, archetypeConfig, noiseConfigPath, opts, clampCounts = {}) {
   const slug      = archetypeConfig.slug;
   const outputDir = opts.outputDir;
   fs.mkdirSync(outputDir, { recursive: true });
@@ -748,6 +756,14 @@ ${fvTable}
 ## Warnings
 
 ${stats.warnings.length === 0 ? '_None_' : stats.warnings.map(w => `- ${w}`).join('\n')}
+
+## Clamp Counts (post-noise)
+
+| Type | Count |
+|------|-------|
+| Gas non-neg lower | ${clampCounts.gasNonNeg ?? 'n/a'} |
+| Elec non-neg lower | ${clampCounts.elecNonNeg ?? 'n/a'} |
+| Gas ceiling upper (F20, ${(clampCounts.gasCeilingKwh ?? 0).toFixed(4)} kWh/HH) | ${clampCounts.gasCeiling ?? 'n/a'} |
 
 ## Console Snippet
 
@@ -853,11 +869,20 @@ export async function synthesise(archetypeConfigPath, noiseConfigPath, opts = {}
   }
 
   injectNoise(gasArr, elecArr, noise, archetype, prng);
+  // F20: enforce the boiler-output ceiling on the post-noise combined gas signal.
+  // injectNoise is ceiling-unaware, so positive AR(1) residuals on at-ceiling warmup
+  // HHs can push the final value above what the boiler can physically deliver. F19
+  // bounds the pre-noise signal; this restores the bound after noise. Upper-only:
+  // clampNonNeg already handles the lower bound. Real gas meters cannot record
+  // throughput above the boiler's rated draw.
+  const gasCeilingKwh    = archetype.building.boiler_capacity_kw * 0.5 / archetype.building.boiler_efficiency;
+  const gasCeilingClamps = clampMax(gasArr, gasCeilingKwh);
   const gasClamps  = clampNonNeg(gasArr);
   const elecClamps = clampNonNeg(elecArr);
 
-  if (gasClamps  > timestamps.length * 0.005) console.warn(`  ${slug}: ${gasClamps} gas clamps (>${(0.005 * 100).toFixed(1)}%)`);
-  if (elecClamps > timestamps.length * 0.005) console.warn(`  ${slug}: ${elecClamps} elec clamps (>${(0.005 * 100).toFixed(1)}%)`);
+  console.log(`  ${slug}: boiler ceiling=${gasCeilingKwh.toFixed(4)} kWh/HH; ceiling clamps=${gasCeilingClamps}`);
+  if (gasClamps  > timestamps.length * 0.005) console.warn(`  ${slug}: ${gasClamps} gas non-neg clamps (>${(0.005 * 100).toFixed(1)}%)`);
+  if (elecClamps > timestamps.length * 0.005) console.warn(`  ${slug}: ${elecClamps} elec non-neg clamps (>${(0.005 * 100).toFixed(1)}%)`);
 
   const stats = computeStats(
     gasArr, elecArr, weatherAligned, timestamps, timestampMs,
@@ -865,7 +890,8 @@ export async function synthesise(archetypeConfigPath, noiseConfigPath, opts = {}
   );
 
   const { csvPath, statsPath, reportPath } = writeOutputs(
-    timestamps, gasArr, elecArr, stats, archetype, noiseConfigPath, resolvedOpts
+    timestamps, gasArr, elecArr, stats, archetype, noiseConfigPath, resolvedOpts,
+    { gasNonNeg: gasClamps, elecNonNeg: elecClamps, gasCeiling: gasCeilingClamps, gasCeilingKwh }
   );
 
   if (resolvedOpts.verbose) {
