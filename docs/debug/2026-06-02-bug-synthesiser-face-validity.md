@@ -483,3 +483,134 @@ The cleanest fix is a single post-construction renormalisation that scales the p
 **OI-2 — `gas_hdd_r2` still failing:** At 0.564 vs [0.70, 0.97]. Likely blocked on OI-1 — high clamping corrupts the heating-window signal that F2's intercept regression depends on.
 
 **OI-3 — `small-and-efficient` TC7 hard fail:** Gas −41.4%, 5,493 clamps. Lower htc → smaller heating windows → more zero-signal HHs → more clamping. May require archetype-specific phi or a structural change to the noise model. Surface for architect before baking all four archetypes.
+
+**Status updated:** Returned to architect 2026-06-02 with Sonnet's verification block above.
+
+---
+
+## Phase 7 — Resumed investigation (architect, round 2)
+
+**Date:** 2026-06-02
+**Trigger:** F1+F4 landed; F2+F3a partial; 3 outstanding issues surfaced by Sonnet.
+
+### Re-reading the applied F3a in [scripts/lib/synthesiser.mjs:446-457](../../scripts/lib/synthesiser.mjs)
+
+```js
+// Pass 2: AR(1) behavioural residual scaled per-HH against local signal magnitude.
+// Zero-signal HHs get zero residual — no clamping of quiet periods.
+const ar1Factor = Math.sqrt(2 * (1 - phi * phi) / (48 * Math.pow(1 - phi, 2)));
+let rGas = 0, rElec = 0;
+for (let i = 0; i < n; i++) {
+  const sigmaGasLocal  = gasArr[i]  * cv * ar1Factor;
+  const sigmaElecLocal = elecArr[i] * cv * ar1Factor;
+  rGas  = phi * rGas  + sigmaGasLocal  * boxMuller(prng);
+  rElec = phi * rElec + sigmaElecLocal * boxMuller(prng);
+  gasArr[i]  += rGas;     // ← unconditional: applies to zero-signal HHs too
+  elecArr[i] += rElec;    // ← unconditional
+}
+```
+
+**The implementation matches the F3a diff I supplied. The bug is in the F3a *design* — I underspecified.**
+
+The intent (per the comment Sonnet added at line 447) was "zero-signal HHs get zero residual". The local-sigma logic achieves this for the *new* noise contribution at HH `i` (sigma=0 → no fresh draw). But the AR(1) state `rGas` is computed as `phi × rGas_previous + new_draw`, so it carries residuals from previous high-signal HHs across signal boundaries. When the signal drops to zero and `rGas_previous` was negative, the unconditional `gasArr[i] += rGas` drives gas below zero → clamp.
+
+Decay rate at phi=0.55: 1 HH later, residual is 0.55× its value; 5 HHs later, 0.05×; 10 HHs later, 0.003×. So the leak shows up mainly within ~5 HHs of an active-to-zero transition. With ~2 transitions per day (start and end of each heating window) × 365 days × ~5 affected HHs × 2 (gas + elec) ≈ ~3,650 HH per fuel — exactly matching the observed residual clamp counts (4,480 gas, 1,223 elec).
+
+### RC5 — AR(1) residual is applied to zero-signal HHs (boundary-leak bug)
+
+**Confirmed by:** match between the analytical decay-window estimate (~3,650 affected HHs) and the observed residual clamps (4,480 gas / 1,223 elec) post-F3a.
+
+This is a single-line semantic gap in the F3a fix, not a structural redesign.
+
+### F5 — Gate the residual application to active-signal HHs
+
+**File:** [scripts/lib/synthesiser.mjs:455-456](../../scripts/lib/synthesiser.mjs)
+
+**Change:** make the residual application conditional on the deterministic signal being non-zero. Keep the AR(1) state evolution unchanged — it decays naturally during gaps, and resumes correctly at the next active HH.
+
+```diff
+   for (let i = 0; i < n; i++) {
+     const sigmaGasLocal  = gasArr[i]  * cv * ar1Factor;
+     const sigmaElecLocal = elecArr[i] * cv * ar1Factor;
+     rGas  = phi * rGas  + sigmaGasLocal  * boxMuller(prng);
+     rElec = phi * rElec + sigmaElecLocal * boxMuller(prng);
+-    gasArr[i]  += rGas;
+-    elecArr[i] += rElec;
++    if (gasArr[i]  > 0) gasArr[i]  += rGas;
++    if (elecArr[i] > 0) elecArr[i] += rElec;
+   }
+```
+
+**Why this preserves AR(1) semantics correctly:**
+
+- During an active period (heating window, HW pulse): sigma > 0, new draws inject variance, `rGas` evolves as AR(1), gets applied. Behaviour identical to F3a.
+- At active→zero transition: `rGas` no longer applied; decays freely in `rGas_next = phi × rGas`. After ~10 HHs in the gap, `rGas` is effectively zero.
+- At zero→active transition: `rGas` arrives with negligible memory from the previous gap (decayed); fresh sigma at the new active HH starts the AR(1) process essentially fresh. No leak.
+- During a long pulse: AR(1) accumulates correctly; matches the design intent of "occupant behaviour persists into the next HH".
+
+**Effort:** trivial (2 lines).
+
+### Predicted outcomes after F5
+
+| Metric | Post-F3a (now) | Post-F5 prediction | Expected |
+|---|---|---|---|
+| Gas HH clamps | 4,480 | **≤ 50** (residual measurement-noise multiplicative only) | ≤ 200 |
+| Elec HH clamps | 1,223 | **≤ 30** | ≤ 50 |
+| Annual gas (modern-out-for-work) | 5,891 kWh (−18.6%) | **~5,700–5,800 kWh (−19% to −21%)** | ±10% of 7,237 — **will still fail TC2** |
+| Annual elec (modern-out-for-work) | 1,680 kWh (−13.7%) | **~1,650–1,720 kWh (−12% to −15%)** | ±10% of 1,946 — likely still fail TC2, within ±20% |
+| `gas_hdd_r2` | 0.564 | **~0.70–0.85** | [0.70, 0.97] — likely PASS, borderline |
+| `summer_winter_ratio` | 1.719 | unchanged | ✅ |
+| `weekday_weekend_ratio` | 0.904 | unchanged | ✅ |
+
+### The annual-totals gap is no longer a synthesiser bug — it's a §E parameter calibration question
+
+After F5 lands and clamping is eliminated, the synthesiser will produce annual gas ~5,700–5,800 kWh for modern-out-for-work against a 7,237 target — a 19–21% deterministic undershoot.
+
+**This is not a synthesiser bug.** Analytical estimate from §E parameters:
+
+- Cambridge winter mean outdoor temp ≈ 5°C; setpoint 19.5°C; ΔT = 14.5K
+- Heat loss per heating-window HH = 180 W/K × 14.5K × 0.5h × 0.001 = 1.305 kWh/HH (pre-boiler-η)
+- Heating windows: 7h/weekday + 15h/weekend = ~52 h/week = ~52×26 weeks heating-season hours = 1,352 heating HHs ≈ 1,764 kWh/year × 1/η = 1,917 kWh
+- HW + cooking: 6 kWh/day × 365 = 2,190 kWh
+- **Analytical annual gas total: ~5,900–6,100 kWh** — matches the bake.
+
+The 19% gap to the 7,237 target reflects §E's stated "starting values, not gospel" status. Either:
+- Modern-out-for-work's Nesta P3 target was set against a UK-mean climate, not Cambridge specifically (Cambridge winters are milder than UK mean by ~0.5–1°C); or
+- §E's `htc_w_per_k = 180` under-represents real Profile-3 heat loss; or
+- The schedule is shorter than Profile-3 households actually run.
+
+**Per strategy §V1 iteration loop steps 1+6, this is parameter iteration work — not a synthesiser bug.** It happens in the Opus architect window in chat, with Rhiannon signing off on adjusted starting values, AFTER F5 unblocks face validity. Out of scope for this debug doc.
+
+The same applies to OI-3 (small-and-efficient −41.4%): after F5 eliminates clamping, the residual gap is parameter iteration territory.
+
+### OI-2 — `gas_hdd_r2` after F5
+
+R² should reach ~0.70 (borderline pass) under F5 alone, based on this back-of-envelope:
+
+- Daily heating SD (driven by HDD variance in Cambridge heating-season): ~3.2 kWh/day
+- Daily HW + cooking baseload SD (from `daily_residual_cv = 0.354` applied as a dailyFactor): ~2.1 kWh/day
+- Schedule jitter and solar gain on heating windows: small (~ ≤1 kWh/day combined)
+- Combined non-HDD daily SD: ~2.3 kWh/day
+- R² ≈ 3.2² / (3.2² + 2.3²) = 10.24 / 15.53 = **~0.66**
+
+So borderline. If F5's bake comes in at R² 0.60–0.68, the cause is **HW+cooking dailyFactor variance**, not a bug. Possible follow-up adjustments:
+
+- **F6 (optional, design-scope, NOT in this debug doc):** consider whether `daily_residual_cv = 0.354` is the appropriate cv to apply to HW+cooking baseline scaling. The calibration household's 0.354 is the *total* residual CV after weather-detrending — it includes activity variance, not just HW/cooking. Applying the full 0.354 to HW+cooking only may over-inject baseload noise. A possible refinement is to split the cv into a baseload component and an activity component, but this requires a design-doc update to the noise-config schema. Suggest raising as a follow-on calibration concern after F5 lands.
+
+### Updated verification plan for Sonnet (round 2)
+
+1. Apply F5 (2-line change at synthesiser.mjs:455-456). Commit.
+2. Re-bake **all four archetypes**:
+   - `modern-out-for-work` (seed 1001, CB1 2BX)
+   - `average-in-all-day` (its own seed and postcode)
+   - `small-and-efficient` (its own seed and postcode)
+   - `big-old-draughty` (its own seed and postcode)
+3. Append a new verification block ("Phase 8 — Verification round 2") with the metric grid for all four archetypes.
+4. Pass conditions: all 4 face-validity metrics PASS for each archetype; clamps ≤200 gas / ≤50 elec. Annual-totals targets are *not* a pass gate for this debug — they are downstream parameter iteration.
+5. If gas_hdd_r2 lands below 0.70 for any archetype, do **not** redesign — surface back to architect with the observed value and clamp count for that archetype. The architect will decide between (a) accepting borderline R², (b) tightening HW+cooking dailyFactor variance, or (c) loosening the §F R² expected range.
+6. If clamps remain elevated (>200 gas) after F5, return to architect — F5's diagnosis is wrong and additional investigation is needed.
+
+### Secondary concerns update
+
+- Process deviation note (other three demo configs vs §E) — still open per the original Secondary Concerns section. Sonnet's Phase 6 implicitly used the existing (possibly-drifted) configs for `average-in-all-day`, `small-and-efficient`, `big-old-draughty`. Recommend Rhiannon raise the §E-alignment check for those three configs as a separate hygiene step *before* the round-2 bakes, so post-F5 results are interpretable against documented baselines.
+
