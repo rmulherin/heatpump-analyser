@@ -280,7 +280,7 @@ export function generateHolidayWeeks(timestampMs, noiseConfig, prng) {
 // Step 9 — Forward model
 // ─────────────────────────────────────────────
 
-export function computeForwardModel(archetypeConfig, timestampMs, weather, heatingOn, isAbsence) {
+export function computeForwardModel(archetypeConfig, timestampMs, weather, heatingOn, isAbsence, gasBaseload) {
   const n          = timestampMs.length;
   const gasHeating = new Float64Array(n);
   const heatDemand        = new Float64Array(n);
@@ -290,7 +290,7 @@ export function computeForwardModel(archetypeConfig, timestampMs, weather, heati
   const efficiency        = archetypeConfig.building.boiler_efficiency;
   const massKj            = archetypeConfig.building.thermal_mass_kj_per_k;
   const boilerCapacityKw  = archetypeConfig.building.boiler_capacity_kw;
-  const maxThermalPerHH   = boilerCapacityKw * 0.5; // kWh thermal per 30-min HH
+  const totalThermalPerHH = boilerCapacityKw * 0.5; // kWh thermal capacity per 30-min HH
 
   let tIn = setpoint; // Steady-state start assumption; brief settling transient over first ~5 HHs
 
@@ -305,20 +305,25 @@ export function computeForwardModel(archetypeConfig, timestampMs, weather, heati
       // gasHeating and heatDemand remain 0 (Float64Array default)
 
     } else if (heatingOn[i]) {
+      // HW/cooking pre-allocates boiler capacity; heating gets the remainder.
+      // Matches real combi-boiler HW-priority behaviour.
+      const hwThermalThisHH         = gasBaseload[i] * efficiency;
+      const maxHeatingThermalThisHH = Math.max(0, totalThermalPerHH - hwThermalThisHH);
+
       if (tIn < setpoint) {
         // Warmup from cooled state + maintain at setpoint for this HH
-        const warmupKwh       = (setpoint - tIn) * massKj / 3600;
-        const lossAtSet       = htc * (setpoint - tOut) * 0.5 * 0.001;
+        const warmupKwh        = (setpoint - tIn) * massKj / 3600;
+        const lossAtSet        = htc * (setpoint - tOut) * 0.5 * 0.001;
         const requestedThermal = Math.max(0, warmupKwh + lossAtSet - solarGainKwh);
 
-        if (requestedThermal <= maxThermalPerHH) {
-          // Boiler can reach setpoint in this HH
+        if (requestedThermal <= maxHeatingThermalThisHH) {
+          // Boiler has enough remaining capacity to reach setpoint in this HH
           gasHeating[i] = requestedThermal / efficiency;
           heatDemand[i] = requestedThermal;
           tIn = setpoint;
         } else {
-          // Boiler at capacity — partial warmup; building continues rising next HH
-          const gasThermal  = maxThermalPerHH;
+          // Boiler at remaining capacity — partial warmup; building continues rising next HH
+          const gasThermal  = maxHeatingThermalThisHH;
           gasHeating[i] = gasThermal / efficiency;
           heatDemand[i] = gasThermal;
           // Heat balance during this HH using heat-loss at start tIn (slight underestimate)
@@ -333,9 +338,12 @@ export function computeForwardModel(archetypeConfig, timestampMs, weather, heati
         const netThermalKwh = solarGainKwh - heatLossKwh;
         const tNext         = tIn + netThermalKwh * 3600 / massKj;
         if (tNext < setpoint) {
-          // Thermostat fires: cover steady-state maintenance loss (warmup term = 0 per spec)
+          // Thermostat fires: cover steady-state maintenance loss, capped at remaining capacity
           tIn = setpoint;
-          const gasThermal = Math.max(0, htc * (setpoint - tOut) * 0.5 * 0.001 - solarGainKwh);
+          const gasThermal = Math.min(
+            Math.max(0, htc * (setpoint - tOut) * 0.5 * 0.001 - solarGainKwh),
+            maxHeatingThermalThisHH
+          );
           gasHeating[i] = gasThermal / efficiency;
           heatDemand[i] = gasThermal;
         } else {
@@ -833,8 +841,8 @@ export async function synthesise(archetypeConfigPath, noiseConfigPath, opts = {}
 
   const heatingOn = generateSchedule(archetype.schedule, timestampMs, noise, prng);
   const { isAbsence, injectedEvents } = generateHolidayWeeks(timestampMs, noise, prng);
-  const { gasHeating } = computeForwardModel(archetype, timestampMs, weatherAligned, heatingOn, isAbsence);
   const gasBaseload   = computeHWandCooking(archetype, timestampMs, noise, prng);
+  const { gasHeating } = computeForwardModel(archetype, timestampMs, weatherAligned, heatingOn, isAbsence, gasBaseload);
   const elec          = computeElecBaseload(archetype, timestamps, timestampMs, weatherAligned, noise, prng);
 
   const gasArr  = new Float64Array(timestamps.length);
