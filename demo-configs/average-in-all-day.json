@@ -5,7 +5,7 @@
   "display_order": 2,
   "archetype_source": "strategy §E — average-in-all-day",
   "building": {
-    "htc_w_per_k": 280,
+    "htc_w_per_k": 145,
     "thermal_mass_kj_per_k": 18000,
     "boiler_efficiency": 0.90,
     "solar_aperture_m2": 3.0,

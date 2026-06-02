@@ -5,7 +5,7 @@
   "display_order": 1,
   "archetype_source": "strategy §E — modern-out-for-work",
   "building": {
-    "htc_w_per_k": 180,
+    "htc_w_per_k": 125,
     "thermal_mass_kj_per_k": 12000,
     "boiler_efficiency": 0.92,
     "solar_aperture_m2": 4.0,

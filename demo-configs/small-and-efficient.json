@@ -5,7 +5,7 @@
   "display_order": 3,
   "archetype_source": "strategy §E — small-and-efficient",
   "building": {
-    "htc_w_per_k": 110,
+    "htc_w_per_k": 80,
     "thermal_mass_kj_per_k": 8000,
     "boiler_efficiency": 0.92,
     "solar_aperture_m2": 2.0,

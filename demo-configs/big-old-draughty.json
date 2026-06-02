@@ -5,7 +5,7 @@
   "display_order": 4,
   "archetype_source": "strategy §E — big-old-draughty",
   "building": {
-    "htc_w_per_k": 450,
+    "htc_w_per_k": 230,
     "thermal_mass_kj_per_k": 30000,
     "boiler_efficiency": 0.85,
     "solar_aperture_m2": 5.0,
