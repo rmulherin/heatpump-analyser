@@ -5,11 +5,11 @@
   "display_order": 2,
   "archetype_source": "strategy §E — average-in-all-day",
   "building": {
-    "htc_w_per_k": 230,
-    "thermal_mass_kj_per_k": 10000,
-    "boiler_efficiency": 0.86,
+    "htc_w_per_k": 280,
+    "thermal_mass_kj_per_k": 18000,
+    "boiler_efficiency": 0.90,
     "solar_aperture_m2": 3.0,
-    "setpoint_c": 20
+    "setpoint_c": 19.0
   },
   "schedule": {
     "kind": "continuous",
@@ -21,13 +21,13 @@
     ]
   },
   "baseload": {
-    "gas_hot_water_kwh_per_day": 3.6,
-    "gas_cooking_kwh_per_day": 0.8,
-    "elec_baseload_kwh_per_day": 5.2,
+    "gas_hot_water_kwh_per_day": 6.0,
+    "gas_cooking_kwh_per_day": 2.0,
+    "elec_baseload_kwh_per_day": 5.0,
     "elec_appliance_events_per_week": 9
   },
   "location": {
-    "postcode": "SW1A 1AA"
+    "postcode": "S10 2HQ"
   },
   "time_window": {
     "start": "2025-01-01",
