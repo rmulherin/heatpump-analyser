@@ -394,6 +394,17 @@ export function computeElecBaseload(archetypeConfig, timestamps, timestampMs, we
     output[i] *= (dow === 0 || dow === 6) ? weekendFactor : weekdayFactor;
   }
 
+  // Renormalise pre-event baseload to match nominal annual mean (kWh/day × days).
+  // Hour-of-day and solar shaping are distribution shapes, not scaling parameters.
+  const daysInWindow = n / 48;
+  const targetTotal  = baseDayKwh * daysInWindow;
+  let actualTotal    = 0;
+  for (let i = 0; i < n; i++) actualTotal += output[i];
+  if (actualTotal > 0) {
+    const k = targetTotal / actualTotal;
+    for (let i = 0; i < n; i++) output[i] *= k;
+  }
+
   // Discrete appliance events: per week, sample eventsPerWeek start-HH indices
   const hhPerWeek = 48 * 7;
   const totalWeeks = Math.ceil(n / hhPerWeek);
@@ -426,24 +437,21 @@ export function injectNoise(gasArr, elecArr, noiseConfig, archetypeConfig, prng)
   const sd  = noiseConfig.measurement_noise.smart_meter_relative_sd;
   const n   = gasArr.length;
 
-  const meanGas  = gasArr.reduce((a, b)  => a + b, 0) / n;
-  const meanElec = elecArr.reduce((a, b) => a + b, 0) / n;
-
-  // Sigma calibrated so daily-aggregate CV matches daily_residual_cv under AR(1)
-  const sigmaGas  = meanGas  * cv * Math.sqrt(2 * (1 - phi * phi) / (48 * Math.pow(1 - phi, 2)));
-  const sigmaElec = meanElec * cv * Math.sqrt(2 * (1 - phi * phi) / (48 * Math.pow(1 - phi, 2)));
-
   // Pass 1: measurement noise (multiplicative, HH-independent)
   for (let i = 0; i < n; i++) {
     gasArr[i]  *= (1 + boxMuller(prng) * sd);
     elecArr[i] *= (1 + boxMuller(prng) * sd);
   }
 
-  // Pass 2: AR(1) behavioural residual (additive, autocorrelated)
+  // Pass 2: AR(1) behavioural residual scaled per-HH against local signal magnitude.
+  // Zero-signal HHs get zero residual — no clamping of quiet periods.
+  const ar1Factor = Math.sqrt(2 * (1 - phi * phi) / (48 * Math.pow(1 - phi, 2)));
   let rGas = 0, rElec = 0;
   for (let i = 0; i < n; i++) {
-    rGas  = phi * rGas  + sigmaGas  * boxMuller(prng);
-    rElec = phi * rElec + sigmaElec * boxMuller(prng);
+    const sigmaGasLocal  = gasArr[i]  * cv * ar1Factor;
+    const sigmaElecLocal = elecArr[i] * cv * ar1Factor;
+    rGas  = phi * rGas  + sigmaGasLocal  * boxMuller(prng);
+    rElec = phi * rElec + sigmaElecLocal * boxMuller(prng);
     gasArr[i]  += rGas;
     elecArr[i] += rElec;
   }
@@ -485,8 +493,8 @@ export function computeStats(gasArr, elecArr, weather, timestamps, timestampMs, 
   }
 
   // Daily HDD and R² for gas vs HDD (heating months only, non-absence)
+  // Linear regression with intercept: gas = α + β × HDD
   const HEATING_MONTHS = new Set([10, 11, 12, 1, 2, 3]);
-  let sumXY = 0, sumXX = 0;
   const hddDays = [], gasDays = [];
   for (const [date, temps] of dailyTemps) {
     if (dailyAbsence.get(date)) continue;
@@ -495,17 +503,24 @@ export function computeStats(gasArr, elecArr, weather, timestamps, timestampMs, 
     const meanTemp = temps.reduce((a, b) => a + b, 0) / temps.length;
     const hdd = Math.max(0, HDD_BASE_TEMP - meanTemp);
     if (hdd <= 0) continue;
-    const g = dailyGas.get(date) ?? 0;
+    gasDays.push(dailyGas.get(date) ?? 0);
     hddDays.push(hdd);
-    gasDays.push(g);
-    sumXY += hdd * g;
-    sumXX += hdd * hdd;
   }
-  const beta = sumXX > 0 ? sumXY / sumXX : 0;
-  const meanG = gasDays.length > 0 ? gasDays.reduce((a, b) => a + b, 0) / gasDays.length : 0;
+  const nPts = gasDays.length;
+  const meanG = nPts > 0 ? gasDays.reduce((a, b) => a + b, 0) / nPts : 0;
+  const meanH = nPts > 0 ? hddDays.reduce((a, b) => a + b, 0) / nPts : 0;
+  let sxx = 0, sxy = 0;
+  for (let i = 0; i < nPts; i++) {
+    const dx = hddDays[i] - meanH;
+    sxx += dx * dx;
+    sxy += dx * (gasDays[i] - meanG);
+  }
+  const beta  = sxx > 0 ? sxy / sxx : 0;
+  const alpha = meanG - beta * meanH;
   let ssRes = 0, ssTot = 0;
-  for (let i = 0; i < gasDays.length; i++) {
-    ssRes += Math.pow(gasDays[i] - beta * hddDays[i], 2);
+  for (let i = 0; i < nPts; i++) {
+    const pred = alpha + beta * hddDays[i];
+    ssRes += Math.pow(gasDays[i] - pred, 2);
     ssTot += Math.pow(gasDays[i] - meanG, 2);
   }
   const r2 = ssTot > 0 ? 1 - ssRes / ssTot : null;
@@ -530,7 +545,7 @@ export function computeStats(gasArr, elecArr, weather, timestamps, timestampMs, 
   }
   const summerMean = summerElec.length > 0 ? summerElec.reduce((a, b) => a + b, 0) / summerElec.length : 0;
   const winterMean = winterElec.length > 0 ? winterElec.reduce((a, b) => a + b, 0) / winterElec.length : 0;
-  const swElecRatio = winterMean > 0 ? summerMean / winterMean : null;
+  const swElecRatio = summerMean > 0 ? winterMean / summerMean : null;
 
   // Summer baseload (median Jun-Aug daily gas)
   const summerGas = [];

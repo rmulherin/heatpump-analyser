@@ -442,6 +442,44 @@ The cleanest fix is a single post-construction renormalisation that scales the p
 
 ---
 
-## Phase 6 — Verification (implementer phase, to be filled by Sonnet)
+## Phase 6 — Verification
 
-_To be populated after fix application._
+**Fixes applied:** F1, F2, F3a, F4 — commit see below. Tested 2026-06-02.
+
+### modern-out-for-work bake (seed 1001, Cambridge CB1 2BX, 2025)
+
+| Metric | Before fixes | After fixes | Expected | Pass |
+|---|---|---|---|---|
+| Annual gas | 6,080 kWh (−16.0%) | 5,891 kWh (−18.6%) | ±10% of 7,237 | ❌ |
+| Annual elec | 1,447 kWh (−25.7%) | 1,680 kWh (−13.7%) | ±10% of 1,946 | ❌ |
+| `gas_hdd_r2` | 0.367 | 0.564 | [0.70, 0.97] | ❌ |
+| `weekday_weekend_ratio` | 0.919 | 0.904 | [0.80, 1.20] | ✅ |
+| `summer_winter_ratio` | 0.601 | 1.719 | [1.20, 1.80] | ✅ |
+| `holiday_weeks_injected` | 7 | 7 | [6, 8] | ✅ |
+| Gas HH clamps | 5,559 | 4,480 | ≤ 200 | ❌ |
+| Elec HH clamps | 1,359 | 1,223 | ≤ 50 | ❌ |
+
+### TC7 results across all archetypes (all use CB1 2BX cache, now populated)
+
+| Archetype | Gas delta | Elec delta | Pass |
+|---|---|---|---|
+| modern-out-for-work | −18.6% | −13.7% | ✅ within ±20% |
+| average-in-all-day | passes ±20% | passes ±20% | ✅ |
+| big-old-draughty | passes ±20% | passes ±20% | ✅ |
+| small-and-efficient | **−41.4%** | — | ❌ |
+
+`small-and-efficient` TC7 failure is likely pre-existing — this archetype had no weather cache before and was never run in TC7. The −41.4% gas undershoot correlates with 5,493 gas clamps, consistent with the unsolved clamping issue.
+
+### What worked
+
+- **F1** fully resolved: `summer_winter_ratio` 0.601 → 1.719 (✅ [1.20, 1.80]).
+- **F4** significantly improved: elec delta −25.7% → −13.7%.
+- **F2** partial improvement: `gas_hdd_r2` 0.367 → 0.564. Still fails [0.70, 0.97].
+
+### Outstanding issues — return to architect
+
+**OI-1 — F3a AR(1) memory effect:** Per-HH sigma approach reduces sigma to zero for zero-signal HHs, but the AR(1) residual `rGas` carries memory from previous high-signal HHs (`rGas = phi * rGas_prev`). At heating-window boundaries, the decaying residual drives near-zero HHs below zero. Clamp count reduced from 5,559 to 4,480 but far above the expected ≤200. `small-and-efficient` suffers most (5,493 clamps, −41.4% gas).
+
+**OI-2 — `gas_hdd_r2` still failing:** At 0.564 vs [0.70, 0.97]. Likely blocked on OI-1 — high clamping corrupts the heating-window signal that F2's intercept regression depends on.
+
+**OI-3 — `small-and-efficient` TC7 hard fail:** Gas −41.4%, 5,493 clamps. Lower htc → smaller heating windows → more zero-signal HHs → more clamping. May require archetype-specific phi or a structural change to the noise model. Surface for architect before baking all four archetypes.
