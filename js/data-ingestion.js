@@ -463,20 +463,20 @@ export function parseCSV(fileContent) {
     const rawElec = fields[2].trim();
 
     // Parse timestamp
+    // Honour explicit timezone (Z or ±HH:MM offset); otherwise assume Europe/London local.
     let utcIso;
-    if (rawTimestamp.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(rawTimestamp)) {
-      // Explicit timezone — honour it
-      const d = new Date(rawTimestamp);
-      if (isNaN(d.getTime())) {
-        errors.push(`Row ${rowNum}: timestamp "${rawTimestamp}" is not a valid date.`);
+    const hasExplicitTz = /Z$|[+-]\d{2}:?\d{2}$/i.test(rawTimestamp);
+    if (hasExplicitTz) {
+      const parsed = new Date(rawTimestamp.replace(' ', 'T'));
+      if (isNaN(parsed.getTime())) {
+        errors.push(`Row ${rowNum}: timestamp "${rawTimestamp}" is not a valid date format.`);
         continue;
       }
-      utcIso = d.toISOString();
+      utcIso = parsed.toISOString();
     } else {
-      // Assume Europe/London
       const result = londonToUtc(rawTimestamp);
       if (result === null) {
-        errors.push(`Row ${rowNum}: timestamp "${rawTimestamp}" is not a valid date format. Use YYYY-MM-DD HH:MM.`);
+        errors.push(`Row ${rowNum}: timestamp "${rawTimestamp}" is not a valid date format. Use YYYY-MM-DD HH:MM or ISO 8601 with timezone.`);
         continue;
       }
       if (result.error === 'spring_gap') {
