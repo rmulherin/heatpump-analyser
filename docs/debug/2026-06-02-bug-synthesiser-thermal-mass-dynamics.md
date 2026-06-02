@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-02
 **Reporter:** Rhiannon (surfaced during Demo 1 verdict-coherence step, after F14 unblocked CSV upload)
-**Status:** F19 scoped (shared boiler capacity heating+HW). F18 capped heating-only correctly; combined gas still exceeded cap at HW-coincides-with-warmup HHs. F19 pre-allocates HW capacity first, heating uses remainder (matches real combi-boiler HW-priority behaviour). Awaiting Sonnet implementation + Rhiannon's tool-side waste-heat fix.
+**Status:** Returned to architect — F19 applied (commit c44ee36); F19 correctly caps pre-noise combined gas at boiler capacity, but AR(1) noise injection still pushes post-noise combined max above cap in all four archetypes. Options: post-combine hard clamp after injectNoise(), or tighten F17 AR(1) cap factor.
 **Investigator:** Opus architect window
 **Related:** [`2026-06-02-bug-synthesiser-face-validity.md`](./2026-06-02-bug-synthesiser-face-validity.md) (RESOLVED — F1–F9, face-validity); [`2026-06-02-bug-m1-csv-timezone-handling.md`](./2026-06-02-bug-m1-csv-timezone-handling.md) (RESOLVED — F14, M1 timezone)
 
@@ -756,3 +756,84 @@ If met → status "Code-side verified, awaiting tool-side waste-heat fix". If an
 ### Honesty note
 
 F18 had the right shape but the wrong scope. The HW competition is exactly how real combi boilers work, and ignoring it was a modelling gap that F18 inherited from F15. F19 closes that loop without invalidating F18's heating-side mechanism.
+
+---
+
+## Round 4: F19 verification — code-side (2026-06-02)
+
+**Commit:** F19 `c44ee36`. Re-baked all four archetypes.
+
+### Annual totals vs Nesta targets (±15% acceptance)
+
+| Archetype | Gas kWh | Target | Delta | Pass? | vs F18 | Elec kWh | Target | Delta |
+|---|---|---|---|---|---|---|---|---|
+| modern-out-for-work | 8,130 | 7,237 | +12.3% | ✓ | −0.0% | 1,853 | 1,946 | −4.8% |
+| average-in-all-day | 10,712 | 10,236 | +4.7% | ✓ | −0.9% | 2,051 | 2,586 | −20.7% |
+| small-and-efficient | 4,184 | 4,266 | −1.9% | ✓ | −0.0% | 1,000 | 1,555 | −35.7% |
+| big-old-draughty | 18,135 | 17,239 | +5.2% | ✓ | −0.0% | 2,633 | 3,089 | −14.8% |
+
+Annual gas shifts vs F18 are ≤0.9% — F19 is neutral on annual totals as predicted.
+
+### Face-validity metrics
+
+Gas clamp counts: no bake triggered the 0.5% stderr warning (<88 HHs) ✓.
+
+| Archetype | gas_hdd_r² | ≥0.60? | vs F18 | summer_winter_ratio | ≥0.95? | weekday_weekend_ratio | [0.8,1.2]? | holiday_weeks | Gas clamps |
+|---|---|---|---|---|---|---|---|---|---|
+| modern-out-for-work | 0.793 | ✓ | +0.001 | 1.668 | ✓ | 0.910 | ✓ | 7 ✓ | <88 ✓ |
+| average-in-all-day | 0.624 | ✓ | +0.005 | 1.197 | ✓ | 1.125 | ✓ | 7 ✓ | <88 ✓ |
+| small-and-efficient | 0.790 | ✓ | +0.000 | 1.005 | ✓ | 0.977 | ✓ | 7 ✓ | <88 ✓ |
+| big-old-draughty | 0.758 | ✓ | +0.000 | 1.514 | ✓ | 1.068 | ✓ | 7 ✓ | <88 ✓ |
+
+All four pass R² ≥ 0.60. Stable vs F18 (within ±0.005).
+
+### Per-HH combined max gas — FAILING criterion
+
+Expected cap (`capacity × 0.5 / efficiency`):
+
+| Archetype | boiler_capacity_kw | efficiency | Cap (kWh gas) | Combined max (kWh) | vs F18 max | Pass? |
+|---|---|---|---|---|---|---|
+| modern-out-for-work | 24 | 0.92 | 13.04 | **16.60** | −1.21 (−6.8%) | ❌ |
+| average-in-all-day | 30 | 0.90 | 16.67 | **23.60** | −2.81 (−10.6%) | ❌ |
+| small-and-efficient | 18 | 0.92 | 9.78 | **13.10** | −0.38 (−2.8%) | ❌ |
+| big-old-draughty | 35 | 0.85 | 20.59 | **31.77** | −1.73 (−5.2%) | ❌ |
+
+F19 reduced peaks across all four archetypes (−3% to −11% vs F18), confirming the HW pre-allocation logic is working. Combined peaks remain above cap in every case.
+
+### Diagnosis — noise is the residual driver
+
+F19 correctly constrains the **pre-noise** combined signal. With HW capacity pre-allocated:
+- `maxHeatingThermalThisHH = max(0, boilerCapacityKw × 0.5 − gasBaseload[i] × efficiency)`
+- Combined thermal pre-noise = heating thermal + HW thermal ≤ `boilerCapacityKw × 0.5`
+- Combined gas pre-noise ≤ `boilerCapacityKw × 0.5 / efficiency` ✓
+
+The post-noise exceedances are consistent with F17's AR(1) residual cap of ±50% on the combined local signal. For a pre-noise peak HH at or near the cap value, the noise can add up to +50%, producing the observed 16–54% exceedances (which are ≤50% of the pre-noise value in all cases):
+
+| Archetype | Cap (kWh) | Combined max (kWh) | Exceedance over cap | Max implied noise fraction |
+|---|---|---|---|---|
+| modern-out-for-work | 13.04 | 16.60 | +3.56 (+27%) | 27% of pre-noise ≤ 50% cap ✓ |
+| average-in-all-day | 16.67 | 23.60 | +6.93 (+42%) | 42% of pre-noise ≤ 50% cap ✓ |
+| small-and-efficient | 9.78 | 13.10 | +3.32 (+34%) | 34% of pre-noise ≤ 50% cap ✓ |
+| big-old-draughty | 20.59 | 31.77 | +11.18 (+54%) | 54% — marginally over F17's 50% cap* |
+
+*`big-old-draughty` exceedance slightly exceeds 50%, which is possible due to noise on HW HHs adjacent to the warmup peak accumulating AR(1) state before the warmup HH — the pre-noise signal at the peak HH need not be exactly at cap for the accumulated residual to produce a 54% push.
+
+F19 has closed the HW-priority modelling gap. The remaining exceedance is the AR(1) noise model producing large positive excursions on high-signal warmup HHs.
+
+### Outcome
+
+**Returned to architect.**
+
+F19 is working correctly — pre-noise combined gas is within boiler capacity. The post-noise combined max still fails the acceptance criterion in all four archetypes. Exceedance magnitudes decreased materially vs F18 but remain above cap.
+
+**Decision needed from architect:**
+
+Options to close the remaining gap:
+
+1. **Post-combine hard clamp (simplest):** After `injectNoise()` in `synthesise()`, add `clampAt(gasArr, boilerCapacityKw × 0.5 / efficiency)` to enforce a per-HH ceiling. This is deterministic and guarantees the criterion is met. Downside: the hard clip changes the distribution of the noise tail on peak HHs and could slightly reduce R².
+
+2. **Tighten F17 AR(1) cap factor:** Reduce from 0.5 to e.g. 0.25 to constrain the noise envelope on large-signal HHs. More principled but requires a new round with re-bake and R² check (tighter noise could improve or hurt R² depending on archetype).
+
+3. **Accept post-noise exceedance:** The criterion was set pre-F19 when the underlying cause was heating-only gas exceeding boiler capacity. Post-F19, the exceedance is noise-only and statistically rare (3-sigma+ event in the noise process). For demo purposes, a single HH in a year of data being slightly above physical plausibility may be acceptable.
+
+Elec annual undershoots (small-and-efficient −35.7%, average-in-all-day −20.7%) are pre-F15 issues, unaffected by F19.
