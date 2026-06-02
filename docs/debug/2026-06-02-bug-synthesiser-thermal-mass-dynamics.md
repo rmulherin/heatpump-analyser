@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-02
 **Reporter:** Rhiannon (surfaced during Demo 1 verdict-coherence step, after F14 unblocked CSV upload)
-**Status:** Returned to architect — F18 applied (commits bb48785 + 451b257); combined per-HH gas max exceeds boiler capacity × 0.5h in all four archetypes due to HW/cooking coincidence with warmup HHs. Heating-only cap is working as designed; acceptance criterion ambiguity needs architect resolution.
+**Status:** F19 scoped (shared boiler capacity heating+HW). F18 capped heating-only correctly; combined gas still exceeded cap at HW-coincides-with-warmup HHs. F19 pre-allocates HW capacity first, heating uses remainder (matches real combi-boiler HW-priority behaviour). Awaiting Sonnet implementation + Rhiannon's tool-side waste-heat fix.
 **Investigator:** Opus architect window
 **Related:** [`2026-06-02-bug-synthesiser-face-validity.md`](./2026-06-02-bug-synthesiser-face-validity.md) (RESOLVED — F1–F9, face-validity); [`2026-06-02-bug-m1-csv-timezone-handling.md`](./2026-06-02-bug-m1-csv-timezone-handling.md) (RESOLVED — F14, M1 timezone)
 
@@ -692,3 +692,67 @@ F18 correctly caps heating-only gas. All face-validity metrics and annual totals
    - Accept the combined exceedance as physically plausible (a combi boiler serving HW demand during a heating ramp-up fires at max for the duration; the combined flow isn't separately metered)
 
 3. **Elec annual undershoot** for small-and-efficient (−35.7%) and average-in-all-day (−21.1%) persists — pre-F15 issue, separate investigation still needed.
+
+---
+
+## Round 4 — F19 architect decision (2026-06-02)
+
+**Decision:** acceptance criterion is **combined gas (heating + HW + cooking)** ≤ `boiler_capacity_kw × 0.5 / efficiency`. Real combi boilers share a single rated output; HW and space heating cannot exceed capacity in aggregate.
+
+F18's heating-only cap was the right shape but wrong scope — I underspecified it as "heating gas cap" when it should have been "total boiler output cap with HW priority". Round 4 fixes that.
+
+### F19 — Pre-allocate HW capacity, heating uses remainder
+
+Real combi boilers prioritise HW via a priority valve (DHW heat exchanger calls block space heating circuit). F19 models this by computing HW gas first, then giving heating the remaining capacity.
+
+**Files:** [scripts/lib/synthesiser.mjs](../../scripts/lib/synthesiser.mjs)
+
+**Changes:**
+
+1. In `synthesise()` (around line 819): swap so `computeHWandCooking` runs BEFORE `computeForwardModel`, and pass `gasBaseload` into `computeForwardModel`.
+
+2. `computeForwardModel` accepts `gasBaseload` parameter. Inside the per-HH loop, compute `maxHeatingThermalThisHH = max(0, boilerCapacityKw * 0.5 - gasBaseload[i] * efficiency)`. Replace F18's `maxThermalPerHH` with this value in both the warmup branch (line 305 region) AND the maintenance/thermostat-fires branch (line 318 region).
+
+3. When `maxHeatingThermalThisHH` binds: heating delivers max-available-thermal; `tIn` updated via heat-balance (don't clamp to setpoint).
+
+```diff
+-export function computeForwardModel(archetypeConfig, timestampMs, weather, heatingOn, isAbsence) {
++export function computeForwardModel(archetypeConfig, timestampMs, weather, heatingOn, isAbsence, gasBaseload) {
+   // ... existing setup ...
++  const boilerCapacityKw = archetypeConfig.building.boiler_capacity_kw;
+   for (let i = 0; i < n; i++) {
+     // ... existing setup ...
++    const hwThermalThisHH = (gasBaseload[i] || 0) * efficiency;
++    const maxHeatingThermalThisHH = Math.max(0, boilerCapacityKw * 0.5 - hwThermalThisHH);
+     // ... replace F18's maxThermalPerHH with maxHeatingThermalThisHH throughout ...
+   }
+}
+```
+
+### Predicted outcomes
+
+- **Combined per-HH gas** ≤ `capacity × 0.5 / efficiency` for every archetype, every HH ✓
+- **Annual gas totals** essentially unchanged (~−1 to −2%; heating shifts to non-HW HHs)
+- **Face-validity metrics** unchanged
+- **Visual:** HW pulses retain Gaussian peaks; heating fills around them up to remaining capacity. Realistic boiler-sharing signature
+
+### Acceptance criteria
+
+All four archetypes:
+- Combined per-HH max ≤ `boiler_capacity_kw × 0.5 / efficiency` (13.04 / 16.67 / 9.78 / 20.59 kWh)
+- Annual gas within ±15% of Nesta target
+- R² ≥ 0.60 for all four
+- Gas clamps ≤ 200
+
+If met → status "Code-side verified, awaiting tool-side waste-heat fix". If any fails → return to architect.
+
+### Out of scope for F19
+
+- HW timing shifts (HW is in mornings by physical necessity)
+- HTC re-calibration (F19 preserves annual totals)
+- Browser user-test (waiting on tool-side waste-heat fix)
+- Pre-F15 elec annual undershoots (separate investigation)
+
+### Honesty note
+
+F18 had the right shape but the wrong scope. The HW competition is exactly how real combi boilers work, and ignoring it was a modelling gap that F18 inherited from F15. F19 closes that loop without invalidating F18's heating-side mechanism.
