@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-02
 **Reporter:** Rhiannon (surfaced during Demo 1 verdict-coherence step, after F14 unblocked CSV upload)
-**Status:** Returned to architect — F19 applied (commit c44ee36); F19 correctly caps pre-noise combined gas at boiler capacity, but AR(1) noise injection still pushes post-noise combined max above cap in all four archetypes. Options: post-combine hard clamp after injectNoise(), or tighten F17 AR(1) cap factor.
+**Status:** F20 scoped (architect decision: post-noise hard clamp) — awaiting implementer. F19 correctly caps pre-noise combined gas at boiler capacity; AR(1) noise injection pushes post-noise combined max 27–54% above cap in all four archetypes. F20 (Round 5 below) adds a per-HH upper clamp at `boiler_capacity_kw × 0.5 / efficiency` immediately after `injectNoise()`.
 **Investigator:** Opus architect window
 **Related:** [`2026-06-02-bug-synthesiser-face-validity.md`](./2026-06-02-bug-synthesiser-face-validity.md) (RESOLVED — F1–F9, face-validity); [`2026-06-02-bug-m1-csv-timezone-handling.md`](./2026-06-02-bug-m1-csv-timezone-handling.md) (RESOLVED — F14, M1 timezone)
 
@@ -837,3 +837,89 @@ Options to close the remaining gap:
 3. **Accept post-noise exceedance:** The criterion was set pre-F19 when the underlying cause was heating-only gas exceeding boiler capacity. Post-F19, the exceedance is noise-only and statistically rare (3-sigma+ event in the noise process). For demo purposes, a single HH in a year of data being slightly above physical plausibility may be acceptable.
 
 Elec annual undershoots (small-and-efficient −35.7%, average-in-all-day −20.7%) are pre-F15 issues, unaffected by F19.
+
+---
+
+## Round 5 — F20 architect decision (2026-06-02)
+
+**Decision:** Option 1 — **post-noise hard clamp**. Adopted after reviewing all three options against the physics and the noise code path.
+
+### Why not the alternatives
+
+- **Tighten F17 cap factor (option 2) — rejected.** F17 caps the AR(1) residual at `capFactor × local_signal`, so post-noise max = `(1 + capFactor) × signal`. A warmup HH whose pre-noise signal already sits at the boiler ceiling therefore lands at `(1 + capFactor) × ceiling` for *any* capFactor > 0. At capFactor 0.2 that is still a permanent +20% exceedance. The cap factor cannot reach a hard guarantee without capFactor → 0, which would strip all noise from peak HHs (artificially deterministic, hurts face validity). Corroborating evidence: big-old-draughty's observed +54% already exceeds F17's theoretical +50% bound (F19 verification, "noise is the residual driver"), confirming the noise interaction is not cleanly bounded by tuning F17. More code, still violates the constraint.
+
+- **Accept exceedance (option 3) — rejected.** big-old-draughty's post-noise max of 31.77 kWh is 63.5 kW thermal through a 35 kW boiler. This is the same class of artefact (a single visible, physically-impossible HH peak) that Rhiannon caught by eye in the F18 user-test (the 19.4 kWh spike) — and worse in magnitude. Accepting it would fail the next eye-test.
+
+The hard clamp is the only option that *guarantees* the physical ceiling, and it is what a real gas meter does: it cannot record throughput above the boiler's rated draw.
+
+### RC12 — `injectNoise` is ceiling-unaware; positive noise on at-ceiling warmup HHs breaks the F19 bound
+
+F19 bounds the **pre-noise** combined signal at `boiler_capacity_kw × 0.5 / efficiency` (HW pre-allocation + heating-on-remainder). `injectNoise` ([scripts/lib/synthesiser.mjs:502](../../scripts/lib/synthesiser.mjs#L502)) runs afterwards ([scripts/lib/synthesiser.mjs:855](../../scripts/lib/synthesiser.mjs#L855)) and has no knowledge of the ceiling, so a positive residual on a HH whose deterministic signal is already at the ceiling pushes the final value above it. `clampNonNeg` ([scripts/lib/synthesiser.mjs:856](../../scripts/lib/synthesiser.mjs#L856)) enforces the lower bound but there is no symmetric upper bound.
+
+### F20 — Post-noise per-HH upper clamp at boiler ceiling
+
+**File:** [scripts/lib/synthesiser.mjs](../../scripts/lib/synthesiser.mjs), `synthesise()` around lines 855–857.
+
+**Change:** add a `clampMax(arr, ceiling)` helper mirroring `clampNonNeg` (returns the count of HHs clamped, for the bake report), and call it on `gasArr` immediately after `injectNoise`, using `boiler_capacity_kw × 0.5 / boiler_efficiency` as the ceiling. Gas only — elec has no boiler-capacity analogue.
+
+```diff
+   injectNoise(gasArr, elecArr, noise, archetype, prng);
++  // F20: enforce the boiler-output ceiling on the post-noise combined gas signal.
++  // injectNoise is ceiling-unaware, so positive AR(1) residuals on at-ceiling warmup
++  // HHs can push the final value above what the boiler can physically deliver. F19
++  // bounds the pre-noise signal; this restores the bound after noise. Upper-only:
++  // clampNonNeg already handles the lower bound. Real gas meters cannot record
++  // throughput above the boiler's rated draw.
++  const gasCeilingKwh = archetype.building.boiler_capacity_kw * 0.5 / archetype.building.boiler_efficiency;
++  const gasCeilingClamps = clampMax(gasArr, gasCeilingKwh);
+   const gasClamps  = clampNonNeg(gasArr);
+   const elecClamps = clampNonNeg(elecArr);
+```
+
+```js
+// New helper, alongside clampNonNeg (~line 553):
+export function clampMax(arr, ceiling) {
+  let count = 0;
+  for (let i = 0; i < arr.length; i++) {
+    if (arr[i] > ceiling) { arr[i] = ceiling; count++; }
+  }
+  return count;
+}
+```
+
+Surface `gasCeilingClamps` in the bake report / stderr alongside the existing clamp counts so the clip frequency is visible (expected: a small handful of HHs per archetype — the worst warmup peak of each cold-soak).
+
+**Scope guard:** the ceiling treats all gas as boiler throughput, consistent with F19's existing convention of allocating `gasBaseload` (HW + cooking) against boiler capacity. F20 does **not** reopen the separate-hob question (cooking is metered separately in reality, so the true meter ceiling is marginally higher) — that is a pre-existing F19 modelling choice and out of scope here.
+
+### Expected outcomes
+
+- **Combined per-HH max** ≤ `boiler_capacity_kw × 0.5 / efficiency` for every archetype, every HH ✓ (guaranteed by construction).
+- **Annual gas totals:** small negative bias from one-sided clipping, expected well under 1% (only ~1–2 warmup HHs/day, only the slice above the ceiling). All four retain large downward margin to the −15% floor (current deltas +12.3 / +4.7 / −1.9 / +5.2%). Architect has accepted this asymmetry as immaterial.
+- **R² — the one metric to watch.** Clipping the positive noise tail lands preferentially on cold days (largest warmup → closest to ceiling), so it is mildly HDD-correlated. Direction is ambiguous: removing mean-zero noise variance usually *raises* R², but correlated clipping could dent the slope. average-in-all-day is at 0.624, only 0.024 above the 0.60 floor — if it drops below 0.60, **surface back to architect; do not auto-retune.** The other three (0.79 / 0.79 / 0.76) have ample room.
+- **summer/winter, weekday/weekend, clamps:** unchanged (pre-noise signal and the bulk of the distribution are untouched).
+
+### Acceptance criteria
+
+All four archetypes:
+- Combined per-HH max gas ≤ `boiler_capacity_kw × 0.5 / efficiency` (13.04 / 16.67 / 9.78 / 20.59 kWh) — **hard pass required**
+- Annual gas within ±15% of Nesta target
+- gas_hdd_r² ≥ 0.60 (surface back if average-in-all-day drops below)
+- summer_winter_ratio ≥ 0.95; weekday_weekend_ratio ∈ [0.8, 1.2]; holiday_weeks = 7
+- Gas clamps (non-neg) < 88, as before
+
+### Implementation order (for Sonnet)
+
+1. Add `clampMax(arr, ceiling)` helper to `scripts/lib/synthesiser.mjs` alongside `clampNonNeg`, and call it on `gasArr` immediately after `injectNoise` per the diff above. Surface the ceiling-clamp count in the bake report/stderr. Commit as `fix(synthesiser): F20 — clamp post-noise gas at boiler-output ceiling`.
+2. Re-bake all four archetypes (same commands as prior rounds).
+3. Append a "Round 5: F20 verification — code-side" block with the per-archetype metric grid: combined per-HH max vs ceiling, annual gas + delta, all face-validity metrics, both clamp counts (non-neg + ceiling).
+4. Set status to one of:
+   - `Code-side verified — awaiting tool-side waste-heat fix from Rhiannon for browser user-test` if all four meet acceptance
+   - `Returned to architect` with specific detail if anything fails (most likely: average-in-all-day R² < 0.60)
+
+### Out of scope for F20
+
+- Browser user-test (waiting on tool-side waste-heat fix; Rhiannon's step)
+- Tool-side waste-heat fix (Rhiannon's team)
+- Strategy doc §E recalibration (architect follow-up)
+- M5b UI flag wording (separate small ticket)
+- Pre-F15 elec annual undershoots (separate investigation)
