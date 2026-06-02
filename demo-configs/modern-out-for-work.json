@@ -9,7 +9,7 @@
     "thermal_mass_kj_per_k": 12000,
     "boiler_efficiency": 0.92,
     "solar_aperture_m2": 4.0,
-    "setpoint_c": 19.5
+    "setpoint_c": 20.0
   },
   "schedule": {
     "kind": "twin_peak",
@@ -22,9 +22,9 @@
     ]
   },
   "baseload": {
-    "gas_hot_water_kwh_per_day": 4.5,
-    "gas_cooking_kwh_per_day": 1.5,
-    "elec_baseload_kwh_per_day": 4.0,
+    "gas_hot_water_kwh_per_day": 5.0,
+    "gas_cooking_kwh_per_day": 2.0,
+    "elec_baseload_kwh_per_day": 4.6,
     "elec_appliance_events_per_week": 8
   },
   "location": {
