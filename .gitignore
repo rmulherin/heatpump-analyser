@@ -9,6 +9,9 @@ desktop.ini
 *.swo
 *~
 
+# Node dependencies (never committed; no package.json — installed ad-hoc when needed)
+node_modules/
+
 # Test data (never commit user consumption data)
 test-data/*
 !test-data/noise-config.json
@@ -22,6 +25,7 @@ test-data/*
 # Bake working directories (not shipped)
 bake-output/
 bake-input/
+bake-test-tmp/
 
 # Shipped demo files (exempt from *.csv exclusion)
 !data/demos/*.csv
