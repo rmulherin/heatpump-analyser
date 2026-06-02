@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-02
 **Reporter:** Rhiannon (surfaced during Demo 1 verdict-coherence step, after F14 unblocked CSV upload)
-**Status:** Synthesiser work effectively complete (F15+F16+F17 verified). User browser-test on modern-out-for-work surfaced tool-side missing physics: M4 not accounting for electrical-load waste heat. Awaiting Rhiannon's tool-side fix; user-tests will resume after that fix lands. The HTC over-read seen in user-test (158 vs config 125) is fully explained by the missing waste-heat term — predicted to drop to ~130 (within §F ±20%) post-fix. F15+F16+F17 not implicated.
+**Status:** F18 scoped (boiler-capacity cap) — addresses unrealistic single-HH gas spikes surfaced during user-test. F15+F16+F17 verified working; tool-side waste-heat fix from Rhiannon needed for parameter recovery. Sonnet implementer pickup pending.
 **Investigator:** Opus architect window
 **Related:** [`2026-06-02-bug-synthesiser-face-validity.md`](./2026-06-02-bug-synthesiser-face-validity.md) (RESOLVED — F1–F9, face-validity); [`2026-06-02-bug-m1-csv-timezone-handling.md`](./2026-06-02-bug-m1-csv-timezone-handling.md) (RESOLVED — F14, M1 timezone)
 
@@ -475,3 +475,148 @@ After reviewing Sonnet's verification, accepting the 0.643 result without furthe
 **Handoff to user-test:** Rhiannon to upload each archetype's CSV, run the analysis, and confirm holistic correctness per the user-test plan in the architect-window chat history. After user-test completes:
 - If all four archetypes pass: close this debug doc as RESOLVED, proceed to V1 §V1 step 7 (lock demos).
 - If user-test reveals issues that map to the 0.007 R² gap or to other concerns: reopen with specific findings.
+
+---
+
+## Round 3 — User-test surfaced findings + F18 (boiler capacity)
+
+User-test of modern-out-for-work surfaced two distinct findings:
+
+**Finding A (tool-side, not synthesiser):** Tool's M4 over-reads HTC by ~26% (158 vs config 125). Diagnosis: M4 attributes all daily heat loss to gas only, ignoring electrical-load waste heat (lighting, appliances, etc. dissipate as internal heat). Energy balance: `daily heat loss = gas_thermal + elec_waste_thermal + solar_thermal`. The missing electrical-waste term inflates the apparent HTC.
+
+Math: with daily elec ~5.1 kWh × 0.9 (waste-heat fraction) = 4.6 kWh thermal waste heat, ratio `gas / (gas+elec) ≈ 0.82`. Corrected HTC ≈ 158 × 0.82 = 130, within §F ±20% of config 125 ✓.
+
+Same correction factor predicts post-tool-fix HTCs for all four archetypes within §F tolerance. **No synthesiser change needed for this finding** — Rhiannon's team owns the tool-side waste-heat fix.
+
+**Finding B (synthesiser-side, F18):** The "When the heating ran" chart shows a single 19.4 kWh gas spike in one HH at 07:30 Sunday 26 Oct. That's 38.8 kW thermal input — well above any real UK domestic boiler's rating (typical 24–35 kW max). The data is internally consistent with F15's algorithm (warmup-to-setpoint-in-one-HH) but doesn't match real-world boiler behaviour. Real households' smart meters never show 19+ kWh per HH; an experienced eye would immediately spot this as wrong.
+
+For demo credibility, the synthesiser needs a boiler capacity limit per archetype.
+
+### RC11 — F15 has no boiler-capacity bound; produces physically unrealistic single-HH gas peaks
+
+[scripts/lib/synthesiser.mjs:305-312](../../scripts/lib/synthesiser.mjs#L305-L312):
+
+```js
+if (tIn < setpoint) {
+  const warmupKwh  = (setpoint - tIn) * massKj / 3600;
+  const lossAtSet  = htc * (setpoint - tOut) * 0.5 * 0.001;
+  const gasThermal = Math.max(0, warmupKwh + lossAtSet - solarGainKwh);
+  gasHeating[i] = gasThermal / efficiency;
+  tIn = setpoint;
+}
+```
+
+`gasThermal` is computed as "energy needed to reach setpoint in this HH plus maintain it" with no cap. Real boilers can't deliver more than their rated capacity × time, so this produces unphysical spikes whenever the building has cooled significantly.
+
+### F18 — Add per-archetype boiler-capacity cap
+
+**File:** [scripts/lib/synthesiser.mjs](../../scripts/lib/synthesiser.mjs), `computeForwardModel` function
+
+**Change:** add a `boiler_capacity_kw` field to archetype config, cap gas-thermal-per-HH at `capacity × 0.5h`, propagate `tIn` realistically when cap binds (don't clamp to setpoint — building actually rises by what heat input allows).
+
+Algorithm:
+
+```js
+// Inside the `else if (heatingOn[i])` branch, replace the `if (tIn < setpoint)` block:
+
+if (tIn < setpoint) {
+  const warmupKwh  = (setpoint - tIn) * massKj / 3600;
+  const lossAtSet  = htc * (setpoint - tOut) * 0.5 * 0.001;
+  const requestedThermal = Math.max(0, warmupKwh + lossAtSet - solarGainKwh);
+  
+  const maxThermalPerHH = boilerCapacityKw * 0.5;  // kWh thermal per HH
+  
+  if (requestedThermal <= maxThermalPerHH) {
+    // Boiler can reach setpoint in this HH
+    gasHeating[i] = requestedThermal / efficiency;
+    heatDemand[i] = requestedThermal;
+    tIn = setpoint;
+  } else {
+    // Boiler at capacity — partial warmup, continue next HH
+    const gasThermal = maxThermalPerHH;
+    gasHeating[i] = gasThermal / efficiency;
+    heatDemand[i] = gasThermal;
+    
+    // Heat balance during this HH: heat in (gas + solar) minus heat out (loss at current tIn)
+    // Approximation: use heat-loss at start tIn (slight underestimate of loss since tIn rises during HH)
+    const heatLossKwh = htc * (tIn - tOut) * 0.5 * 0.001;
+    const netThermalKwh = gasThermal + solarGainKwh - heatLossKwh;
+    tIn = tIn + netThermalKwh * 3600 / massKj;
+    // Don't allow overshoot
+    if (tIn > setpoint) tIn = setpoint;
+  }
+}
+```
+
+The `else` branch (tIn >= setpoint with heating on) and the `else if (heatingOn[i])` → `else` (heating off) branches don't need changes — they never request more than steady-state maintenance loss, which is always below boiler capacity for physically-sized boilers.
+
+Also update `readConfigs` ([scripts/lib/synthesiser.mjs:43-54](../../scripts/lib/synthesiser.mjs#L43-L54)) to require the new field:
+
+```diff
+   const requiredArchetype = [
+     'slug', 'label',
+     'building.htc_w_per_k', 'building.thermal_mass_kj_per_k',
+     'building.boiler_efficiency', 'building.solar_aperture_m2', 'building.setpoint_c',
++    'building.boiler_capacity_kw',
+     'schedule.kind',
+     // ...
+   ];
+```
+
+### Per-archetype boiler capacity values
+
+Real-world UK installation patterns by archetype:
+
+| Archetype | Building character | Typical real boiler | `boiler_capacity_kw` |
+|---|---|---|---|
+| modern-out-for-work | 1990s semi, working couple | 24 kW combi (most common) | **24** |
+| average-in-all-day | older 1960s–80s semi, larger family | 30 kW combi/system | **30** |
+| small-and-efficient | modern flat / compact build | 18 kW combi (sized for smaller home) | **18** |
+| big-old-draughty | solid-wall pre-1930 detached, large | 35 kW system boiler (high output for radiators) | **35** |
+
+### Predicted impact
+
+**Annual gas totals:** essentially unchanged (~1-3% drop possible). The same total energy is delivered to the building over the year, just spread across more HHs at warmup boundaries. The slight drop reflects F18's more-accurate heat-balance-during-warmup math (uses heat-loss at actual tIn rather than overestimating with loss-at-setpoint).
+
+**Single-HH gas peaks:** drop from ~19 kWh to ~12 kWh for modern-out-for-work (24 kW × 0.5 / 0.92), ~13 kWh for average-in-all-day, ~10 kWh for small-and-efficient, ~19 kWh for big-old-draughty. All within real-meter-plausible range.
+
+**Warmup shape:** instead of one giant spike at start of heating window, boiler fires at flat max capacity for 2-3 consecutive HHs, then drops to maintenance level. Matches the visual signature of a real boiler in cold-soak recovery.
+
+**Parameter recovery:** unchanged. M4's daily-aggregate regression sees same daily totals → same slope → same HTC. M5b's cold-soak measurement might shift slightly (morning warmup is now spread, so the "burst" signal is less concentrated) — could go either way on tau measurement, probably within ±10%.
+
+**F17 cascade clamping:** mild relief — biggest sigma_local was at the 19-kWh peak; with peak now at 12 kWh, sigma_local drops ~36%. Should not require F17 tuning.
+
+### Implementation order (for Sonnet)
+
+1. Apply F18 changes to `scripts/lib/synthesiser.mjs`:
+   - Add `'building.boiler_capacity_kw'` to `requiredArchetype` list in `readConfigs`
+   - Modify the `if (tIn < setpoint)` block in `computeForwardModel` to cap at `boilerCapacityKw * 0.5` and handle the cap-binding case
+   Commit as: `fix(synthesiser): F18 — cap gas-thermal-per-HH at boiler capacity for realistic peaks`
+
+2. Add `boiler_capacity_kw` field to all four `demo-configs/*.json` files per the table above. One commit per archetype OR one commit with all four — minor preference, separate commits is cleaner audit trail.
+   Commit(s) as: `fix(demo-configs): F18 — add boiler_capacity_kw to <archetype>` (or single commit for all four)
+
+3. Re-bake all four archetypes (synthesiser change affects every CSV).
+
+4. Append a "Round 3: F18 verification — code-side" block to this debug doc with the per-archetype metric grid. Per-HH peak gas should be ≤ `capacity × 0.5 / efficiency` for every archetype.
+
+5. Set status to one of:
+   - `Code-side verified; awaiting tool-side waste-heat fix from Rhiannon for re-attempt of browser user-test` if all four archetypes still pass acceptance (gas clamps ≤200, R² ≥0.65, summer_winter ≥0.95, annual within ±15%)
+   - `Returned to architect` if anything regressed (most likely concern: annual gas drops below −10% from target, indicating the heat-balance approximation in cap-binding case under-delivers)
+
+### Out of scope for F18
+
+- Browser-side verification (waiting on tool-side waste-heat fix anyway)
+- Strategy-doc §E update with capacity field (architect follow-up)
+- M5b UI flag wording (separate small ticket)
+- Annual elec undershoot for small-and-efficient (pre-F15, unrelated to F18)
+
+### Acceptance criteria
+
+All four archetypes:
+- Per-HH max gas ≤ `boiler_capacity_kw × 0.5 / efficiency` (e.g. ≤13 kWh for modern-out-for-work)
+- Annual gas within ±15% of Nesta target (F16 calibration still works)
+- Face-validity metrics still pass (R² ≥ 0.65 for three, ≥ 0.60 for average-in-all-day; summer_winter_ratio ≥ 0.95; etc.)
+- Gas clamps still ≤200
+
+If acceptance met, doc moves to "awaiting tool fix" wait state until Rhiannon's waste-heat fix lands.
