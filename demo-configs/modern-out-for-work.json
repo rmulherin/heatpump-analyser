@@ -5,30 +5,30 @@
   "display_order": 1,
   "archetype_source": "strategy §E — modern-out-for-work",
   "building": {
-    "htc_w_per_k": 160,
-    "thermal_mass_kj_per_k": 8000,
-    "boiler_efficiency": 0.88,
-    "solar_aperture_m2": 3.5,
-    "setpoint_c": 20
+    "htc_w_per_k": 180,
+    "thermal_mass_kj_per_k": 12000,
+    "boiler_efficiency": 0.92,
+    "solar_aperture_m2": 4.0,
+    "setpoint_c": 19.5
   },
   "schedule": {
     "kind": "twin_peak",
     "weekday_windows": [
-      { "start_mins": 390, "end_mins": 510 },
+      { "start_mins": 360, "end_mins": 480 },
       { "start_mins": 1020, "end_mins": 1320 }
     ],
     "weekend_windows": [
-      { "start_mins": 450, "end_mins": 1320 }
+      { "start_mins": 450, "end_mins": 1350 }
     ]
   },
   "baseload": {
-    "gas_hot_water_kwh_per_day": 3.2,
-    "gas_cooking_kwh_per_day": 0.6,
-    "elec_baseload_kwh_per_day": 3.8,
-    "elec_appliance_events_per_week": 7
+    "gas_hot_water_kwh_per_day": 4.5,
+    "gas_cooking_kwh_per_day": 1.5,
+    "elec_baseload_kwh_per_day": 4.0,
+    "elec_appliance_events_per_week": 8
   },
   "location": {
-    "postcode": "SW1A 1AA"
+    "postcode": "CB1 2BX"
   },
   "time_window": {
     "start": "2025-01-01",
