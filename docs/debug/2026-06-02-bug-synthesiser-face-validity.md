@@ -830,3 +830,53 @@ This is now round 3. My round-1 fix (F3a, scoping at global-mean sigma) was insu
 Each round closed about half the remaining clamping. The pattern reflects me underestimating the structural complexity of injecting AR(1) noise into a signal with sharp on/off pulse structure. The current F6 design is targeted at what the round-2 evidence actually reveals (Gaussian pulse tails), not what I imagined in round 1.
 
 If round 3 also fails — i.e. F6 doesn't get clamps to ≤200 — that's a signal that the AR(1) noise model itself is the wrong fit for this signal structure, and we should consider a redesign (e.g. multiplicative noise scaled by signal, with optional autocorrelation only within active periods). Flagging upfront so we don't sleepwalk into round 4 with another patch.
+
+---
+
+## Phase 10 — Verification round 3 (Sonnet, 2026-06-02)
+
+**Commits applied this round:** 0c6bb64 (F6 signal-floor gate + F7 summer_winter_ratio lower bound; both in same commit — process deviation noted).
+**Bake environment:** §E-aligned configs, noise-config.json, all four postcodes weather-cached.
+
+### Face validity results — all four archetypes
+
+| Archetype | `gas_hdd_r2` | `weekday_weekend_ratio` | `summer_winter_ratio` | `holiday_weeks` | Gas clamps | Elec clamps | FV pass? |
+|---|---|---|---|---|---|---|---|
+| modern-out-for-work | 0.569 ❌ | 0.929 ✅ | 1.690 ✅ | 7 ✅ | 99 ❌ | < 88 ❌ | ❌ |
+| average-in-all-day | 0.725 ✅ | 1.141 ✅ | 1.136 ✅ | 7 ✅ | 127 ✅ | 301 ❌ | ✅ FV |
+| small-and-efficient | 0.548 ❌ | 1.013 ✅ | 0.972 ❌ | 7 ✅ | 147 ✅ | 176 ❌ | ❌ |
+| big-old-draughty | 0.872 ✅ | 1.066 ✅ | 1.482 ✅ | 7 ✅ | < 88 ✅ | 157 ❌ | ✅ FV |
+
+Expected ranges: `gas_hdd_r2` [0.70, 0.97]; `weekday_weekend_ratio` [0.80, 1.20]; `summer_winter_ratio` [1.05, 1.80] (F7); `holiday_weeks` [6, 8]. Clamp thresholds: gas ≤200, elec ≤50. Gas / elec clamp counts marked ❌ when above threshold; `< 88` means below the 0.5%-of-HH console-report threshold.
+
+### Annual totals (parameter iteration territory — not a pass gate)
+
+| Archetype | Gas kWh | Gas delta | Elec kWh | Elec delta |
+|---|---|---|---|---|
+| modern-out-for-work | 5,807 | −19.8% | 1,678 | −13.8% |
+| average-in-all-day | 12,822 | +25.3% | 2,109 | −18.4% |
+| small-and-efficient | 2,989 | −29.9% | 1,017 | −34.6% |
+| big-old-draughty | 24,393 | +41.5% | 2,624 | −15.0% |
+
+### What improved
+
+- **Gas clamps**: F6 achieved its primary goal. Round 2: 2,136–3,969. Round 3: 99–< 88. All four archetypes now ≤200.
+- **average-in-all-day** FV: all four face-validity metrics pass (including `summer_winter_ratio` 1.136 ✅ with the F7 lower bound of 1.05).
+- **big-old-draughty** FV: all four face-validity metrics pass; gas clamps < 88.
+
+### Outstanding issues — surface-back conditions triggered
+
+**OI-6 — Twin-peak `gas_hdd_r2` below 0.60 surface-back threshold (§6 condition 2).**
+`modern-out-for-work`: 0.569; `small-and-efficient`: 0.548. Both below the 0.60 accept-with-discussion threshold. Values are essentially unchanged from round 2 (0.564 / 0.574) despite gas clamps dropping 96%+. F6 fixed clamping but did not improve R² — the degraded regression signal is a structural effect of the twin-peak schedule (long daytime gas-off gap increases HW+cooking baseload contribution relative to heating signal), not a clamping artefact. This is not a synthesiser code bug; it is a model calibration boundary. Returning to architect for decision: (a) loosen `gas_hdd_r2` expected lower bound for twin-peak archetypes, (b) reduce HW+cooking `daily_residual_cv` to lower non-HDD daily gas variance, or (c) accept as is.
+
+**OI-7 — `summer_winter_ratio` for `small-and-efficient` below 1.05 (§6 condition 3).**
+Observed 0.972, below the F7 lower bound of 1.05. Round 2 was 1.000; the slight decrease is PRNG noise variation. The analytical model ceiling for low-elec archetypes is ~1.13 (Phase 9), but with noise the realised value can fall below 1.05. F7's loosening to 1.05 was insufficient. Options for architect: (a) loosen further to e.g. [0.95, 1.80] or per-archetype bounds, (b) add a season-sensitive elec uplift to the config (model extension), or (c) exclude this metric for archetypes below a consumption threshold.
+
+**OI-8 — Elec clamps unexpectedly elevated (157–301 vs predicted ≤30–50) (§6 condition 4).**
+Phase 9 predicted elec clamps ≤30–50 because elec always has baseload signal above the floor. Observed 157–301 for three of four archetypes. Hypothesis: discrete appliance events (1.0–2.0 kWh per event HH) drive `sigmaElecLocal` large (≈0.20 kWh) during event HHs. A large negative boxMuller draw at an event HH produces a large-magnitude negative `rElec`. Because elec never drops below the floor (no genuine off-window), `rElec` is never reset; it persists and spills into subsequent low-signal HHs, driving them negative → clamp. Same boundary-leak mechanism as pre-F6 gas, but operating through sigma-variability on event spikes rather than signal floor boundaries. Unlike gas (fixed heating windows with hard edges), elec events are random — no predictable boundary position to gate on. Returning to architect; a structural change to the elec noise model may be needed.
+
+### Process deviations
+
+- **D5 — F6 and F7 committed together.** Both edits were staged in the same file (synthesiser.mjs) and committed in a single commit (0c6bb64 message: "F6 — signal-floor gate for AR(1) residual"). Work order specified two separate commits. Both changes are present and correct.
+
+**Status:** Returned to architect 2026-06-02 with three outstanding issues: OI-6 (twin-peak R² structurally below 0.60), OI-7 (`small-and-efficient` summer_winter_ratio below 1.05), OI-8 (elec clamps 157–301 from event-spike AR(1) leak).
