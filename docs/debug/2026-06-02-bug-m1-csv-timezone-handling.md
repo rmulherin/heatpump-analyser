@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-02
 **Reporter:** Rhiannon (encountered during Demo 1 verdict-coherence step)
-**Status:** F14a + F14b applied; CSVs re-baked; **awaiting user browser-side verification**
+**Status:** **RESOLVED** — CSV upload now proceeds past M1 into the analysis pipeline; M5b thermal-mass prompt surfaced as a separate sibling issue (see follow-on debug doc)
 **Investigator:** Opus architect window
 **Related:** [`2026-06-02-bug-synthesiser-face-validity.md`](./2026-06-02-bug-synthesiser-face-validity.md) (RESOLVED; this is a sibling issue surfaced during the round-4 verdict-coherence handoff, not a continuation)
 
@@ -257,4 +257,15 @@ Sonnet's implementer phase ends here. The remaining verification is a user-test 
 **On success:** update this doc's Status to `RESOLVED — Demo 1 CSV upload works end-to-end through to verdict card`; proceed to V1 §V1 step 5 (DISCUSS verdict coherence) in the architect window.
 
 **On any issue** (notices reappear, network blank, missing cards, getters still `available: false`): return to architect with the specific failure mode for further diagnosis.
+
+### User-test result (2026-06-02)
+
+Rhiannon ran the upload + analysis flow. **CSV ingestion succeeded** — no spring-gap notices, M1 proceeded into the analysis pipeline. F14a + F14b validated end-to-end at the timezone-handling layer.
+
+A separate issue surfaced downstream: **M5b thermal-mass estimation prompts the user for input rather than auto-estimating from the demo CSV**. The expected behaviour for a synthesised demo is automatic thermal-mass estimation via M5b's Path A (cold-soak) or Path B (tau bucket fallback). User-input request implies both auto-paths failed.
+
+This is a sibling issue, not a regression of F14. Opening a separate debug doc to investigate.
+
+**Status:** RESOLVED — timezone handling fix validated. M5b auto-estimation failure tracked separately.
+
 
