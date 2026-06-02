@@ -498,6 +498,12 @@ export function injectNoise(gasArr, elecArr, noiseConfig, archetypeConfig, prng)
     if (gasArr[i] > SIGNAL_FLOOR_KWH) {
       const sigmaGasLocal = gasArr[i] * cv * ar1Factor;
       rGas = phi * rGas + sigmaGasLocal * boxMuller(prng);
+      // Cap residual at ±50% of local signal to prevent warmup→maintenance cascade.
+      // AR(1) steady-state SD ≈ local × 0.16 (3-sigma ≈ ±48%), so cap rarely binds
+      // during normal flow but bites hard during cascade from large-sigma warmup HHs.
+      const gasCap = gasArr[i] * 0.5;
+      if (rGas < -gasCap) rGas = -gasCap;
+      else if (rGas > gasCap) rGas = gasCap;
       gasArr[i] += rGas;
     } else {
       rGas = 0; // reset state during quiet periods
@@ -505,6 +511,9 @@ export function injectNoise(gasArr, elecArr, noiseConfig, archetypeConfig, prng)
     if (elecArr[i] > SIGNAL_FLOOR_KWH) {
       const sigmaElecLocal = elecArr[i] * cv * ar1Factor;
       rElec = phi * rElec + sigmaElecLocal * boxMuller(prng);
+      const elecCap = elecArr[i] * 0.5;
+      if (rElec < -elecCap) rElec = -elecCap;
+      else if (rElec > elecCap) rElec = elecCap;
       elecArr[i] += rElec;
     } else {
       rElec = 0;
