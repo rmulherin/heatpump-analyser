@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-02
 **Reporter:** Rhiannon (surfaced during Demo 1 verdict-coherence step, after F14 unblocked CSV upload)
-**Status:** Code-side verified — three archetypes pass §F-relaxed criteria; average-in-all-day gas_hdd_r² = 0.643 at acceptance boundary, accepted as structural floor for that archetype's continuous-schedule + heavy-mass + Sheffield-climate combination. Awaiting user browser-side verification.
+**Status:** Synthesiser work effectively complete (F15+F16+F17 verified). User browser-test on modern-out-for-work surfaced tool-side missing physics: M4 not accounting for electrical-load waste heat. Awaiting Rhiannon's tool-side fix; user-tests will resume after that fix lands. The HTC over-read seen in user-test (158 vs config 125) is fully explained by the missing waste-heat term — predicted to drop to ~130 (within §F ±20%) post-fix. F15+F16+F17 not implicated.
 **Investigator:** Opus architect window
 **Related:** [`2026-06-02-bug-synthesiser-face-validity.md`](./2026-06-02-bug-synthesiser-face-validity.md) (RESOLVED — F1–F9, face-validity); [`2026-06-02-bug-m1-csv-timezone-handling.md`](./2026-06-02-bug-m1-csv-timezone-handling.md) (RESOLVED — F14, M1 timezone)
 
