@@ -14,6 +14,11 @@ const HW_MORNING_SD_MINS    = 0.6 * 60;
 const HW_EVENING_PEAK_MINS  = 18 * 60;
 const HW_EVENING_SD_MINS    = 1.1 * 60;
 const HW_MORNING_FRACTION   = 0.35;
+// HW+cooking day-to-day variability CV. Decoupled from noise_config's
+// daily_residual_cv (0.354) which is the *total* residual CV from the
+// calibration household and over-inflates HW+cooking variance when applied
+// directly. Hot water typically ~10% CV, cooking ~25% CV, weighted ~15-18%.
+const HW_COOKING_DAILY_CV = 0.18;
 
 // ─────────────────────────────────────────────
 // Step 4 — PRNG and config reading
@@ -318,7 +323,7 @@ export function computeHWandCooking(archetypeConfig, timestampMs, noiseConfig, p
   const output = new Float64Array(timestampMs.length);
   const hwKwh  = archetypeConfig.baseload.gas_hot_water_kwh_per_day;
   const cookKwh = archetypeConfig.baseload.gas_cooking_kwh_per_day;
-  const cv     = noiseConfig.behavioural_noise.daily_residual_cv;
+  const cv     = HW_COOKING_DAILY_CV;
 
   // Group by day
   const byDay = [];
