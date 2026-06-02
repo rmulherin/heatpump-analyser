@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-02
 **Reporter:** Rhiannon (encountered during Demo 1 verdict-coherence step)
-**Status:** Root cause identified — scoped fixes proposed
+**Status:** F14a + F14b applied; CSVs re-baked; **awaiting user browser-side verification**
 **Investigator:** Opus architect window
 **Related:** [`2026-06-02-bug-synthesiser-face-validity.md`](./2026-06-02-bug-synthesiser-face-validity.md) (RESOLVED; this is a sibling issue surfaced during the round-4 verdict-coherence handoff, not a continuation)
 
@@ -192,3 +192,69 @@ Catching this required Rhiannon to:
 - Clarify that the tool has never actually consumed an Octopus CSV through the CSV upload path
 
 Each of those was a domain-context correction that the architect window missed despite reading the strategy doc. Lesson for the architect window's discipline: when code contains an "Assume X" comment without a test or contract that validates X, treat X as unvalidated rather than as established fact.
+
+A second process miss in this round: the architect's Sonnet handoff prompt for F14 bundled the browser-side verification (upload, DevTools inspection, paste-back) into Sonnet's work order. That's user-test work — Sonnet can't open browsers, click UI, or paste console output back. The implementer-window scope must end at "code change + CLI verification" (re-bakes, file checks, test runs). Browser verification is the user's role and belongs in a separate "ready for user test" handoff to Rhiannon.
+
+---
+
+## Phase 13 — Verification (round 1, partial)
+
+**Date:** 2026-06-02
+**Implementer:** Sonnet
+**Commits applied:** 45e5cd4 (F14a), d9412a9 (F14b)
+
+### Code-side verification — complete
+
+**F14a (synthesiser ISO 8601 with Z suffix):**
+
+- Commit 45e5cd4 applied to [scripts/lib/synthesiser.mjs](../../scripts/lib/synthesiser.mjs) `writeOutputs` function.
+- All four archetype CSVs re-baked. Spot-check of first three data rows of each:
+
+```
+average-in-all-day.csv:    2025-01-01T00:00:00Z, ...
+big-old-draughty.csv:      2025-01-01T00:00:00Z, ...
+modern-out-for-work.csv:   2025-01-01T00:00:00Z, ...
+small-and-efficient.csv:   2025-01-01T00:00:00Z, ...
+```
+
+All four match the expected `YYYY-MM-DDTHH:MM:00Z` form. ✓
+
+**F14b (M1 honour explicit timezone, fall back to Europe/London):**
+
+- Commit d9412a9 applied to [js/data-ingestion.js:464-487](../../js/data-ingestion.js).
+- Branch logic verified against the scoped diff:
+  - Explicit-tz regex `/Z$|[+-]\d{2}:?\d{2}$/i` present
+  - Explicit-tz path uses `new Date(rawTimestamp.replace(' ', 'T'))` and `parsed.toISOString()`
+  - Europe/London fallback path preserves the existing `londonToUtc` call, spring-gap detection, and error messaging
+  - Error message for naive-timestamp failures updated to mention ISO 8601 alternative
+- Code review pass: F14b applied as specified, no scope creep.
+
+### Browser-side verification — pending user-test step
+
+Sonnet's implementer phase ends here. The remaining verification is a user-test step that Rhiannon performs in the browser:
+
+1. Open the tool in browser → CSV upload tab
+2. Upload `bake-output/modern-out-for-work/modern-out-for-work.csv`
+3. Enter postcode CB1 2BX (auto-fills region Eastern England)
+4. Click Analyse
+5. Expected:
+   - No spring-gap notices
+   - Network tab fires requests to Postcodes.io → Open-Meteo → Elexon
+   - Result cards render progressively through to the verdict card
+6. Once verdict card is visible, open DevTools console and run:
+   ```js
+   console.log(JSON.stringify({
+     thermal:   window.__getThermalDiagnostics?.(),
+     scenario:  window.__getScenarioDiagnostics?.(),
+     pricing:   window.__getPricingResult?.(),
+     financial: window.__getFinancialResult?.(),
+     reconcile: window.__reconcileCosts?.(),
+   }, null, 2))
+   ```
+7. Confirm getters return populated objects (not `{ available: false }`)
+8. Paste output back to architect window for verdict-coherence assessment
+
+**On success:** update this doc's Status to `RESOLVED — Demo 1 CSV upload works end-to-end through to verdict card`; proceed to V1 §V1 step 5 (DISCUSS verdict coherence) in the architect window.
+
+**On any issue** (notices reappear, network blank, missing cards, getters still `available: false`): return to architect with the specific failure mode for further diagnosis.
+
