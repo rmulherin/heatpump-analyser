@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-02
 **Reporter:** Rhiannon (driven by Opus iteration loop on Demo 1)
-**Status:** Root cause identified — scoped fixes proposed
+**Status:** Returned to architect — round 3 needed (clamps and twin-peak R² unresolved)
 **Investigator:** Opus architect window
 
 ## Symptom
@@ -612,5 +612,52 @@ So borderline. If F5's bake comes in at R² 0.60–0.68, the cause is **HW+cooki
 
 ### Secondary concerns update
 
-- Process deviation note (other three demo configs vs §E) — still open per the original Secondary Concerns section. Sonnet's Phase 6 implicitly used the existing (possibly-drifted) configs for `average-in-all-day`, `small-and-efficient`, `big-old-draughty`. Recommend Rhiannon raise the §E-alignment check for those three configs as a separate hygiene step *before* the round-2 bakes, so post-F5 results are interpretable against documented baselines.
+- Process deviation note (other three demo configs vs §E) — **resolved** as a hygiene step before this round. Commits ad3dbf5, 7a0b17d, 5e6c3d9 reverted `average-in-all-day`, `small-and-efficient`, `big-old-draughty` to §E values (building.*, baseload.*, schedule.*, location.postcode). bio, label, archetype_source, prng_seed, targets, noise_overrides unchanged.
+
+---
+
+## Phase 8 — Verification round 2 (Sonnet, 2026-06-02)
+
+**Commits applied this round:** ad3dbf5, 7a0b17d, 5e6c3d9 (§E config reverts); a20e494 (F5).
+**Bake environment:** §E-aligned configs, noise-config.json, real Open-Meteo weather for each archetype's postcode (fetched fresh for S10 2HQ, E14 9SH, DG2 7AS).
+
+### Face validity results — all four archetypes
+
+| Archetype | `gas_hdd_r2` | `weekday_weekend_ratio` | `summer_winter_ratio` | `holiday_weeks` | Gas clamps | Elec clamps | All FV pass? |
+|---|---|---|---|---|---|---|---|
+| modern-out-for-work | 0.564 ❌ | 0.904 ✅ | 1.719 ✅ | 7 ✅ | 3,328 ❌ | <88 ✅ | ❌ |
+| average-in-all-day | 0.710 ✅ | 1.161 ✅ | 1.173 ❌ | 7 ✅ | 2,983 ❌ | 280 ❌ | ❌ |
+| small-and-efficient | 0.574 ❌ | 1.007 ✅ | 1.000 ❌ | 7 ✅ | 3,969 ❌ | 166 ❌ | ❌ |
+| big-old-draughty | 0.849 ✅ | 1.046 ✅ | 1.582 ✅ | 7 ✅ | 2,136 ❌ | 133 ❌ | ✅ FV |
+
+Expected ranges: `gas_hdd_r2` [0.70, 0.97]; `weekday_weekend_ratio` [0.80, 1.20]; `summer_winter_ratio` [1.20, 1.80]; `holiday_weeks` [6, 8]. Clamp thresholds: gas ≤200, elec ≤50.
+
+### Annual totals (parameter iteration territory — not a pass gate)
+
+| Archetype | Gas kWh | Gas delta | Elec kWh | Elec delta |
+|---|---|---|---|---|
+| modern-out-for-work | 5,891 | −18.6% | 1,680 | −13.7% |
+| average-in-all-day | 13,126 | +28.2% | 2,092 | −19.1% |
+| small-and-efficient | 3,003 | −29.6% | 1,007 | −35.2% |
+| big-old-draughty | 24,285 | +40.9% | 2,660 | −13.9% |
+
+Annual deltas are parameter-iteration issues (§E values are "starting values, not gospel") and are out of scope for this debug doc per Phase 7 framing.
+
+### What improved
+
+- **big-old-draughty**: all four face validity metrics pass. High HTC (450 W/K) gives a dominant heating signal → strong R²; large elec (6 kWh/day) gives clear seasonal swing → summer_winter passes.
+- **average-in-all-day** `gas_hdd_r2`: 0.710 (borderline pass). Continuous long heating window → better signal/baseload ratio.
+
+### Outstanding issues — return to architect
+
+**OI-4 (NEW) — F5 gate does not reach ≤50 clamps; HW/cooking pulse tails are the residual leak path.**
+F5 gates the AR(1) residual to `gasArr[i] > 0`. This correctly blocks zero-signal HHs, but HW/cooking pulses are Gaussian-shaped — their tails produce many near-zero positive HH values (e.g. 0.001–0.01 kWh). These pass the F5 `> 0` gate, receive the decaying AR(1) residual carried from a preceding heating period, and go negative → clamp. The decay-window analysis in Phase 7 modelled only zero-signal HHs; the HW/cooking pulse tail creates a wider active-but-near-zero region. Gas clamps: 2,136–3,969 across archetypes (not ≤50). Suggest adding a signal-floor threshold (e.g. `gasArr[i] > 0.05` or proportional to the HH mean) to protect pulse-tail HHs, OR consider clamping `rGas` itself to avoid residuals larger than the local signal.
+
+**OI-2 revised — `gas_hdd_r2` archetype-dependent (twin-peak fails, continuous passes).**
+`average-in-all-day` (continuous, 07–22) R² = 0.710 ✅. `big-old-draughty` (continuous, 06–23) R² = 0.849 ✅. `modern-out-for-work` (twin-peak) R² = 0.564 ❌. `small-and-efficient` (twin-peak) R² = 0.574 ❌. Pattern: longer continuous heating windows → stronger HDD signal vs baseload noise → higher R². Twin-peak archetypes have more zero-gas HHs per day (daytime gap), increasing the HW+cooking baseload contribution relative to heating. Likely still driven by unresolved clamping (OI-4) corrupting the peak signal.
+
+**OI-5 (NEW) — `summer_winter_ratio` fails for lower-elec archetypes.**
+`average-in-all-day`: 1.173 ❌ (borderline, just below 1.20). `small-and-efficient`: 1.000 ❌ (flat seasonal response). The [1.20, 1.80] range appears calibrated for larger elec consumers. For lower-consumption archetypes, lighting is a smaller share of total elec and solar suppression in summer generates proportionally less seasonal swing. Two options for architect: (a) loosen the expected lower bound to ~[1.05, 1.80] or per-archetype bounds, or (b) add a season-sensitive `elec_baseload_kwh_per_day` scaling to increase winter elec for these archetypes. Not a synthesiser code bug; either a range-calibration or config-design question.
+
+**Status:** Returned to architect 2026-06-02 for round 3. Three outstanding issues: OI-4 (clamp threshold), OI-2-rev (twin-peak R²), OI-5 (summer_winter range).
 
