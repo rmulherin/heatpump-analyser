@@ -49,6 +49,7 @@ export function readConfigs(archetypeConfigPath, noiseConfigPath) {
     'slug', 'label',
     'building.htc_w_per_k', 'building.thermal_mass_kj_per_k',
     'building.boiler_efficiency', 'building.solar_aperture_m2', 'building.setpoint_c',
+    'building.boiler_capacity_kw',
     'schedule.kind',
     'baseload.gas_hot_water_kwh_per_day', 'baseload.gas_cooking_kwh_per_day',
     'baseload.elec_baseload_kwh_per_day', 'baseload.elec_appliance_events_per_week',
@@ -282,12 +283,14 @@ export function generateHolidayWeeks(timestampMs, noiseConfig, prng) {
 export function computeForwardModel(archetypeConfig, timestampMs, weather, heatingOn, isAbsence) {
   const n          = timestampMs.length;
   const gasHeating = new Float64Array(n);
-  const heatDemand = new Float64Array(n);
-  const htc        = archetypeConfig.building.htc_w_per_k;
-  const setpoint   = archetypeConfig.building.setpoint_c;
-  const aperture   = archetypeConfig.building.solar_aperture_m2;
-  const efficiency = archetypeConfig.building.boiler_efficiency;
-  const massKj     = archetypeConfig.building.thermal_mass_kj_per_k;
+  const heatDemand        = new Float64Array(n);
+  const htc               = archetypeConfig.building.htc_w_per_k;
+  const setpoint          = archetypeConfig.building.setpoint_c;
+  const aperture          = archetypeConfig.building.solar_aperture_m2;
+  const efficiency        = archetypeConfig.building.boiler_efficiency;
+  const massKj            = archetypeConfig.building.thermal_mass_kj_per_k;
+  const boilerCapacityKw  = archetypeConfig.building.boiler_capacity_kw;
+  const maxThermalPerHH   = boilerCapacityKw * 0.5; // kWh thermal per 30-min HH
 
   let tIn = setpoint; // Steady-state start assumption; brief settling transient over first ~5 HHs
 
@@ -304,12 +307,26 @@ export function computeForwardModel(archetypeConfig, timestampMs, weather, heati
     } else if (heatingOn[i]) {
       if (tIn < setpoint) {
         // Warmup from cooled state + maintain at setpoint for this HH
-        const warmupKwh  = (setpoint - tIn) * massKj / 3600;
-        const lossAtSet  = htc * (setpoint - tOut) * 0.5 * 0.001;
-        const gasThermal = Math.max(0, warmupKwh + lossAtSet - solarGainKwh);
-        gasHeating[i] = gasThermal / efficiency;
-        heatDemand[i] = gasThermal;
-        tIn = setpoint;
+        const warmupKwh       = (setpoint - tIn) * massKj / 3600;
+        const lossAtSet       = htc * (setpoint - tOut) * 0.5 * 0.001;
+        const requestedThermal = Math.max(0, warmupKwh + lossAtSet - solarGainKwh);
+
+        if (requestedThermal <= maxThermalPerHH) {
+          // Boiler can reach setpoint in this HH
+          gasHeating[i] = requestedThermal / efficiency;
+          heatDemand[i] = requestedThermal;
+          tIn = setpoint;
+        } else {
+          // Boiler at capacity — partial warmup; building continues rising next HH
+          const gasThermal  = maxThermalPerHH;
+          gasHeating[i] = gasThermal / efficiency;
+          heatDemand[i] = gasThermal;
+          // Heat balance during this HH using heat-loss at start tIn (slight underestimate)
+          const heatLossKwh   = htc * (tIn - tOut) * 0.5 * 0.001;
+          const netThermalKwh = gasThermal + solarGainKwh - heatLossKwh;
+          tIn = tIn + netThermalKwh * 3600 / massKj;
+          if (tIn > setpoint) tIn = setpoint; // no overshoot
+        }
       } else {
         // At or above setpoint (e.g. solar overshoot): coast; thermostat resumes if T_in drifts below
         const heatLossKwh   = htc * (tIn - tOut) * 0.5 * 0.001;
