@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-02
 **Reporter:** Rhiannon (surfaced during Demo 1 verdict-coherence step, after F14 unblocked CSV upload)
-**Status:** F20 scoped (architect decision: post-noise hard clamp) — awaiting implementer. F19 correctly caps pre-noise combined gas at boiler capacity; AR(1) noise injection pushes post-noise combined max 27–54% above cap in all four archetypes. F20 (Round 5 below) adds a per-HH upper clamp at `boiler_capacity_kw × 0.5 / efficiency` immediately after `injectNoise()`.
+**Status:** Code-side verified — awaiting tool-side waste-heat fix from Rhiannon for browser user-test. F20 (post-noise hard clamp at boiler ceiling) implemented and verified: all four archetypes pass all acceptance criteria. See Round 5 verification block below.
 **Investigator:** Opus architect window
 **Related:** [`2026-06-02-bug-synthesiser-face-validity.md`](./2026-06-02-bug-synthesiser-face-validity.md) (RESOLVED — F1–F9, face-validity); [`2026-06-02-bug-m1-csv-timezone-handling.md`](./2026-06-02-bug-m1-csv-timezone-handling.md) (RESOLVED — F14, M1 timezone)
 
@@ -923,3 +923,36 @@ All four archetypes:
 - Strategy doc §E recalibration (architect follow-up)
 - M5b UI flag wording (separate small ticket)
 - Pre-F15 elec annual undershoots (separate investigation)
+
+---
+
+## Round 5: F20 verification — code-side (2026-06-02)
+
+**Commit:** `fix(synthesiser): F20 — clamp post-noise gas at boiler-output ceiling`
+**Implementer:** Sonnet
+
+### Metric grid
+
+| Archetype | Ceiling (kWh/HH) | Per-HH max gas (kWh) | Max ≤ ceiling | Annual gas (kWh) | Delta vs target | gas_hdd_r² | summer_winter_ratio | weekday_weekend_ratio | holiday_weeks | Non-neg clamps | Ceiling clamps (F20) |
+|-----------|-----------------|----------------------|---------------|-----------------|-----------------|------------|--------------------|-----------------------|---------------|----------------|----------------------|
+| modern-out-for-work | 13.0435 | 13.0435 | ✅ | 8,003 | +10.6% | 0.797 | 1.668 | 0.910 | 7 | 0 | 103 |
+| average-in-all-day | 16.6667 | 16.6667 | ✅ | 10,521 | +2.8% | 0.658 | 1.197 | 1.125 | 7 | 0 | 85 |
+| small-and-efficient | 9.7826 | 9.7826 | ✅ | 4,117 | −3.5% | 0.805 | 1.005 | 0.977 | 7 | 0 | 57 |
+| big-old-draughty | 20.5882 | 20.5882 | ✅ | 17,861 | +3.6% | 0.784 | 1.514 | 1.068 | 7 | 0 | 110 |
+
+### Acceptance check
+
+| Criterion | Threshold | modern-out-for-work | average-in-all-day | small-and-efficient | big-old-draughty |
+|-----------|-----------|--------------------|--------------------|---------------------|-----------------|
+| Per-HH max ≤ ceiling | hard pass | ✅ | ✅ | ✅ | ✅ |
+| Annual gas ±15% target | −15% to +15% | ✅ +10.6% | ✅ +2.8% | ✅ −3.5% | ✅ +3.6% |
+| gas_hdd_r² ≥ 0.60 | 0.60 floor | ✅ 0.797 | ✅ 0.658 | ✅ 0.805 | ✅ 0.784 |
+| summer_winter_ratio ≥ 0.95 | 0.95 | ✅ 1.668 | ✅ 1.197 | ✅ 1.005 | ✅ 1.514 |
+| weekday_weekend_ratio ∈ [0.8, 1.2] | [0.8, 1.2] | ✅ 0.910 | ✅ 1.125 | ✅ 0.977 | ✅ 1.068 |
+| Non-neg gas clamps < 88 | < 88 | ✅ 0 | ✅ 0 | ✅ 0 | ✅ 0 |
+
+**All four archetypes pass all acceptance criteria.**
+
+**Note on average-in-all-day gas_hdd_r²:** Face-validity bake report shows `pass=false` because the FV expected range is [0.70, 0.97]. The F20 acceptance criterion is the **0.60 hard floor**; 0.658 is above it. No surface-back triggered.
+
+**Note on ceiling clamp counts:** 57–110 HHs clamped per archetype (out of 17,520 HH/year ≈ 0.3–0.6%). These are the warmup peaks from cold-soak events — expected and physically correct. The hard clamp eliminates the +27–54% post-noise exceedance confirmed in F19.
