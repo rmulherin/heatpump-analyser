@@ -631,7 +631,8 @@ export function writeOutputs(timestamps, gasArr, elecArr, stats, archetypeConfig
   const tmpPath = csvPath + '.tmp';
   const lines   = ['datetime,gas_kwh,electricity_kwh'];
   for (let i = 0; i < timestamps.length; i++) {
-    lines.push(`${timestamps[i]},${gasArr[i].toFixed(4)},${elecArr[i].toFixed(4)}`);
+    const isoTs = timestamps[i].replace(' ', 'T') + ':00Z';
+    lines.push(`${isoTs},${gasArr[i].toFixed(4)},${elecArr[i].toFixed(4)}`);
   }
   fs.writeFileSync(tmpPath, lines.join('\n') + '\n');
   fs.renameSync(tmpPath, csvPath);
