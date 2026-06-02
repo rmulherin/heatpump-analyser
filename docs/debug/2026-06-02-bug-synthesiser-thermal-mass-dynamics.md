@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-02
 **Reporter:** Rhiannon (surfaced during Demo 1 verdict-coherence step, after F14 unblocked CSV upload)
-**Status:** F15+F16 applied; round 2 F17 scoped (noise cascade fix) — awaiting Sonnet implementation
+**Status:** Returned to architect — F17 applied (commit be37bb7); average-in-all-day gas_hdd_r² = 0.643, below 0.65 acceptance floor
 **Investigator:** Opus architect window
 **Related:** [`2026-06-02-bug-synthesiser-face-validity.md`](./2026-06-02-bug-synthesiser-face-validity.md) (RESOLVED — F1–F9, face-validity); [`2026-06-02-bug-m1-csv-timezone-handling.md`](./2026-06-02-bug-m1-csv-timezone-handling.md) (RESOLVED — F14, M1 timezone)
 
@@ -410,3 +410,52 @@ If any archetype fails: surface back to architect with the specific failure. Do 
 5. Set status to one of:
    - `Code-side verified; awaiting user browser-side verification` if all four pass per acceptance criteria above
    - `Returned to architect` with specific failure detail otherwise
+
+---
+
+## Round 2: F17 verification — code-side (2026-06-02)
+
+**Commit:** F17 `be37bb7`. Re-baked all four archetypes using real weather cache.
+
+### Annual totals vs Nesta targets (±15% acceptance)
+
+| Archetype | Gas kWh | Target | Delta | Pass? | Elec kWh | Target | Delta |
+|---|---|---|---|---|---|---|---|
+| modern-out-for-work | 8,190 | 7,237 | +13.2% | ✓ | 1,853 | 1,946 | −4.8% |
+| average-in-all-day | 10,908 | 10,236 | +6.6% | ✓ | 2,041 | 2,586 | −21.1% |
+| small-and-efficient | 4,220 | 4,266 | −1.1% | ✓ | 1,000 | 1,555 | −35.7% |
+| big-old-draughty | 18,182 | 17,239 | +5.5% | ✓ | 2,633 | 3,089 | −14.8% |
+
+Annual gas totals shift ≤1% vs F15+F16 baseline, consistent with the symmetric-cap prediction. All four within ±15%.
+
+### Face-validity metrics
+
+Gas clamp counts: none of the four bakes triggered the 0.5% stderr warning (threshold = 88 of 17,520 HHs), so all have gas clamps < 88 — well within the ≤200 acceptance gate.
+
+| Archetype | gas_hdd_r² | ≥0.65? | summer_winter_ratio | ≥0.95? | weekday_weekend_ratio | [0.8,1.2]? | holiday_weeks | Gas clamps |
+|---|---|---|---|---|---|---|---|---|
+| modern-out-for-work | 0.780 | ✓ | 1.668 | ✓ | 0.910 | ✓ | 7 ✓ | <88 ✓ |
+| **average-in-all-day** | **0.643** | **❌** | 1.173 | ✓ | 1.107 | ✓ | 7 ✓ | <88 ✓ |
+| small-and-efficient | 0.759 | ✓ | 1.005 | ✓ | 0.977 | ✓ | 7 ✓ | <88 ✓ |
+| big-old-draughty | 0.738 | ✓ | 1.514 | ✓ | 1.068 | ✓ | 7 ✓ | <88 ✓ |
+
+### Outcome
+
+**Returned to architect.**
+
+F17 substantially improved `average-in-all-day`: gas_hdd_r² recovered from 0.390 → 0.643 (64% improvement). Gas clamps dropped below the 88-HH reporting threshold for all four archetypes (pre-F17: 125 / 515 / 311 / 258). The three archetypes that were failing on clamps now pass cleanly.
+
+However, `average-in-all-day` gas_hdd_r² = 0.643 remains below the 0.65 acceptance floor. The other three archetypes all pass: 0.780 / 0.759 / 0.738. The architect's predicted range of 0.70–0.80 was not reached for this archetype.
+
+**Specific failure:**
+- Archetype: `average-in-all-day`
+- Metric: `gas_hdd_r²`
+- Observed: 0.643
+- Acceptance threshold: ≥ 0.65
+- Gap: 0.007 (1.1% below floor)
+
+**Context for architect investigation:**
+
+The cap-at-0.5 is working (clamps resolved, three archetypes recover to ≥0.70). The residual r² deficit in `average-in-all-day` is likely structural: this is the continuous-schedule archetype with Sheffield's colder, cloudier weather and the heaviest thermal mass (18,000 kJ/K, τ=44h). Even with the residual capped, warmup bursts remain the largest per-HH signal in the day, and Sheffield's weather may have higher day-to-day HDD variance than Cambridge, making the slope signal noisier. A tighter cap (e.g. 0.4× or 0.35×) might close the gap, but the decision on cap factor belongs in the architect window.
+
+Elec annual totals continue to undershoot for small-and-efficient (−35.7%) and average-in-all-day (−21.1%) — these are pre-F15 issues deferred to a separate investigation and do not affect the F17 gas gate.
