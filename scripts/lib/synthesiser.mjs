@@ -287,14 +287,53 @@ export function computeForwardModel(archetypeConfig, timestampMs, weather, heati
   const setpoint   = archetypeConfig.building.setpoint_c;
   const aperture   = archetypeConfig.building.solar_aperture_m2;
   const efficiency = archetypeConfig.building.boiler_efficiency;
+  const massKj     = archetypeConfig.building.thermal_mass_kj_per_k;
+
+  let tIn = setpoint; // Steady-state start assumption; brief settling transient over first ~5 HHs
 
   for (let i = 0; i < n; i++) {
-    if (isAbsence[i] || !heatingOn[i]) continue;
-    const dT        = Math.max(0, setpoint - weather[i].temp_c);
-    const heatLoss  = htc * dT * 0.5 * 0.001;
-    const solarGain = aperture * weather[i].solar_w_m2 * 0.5 * 0.001;
-    heatDemand[i]   = Math.max(0, heatLoss - solarGain);
-    gasHeating[i]   = heatDemand[i] / efficiency;
+    const tOut         = weather[i].temp_c;
+    const solarGainKwh = aperture * weather[i].solar_w_m2 * 0.5 * 0.001;
+
+    if (isAbsence[i]) {
+      const heatLossKwh   = htc * (tIn - tOut) * 0.5 * 0.001;
+      const netThermalKwh = solarGainKwh - heatLossKwh;
+      tIn = tIn + netThermalKwh * 3600 / massKj;
+      // gasHeating and heatDemand remain 0 (Float64Array default)
+
+    } else if (heatingOn[i]) {
+      if (tIn < setpoint) {
+        // Warmup from cooled state + maintain at setpoint for this HH
+        const warmupKwh  = (setpoint - tIn) * massKj / 3600;
+        const lossAtSet  = htc * (setpoint - tOut) * 0.5 * 0.001;
+        const gasThermal = Math.max(0, warmupKwh + lossAtSet - solarGainKwh);
+        gasHeating[i] = gasThermal / efficiency;
+        heatDemand[i] = gasThermal;
+        tIn = setpoint;
+      } else {
+        // At or above setpoint (e.g. solar overshoot): coast; thermostat resumes if T_in drifts below
+        const heatLossKwh   = htc * (tIn - tOut) * 0.5 * 0.001;
+        const netThermalKwh = solarGainKwh - heatLossKwh;
+        const tNext         = tIn + netThermalKwh * 3600 / massKj;
+        if (tNext < setpoint) {
+          // Thermostat fires: cover steady-state maintenance loss (warmup term = 0 per spec)
+          tIn = setpoint;
+          const gasThermal = Math.max(0, htc * (setpoint - tOut) * 0.5 * 0.001 - solarGainKwh);
+          gasHeating[i] = gasThermal / efficiency;
+          heatDemand[i] = gasThermal;
+        } else {
+          tIn = tNext;
+          // gasHeating and heatDemand remain 0
+        }
+      }
+
+    } else {
+      // Off window (not absence): passive RC + solar, no heating
+      const heatLossKwh   = htc * (tIn - tOut) * 0.5 * 0.001;
+      const netThermalKwh = solarGainKwh - heatLossKwh;
+      tIn = tIn + netThermalKwh * 3600 / massKj;
+      // gasHeating and heatDemand remain 0
+    }
   }
 
   return { gasHeating, heatDemand };
