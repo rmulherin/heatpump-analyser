@@ -452,8 +452,8 @@ export function injectNoise(gasArr, elecArr, noiseConfig, archetypeConfig, prng)
     const sigmaElecLocal = elecArr[i] * cv * ar1Factor;
     rGas  = phi * rGas  + sigmaGasLocal  * boxMuller(prng);
     rElec = phi * rElec + sigmaElecLocal * boxMuller(prng);
-    gasArr[i]  += rGas;
-    elecArr[i] += rElec;
+    if (gasArr[i]  > 0) gasArr[i]  += rGas;
+    if (elecArr[i] > 0) elecArr[i] += rElec;
   }
 }
 
