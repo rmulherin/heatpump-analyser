@@ -5,30 +5,29 @@
   "display_order": 4,
   "archetype_source": "strategy §E — big-old-draughty",
   "building": {
-    "htc_w_per_k": 380,
-    "thermal_mass_kj_per_k": 18000,
-    "boiler_efficiency": 0.84,
-    "solar_aperture_m2": 6.0,
-    "setpoint_c": 20
+    "htc_w_per_k": 450,
+    "thermal_mass_kj_per_k": 30000,
+    "boiler_efficiency": 0.85,
+    "solar_aperture_m2": 5.0,
+    "setpoint_c": 19.0
   },
   "schedule": {
-    "kind": "twin_peak",
+    "kind": "continuous",
     "weekday_windows": [
-      { "start_mins": 360, "end_mins": 540 },
-      { "start_mins": 960, "end_mins": 1380 }
+      { "start_mins": 360, "end_mins": 1380 }
     ],
     "weekend_windows": [
       { "start_mins": 420, "end_mins": 1380 }
     ]
   },
   "baseload": {
-    "gas_hot_water_kwh_per_day": 5.0,
-    "gas_cooking_kwh_per_day": 1.2,
-    "elec_baseload_kwh_per_day": 7.5,
+    "gas_hot_water_kwh_per_day": 7.0,
+    "gas_cooking_kwh_per_day": 2.5,
+    "elec_baseload_kwh_per_day": 6.0,
     "elec_appliance_events_per_week": 14
   },
   "location": {
-    "postcode": "SW1A 1AA"
+    "postcode": "DG2 7AS"
   },
   "time_window": {
     "start": "2025-01-01",
