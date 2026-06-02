@@ -9,7 +9,8 @@
     "thermal_mass_kj_per_k": 12000,
     "boiler_efficiency": 0.92,
     "solar_aperture_m2": 4.0,
-    "setpoint_c": 20.0
+    "setpoint_c": 20.0,
+    "boiler_capacity_kw": 24
   },
   "schedule": {
     "kind": "twin_peak",

@@ -9,7 +9,8 @@
     "thermal_mass_kj_per_k": 30000,
     "boiler_efficiency": 0.85,
     "solar_aperture_m2": 5.0,
-    "setpoint_c": 19.0
+    "setpoint_c": 19.0,
+    "boiler_capacity_kw": 35
   },
   "schedule": {
     "kind": "continuous",
