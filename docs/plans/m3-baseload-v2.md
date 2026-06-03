@@ -40,9 +40,7 @@ The following **divergences from v2** exist in the live code. Each is a mandate:
 
 **`app.js` (read during 2026-06-02 plan cycle):** `electric_heating_is_primary` is consumed at lines ~1082 and ~1090 in `displayBaseloadResults` (two conditional branches on which status message to show). `heat-loss.js` reads `supplementaryLoads.electric_heating_kwh_per_dd` for its Check 4D HTC correction — the field name is unchanged, but the value becomes the corrected slope in v2 (correct and intentional: a better estimate of real electric-heating signal).
 
-**Test file structure:** `test-m3.mjs` has 18 passing v1 tests (CLAUDE.md reports M3 18/18). A separate `test-m3-step-f.mjs` tests Step F unit-level. V2 tests go in a new `test-m3-v2.mjs` following the same pattern.
-
-**v1 test count note:** Design doc §5 references 22 v1 test criteria in `baseload-separation.md`; only 18 are in `test-m3.mjs`. The 4-test gap may be un-implemented v1 criteria. At implementation, read `test-m3.mjs` to confirm count and confirm all 18 still pass — do not add the missing 4 v1 tests (out of this plan's scope).
+**Test file structure:** There is no committed M3 v1 suite beyond `test-m3-step-f.mjs` (which tests Step F unit-level). The CLAUDE.md "M3 18/18" entry pre-dates the current repo state and does not correspond to a file on disk. Regression coverage for the changed paths (Step H detection, classification, `separateBaseload` orchestrator) comes from the new `test-m3-v2.mjs`. The deferred-to v1 mechanics (Methods A–E, Step G, the OLS body, AC detection) are **unchanged** — no new tests are needed for them under this plan.
 
 ---
 
@@ -51,7 +49,7 @@ The following **divergences from v2** exist in the live code. Each is a mandate:
 | Action | File | Purpose |
 |--------|------|---------|
 | MODIFY | `js/baseload.js` | Add v2 constants; add `applyLowGasWarmCorrection` (F.5), `computeElectricityBaseload` (I), `applyElectricHeatingAttribution` (J); update `detectSupplementaryLoads` for 2% correction + classification; update `separateBaseload` orchestrator |
-| CREATE | `test-m3-v2.mjs` | 16 v2-specific test cases covering all §5 v2 criteria |
+| CREATE | `test-m3-v2.mjs` | 19 v2-specific test cases covering all §5 v2 criteria |
 | MODIFY | `app.js` | Replace `electric_heating_is_primary` with `classification_effective` at lines ~1082, ~1090; update `separateBaseload` call signature; confirm `baseline_kwh_per_day` not wired to m4 |
 
 ---
@@ -120,10 +118,10 @@ Boundary semantics: strict `<` on gas (exclusive — protects heating-day bounda
 
 ### Step 4 — Implement `computeElectricityBaseload` (Step I) (`js/baseload.js`)
 
-New exported function. Called from `separateBaseload` after `detectSupplementaryLoads`. Requires Step F to have run (uses `heating[i].is_absence`).
+New exported function. Called from `separateBaseload` after `detectSupplementaryLoads`. Requires Step F to have run (uses `heating[i].is_absence`). `external` is not needed — Step I only reads `consumption` and `heating`.
 
 ```js
-export function computeElectricityBaseload(consumption, external, heating) {
+export function computeElectricityBaseload(consumption, heating) {
   const dayIndexMap = buildDayIndexMap(consumption);
   const perHhValues = [];
   let daysUsed = 0;
@@ -153,13 +151,14 @@ New internal function (not exported — attribution tests go through `separateBa
 function applyElectricHeatingAttribution(consumption, external, heating, electricityBaseload, supplementary_loads) {
   const classEff       = supplementary_loads.electric_heating_classification_effective;
   const correctedPerDd = supplementary_loads.electric_heating_kwh_per_dd;
-  const floor          = electricityBaseload ?? 0;   // null → 0 (conservative: no floor protection)
+  const floor          = electricityBaseload;   // kept as-is; null → attribution skipped (see canAttribute)
   const dayIndexMap    = buildDayIndexMap(consumption);
 
   for (const [, indices] of dayIndexMap) {
     const allElecPresent = indices.length === 48
       && indices.every(i => consumption[i].elec_kwh !== null && consumption[i].elec_kwh !== undefined);
-    const canAttribute = allElecPresent && classEff !== 'none' && correctedPerDd !== null;
+    const canAttribute = allElecPresent && classEff !== 'none' && correctedPerDd !== null
+      && electricityBaseload !== null;   // null baseload → fallback; can't protect a floor we don't have
 
     if (canAttribute) {
       const tempVals = indices.map(i => external?.[i]?.temp_c);
@@ -196,7 +195,7 @@ Three design-doc rules enforced:
 - **`total ≤ floor` → `excess = 0` → `elec_heating = 0`** regardless of regression estimate.
 - **`E_d > S` → `r_d = 1`** → 100% of excess attributed to heating; regression excess above metered is discarded.
 
-Partial-elec days (`canAttribute` false, fallback path): null HH → null/null; non-null HH → 0/total. Conservative — no heating attributed to partial-elec days (design doc specifies whole-day behaviour only).
+Fallback path (`canAttribute` false): null HH → null/null; non-null HH → 0/total. Applies to: partial-elec days, classification `'none'`, null `correctedPerDd`, and **null `electricityBaseload`** (when < 30 qualifying days, attribution is skipped entirely — there is no floor to protect, so heating must not be drawn from unknown baseload).
 
 ### Step 6 — Update `detectSupplementaryLoads` for v2 mandates (`js/baseload.js`)
 
@@ -321,7 +320,7 @@ const heating = consumption.map(rec => ({
 const supplementary_loads = detectSupplementaryLoads(
   consumption, external, heating, baseload_metadata.method, userClassificationOverride
 );
-const electricity_baseload = computeElectricityBaseload(consumption, external, heating);
+const electricity_baseload = computeElectricityBaseload(consumption, heating);
 supplementary_loads.electricity_baseload = electricity_baseload;
 applyElectricHeatingAttribution(consumption, external, heating, electricity_baseload, supplementary_loads);
 return { heating, baseload_metadata, supplementary_loads };
@@ -355,14 +354,14 @@ separateBaseload(consumption, external, null)
 ```
 The default is `null` so this is purely for explicitness; no behaviour change.
 
-**8b — `electric_heating_is_primary` references** (lines ~1082, ~1090 in `displayBaseloadResults`). Replace both:
+**8b — `electric_heating_is_primary` references** (lines 1074 and 1082 in `displayBaseloadResults`). Grep for `electric_heating_is_primary` first to confirm exact locations. Replace both:
 
-Line ~1082: `if (sl.electric_heating_detected && !sl.electric_heating_is_primary)` →
+Line 1074: `if (sl.electric_heating_detected && !sl.electric_heating_is_primary)` →
 ```js
 if (sl.electric_heating_classification_effective === 'some')
 ```
 
-Line ~1090: `} else if (sl.electric_heating_is_primary) {` →
+Line 1082: `} else if (sl.electric_heating_is_primary) {` →
 ```js
 } else if (sl.electric_heating_classification_effective === 'all_electric') {
 ```
@@ -420,15 +419,17 @@ Create `test-m3-v2.mjs` at the repo root. Follow the same Luxon stub pattern as 
 
 **TC-J-4 — classification 'none':** `classification_effective = 'none'` (via user override). All HH: `elec_heating_kwh === 0`; `nonheat_residual_kwh === elec_kwh`.
 
+**TC-J-5 — all-electric per-HH series (design §5 test 16):** Via `separateBaseload` on a full-year no-gas dataset (gas = null throughout; `daily_elec ≈ 12 + 1.5 × HDD` across winter + summer months, so summer days have HDD ≈ 0). Assert: `electric_heating_classification_effective === 'all_electric'`; on cold days (HDD > 0): `elec_heating_kwh[hh] > 0` for at least some HH; on summer days (HDD = 0 → `E_d = 0`): `elec_heating_kwh[hh] === 0` for all HH; for every HH throughout: `elec_heating_kwh + nonheat_residual_kwh === elec_kwh` (exact).
+
 ---
 
 ## Risks and mitigations
 
 | Risk | Mitigation |
 |------|-----------|
-| v1 Step H tests may assert detection with raw slope; corrected slope changes gate outcomes | At Step 9 start, read `test-m3.mjs` — confirm no v1 test uses a near-threshold (0.2 kWh/K·day) electric heating signal. The 2% correction only changes detection when `corrected_per_dd` crosses 0.2; strong signals (0.6+) remain detected. If any v1 test fails, update assertion to corrected value and document as deviation. |
+| No committed M3 v1 suite; regression coverage is limited | The deferred-to v1 mechanics are unchanged code, not re-tested here. The new TC-H-1/H-2/H-3 tests cover the modified Step H paths. Any regression in unchanged methods would surface in the broader pipeline (M5/M7 suites still run). |
 | `applyElectricHeatingAttribution` runs after Step F; `is_absence` must be set first | Enforced by orchestrator order: F → F.5 → G → H → I → J. `canAttribute` guard prevents attribution when classification is unavailable. |
-| `electricity_baseload = null` when < 30 qualifying days; Step J uses `floor ?? 0` | `floor = 0` means excess = full elec_kwh — conservative over-attribution. Acceptable: the 30-day guard matches Step H's, and null is the signal for m7 to fall back on its own default. |
+| `electricity_baseload = null` when < 30 qualifying days; Step J must not over-attribute | `electricityBaseload !== null` added to `canAttribute` — attribution is skipped when the floor is unknown (fallback path: all non-null HH get `elec_heating = 0 / residual = total`). m7 falls back to its own gains default. Correct: with no floor we cannot honour "baseload protected". |
 | `app.js` line numbers may have shifted since 2026-06-02 | Step 8b greps for `electric_heating_is_primary` before editing; exact line numbers are not relied upon. |
 | `heat-loss.js` Check 4D reads `electric_heating_kwh_per_dd` — value changes (raw → corrected) | Intentional and correct: corrected slope is a better estimate. In Rhiannon's gas-primary data, detection becomes `false` so Check 4D does not run at all. |
 | Partial-elec days get fallback (0/total) not per-day attribution | Acceptable: design doc specifies whole-day behaviour; partial days are a meter gap, not a new calculation path. |
@@ -438,9 +439,8 @@ Create `test-m3-v2.mjs` at the repo root. Follow the same Luxon stub pattern as 
 
 ## Success criteria
 
-- [ ] `node test-m3.mjs` exits 0 — all 18 v1 tests still pass (no regressions)
-- [ ] `node test-m3-v2.mjs` exits 0 — all 16 v2 tests pass
 - [ ] `node test-m3-step-f.mjs` exits 0 — unaffected
+- [ ] `node test-m3-v2.mjs` exits 0 — all 19 v2 tests pass
 - [ ] TC-H-1: `electric_heating_detected === false` on Rhiannon-like data (critical INV-16 guard)
 - [ ] TC-H-5: `electric_heating_is_primary` absent from all return paths
 - [ ] Gas invariant: `heating_kwh + baseload_kwh === gas_kwh` for all non-null gas records, including F.5-corrected days
