@@ -919,7 +919,7 @@ export function normaliseConsumption(elecRecords, gasRecords, dataStart, dataEnd
 export const DEMO_ARCHETYPES = [
   { id: 'modern-out-for-work', label: 'Modern home, out for work' },
   { id: 'average-in-all-day',  label: 'Average home, in all day' },
-  { id: 'small-and-efficient', label: 'Small efficient flat' },
+  { id: 'small-and-efficient', label: 'Small efficient home' },
   { id: 'big-old-draughty',    label: 'Big old draughty house' },
 ];
 
