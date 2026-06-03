@@ -14,6 +14,8 @@ import {
   validatePostcode,
   setIngestionResult,
   getIngestionResult,
+  DEMO_ARCHETYPES,
+  loadDemoArchetype,
 } from './data-ingestion.js';
 
 import {
@@ -158,10 +160,6 @@ const resultsSummary = document.getElementById('results-summary');
 // CSV DOM references
 const csvFileInput = document.getElementById('csv-file');
 const csvPostcodeInput = document.getElementById('csv-postcode');
-const csvGasRateInput = document.getElementById('csv-gas-rate');
-const csvElecRateInput = document.getElementById('csv-elec-rate');
-const csvGasStandingInput = document.getElementById('csv-gas-standing');
-const csvElecStandingInput = document.getElementById('csv-elec-standing');
 const btnCsvAnalyse = document.getElementById('btn-csv-analyse');
 const csvPostcodeNote = document.getElementById('csv-postcode-note');
 const csvProgressArea = document.getElementById('csv-progress-area');
@@ -640,28 +638,20 @@ async function continueWithProperty(apiKey) {
   // Step 6: Data quality gate
   const meta = normalised.metadata;
 
-  if (meta.total_days < CONFIG.MIN_DAYS_FOR_ANALYSIS) {
+  const timezone_detection = {
+    source: 'octopus',
+    detection_signals: { autumn_back_observed: null, spring_forward_observed: null, confidence: 'high' },
+    warnings: [],
+  };
+
+  if (meta.days_with_data < CONFIG.MIN_DAYS_WITH_DATA) {
     hideProgress();
     showStatus(
-      'At least 30 days of data needed for a meaningful analysis.',
+      `Only ${meta.days_with_data} days of data found. At least ${CONFIG.MIN_DAYS_WITH_DATA} days with readings are needed for a reliable analysis.`,
       'error'
     );
     setFetchEnabled(true);
     return;
-  }
-
-  if (meta.total_days < CONFIG.WARNING_DAYS_THRESHOLD) {
-    showStatus(
-      'Less than 3 months of data. Seasonal analysis will be limited.',
-      'warning'
-    );
-  }
-
-  if (meta.gap_percentage > CONFIG.GAP_WARNING_PERCENTAGE) {
-    showStatus(
-      `Your data has significant gaps (${meta.gap_percentage}%). Results may be less accurate.`,
-      'warning'
-    );
   }
 
   // Step 7: Store result
@@ -699,6 +689,8 @@ async function continueWithProperty(apiKey) {
     tariff_rates: tariffRates,
     metadata: fullMetadata,
     gsp_region: prop.gsp_region ?? null,
+    timezone_detection,
+    days_with_data: meta.days_with_data,
   });
   prefillRateInputs(tariffRates);
 
@@ -2947,7 +2939,7 @@ btnCsvAnalyse.addEventListener('click', async () => {
 
     // Step 2: Parse CSV
     showCsvProgress('Parsing CSV…');
-    const { records, errors } = parseCSV(fileContent);
+    const { records, errors, timezone_detection: csvTimezoneDetection, days_with_data: csvDaysWithData } = parseCSV(fileContent);
 
     if (errors.length > 0) {
       hideCsvProgress();
@@ -2989,11 +2981,11 @@ btnCsvAnalyse.addEventListener('click', async () => {
       csvPostcodeNote.classList.remove('hidden');
     }
 
-    // Step 4: Build tariff rates from form fields
-    const gasRate = parseFloat(csvGasRateInput.value) || CONFIG.DEFAULT_GAS_RATE_P_KWH;
-    const elecRate = parseFloat(csvElecRateInput.value) || CONFIG.DEFAULT_ELEC_RATE_P_KWH;
-    const gasStanding = parseFloat(csvGasStandingInput.value) || CONFIG.DEFAULT_GAS_STANDING_P_DAY;
-    const elecStanding = parseFloat(csvElecStandingInput.value) || CONFIG.DEFAULT_ELEC_STANDING_P_DAY;
+    // Step 4: Build tariff rates using Ofgem-cap defaults (m2 will own user-entered rates)
+    const gasRate     = CONFIG.DEFAULT_GAS_RATE_P_KWH;
+    const elecRate    = CONFIG.DEFAULT_ELEC_RATE_P_KWH;
+    const gasStanding = CONFIG.DEFAULT_GAS_STANDING_P_DAY;
+    const elecStanding = CONFIG.DEFAULT_ELEC_STANDING_P_DAY;
 
     const timestamps = records.map(r => r.interval_start).sort();
     const dataStart = timestamps[0];
@@ -3033,32 +3025,8 @@ btnCsvAnalyse.addEventListener('click', async () => {
 
     const normalised = normaliseConsumption(elecRecords, gasRecords, dataStart, dataEnd);
 
-    // Step 6: Data quality gate
+    // Step 6: (days gate is in parseCSV — errors handled above)
     const meta = normalised.metadata;
-
-    if (meta.total_days < CONFIG.MIN_DAYS_FOR_ANALYSIS) {
-      hideCsvProgress();
-      showCsvStatus(
-        'At least 30 days of data needed for a meaningful analysis.',
-        'error'
-      );
-      btnCsvAnalyse.disabled = false;
-      return;
-    }
-
-    if (meta.total_days < CONFIG.WARNING_DAYS_THRESHOLD) {
-      showCsvStatus(
-        'Less than 3 months of data. Seasonal analysis will be limited.',
-        'warning'
-      );
-    }
-
-    if (meta.gap_percentage > CONFIG.GAP_WARNING_PERCENTAGE) {
-      showCsvStatus(
-        `Your data has significant gaps (${meta.gap_percentage}%). Results may be less accurate.`,
-        'warning'
-      );
-    }
 
     // Step 7: Store result
     const fullMetadata = {
@@ -3076,6 +3044,8 @@ btnCsvAnalyse.addEventListener('click', async () => {
       tariff_rates: tariffRates,
       metadata: fullMetadata,
       gsp_region: document.getElementById('gsp-region')?.value || null,
+      timezone_detection: csvTimezoneDetection,
+      days_with_data: csvDaysWithData,
     });
     prefillRateInputs(tariffRates);
 
@@ -3327,6 +3297,83 @@ window.__getScenarioDiagnostics = () => {
     comfort_demand_kwh: tc?.annual_modelled_demand_kwh ?? null,
   };
 };
+
+// ===== Demo Pipeline =====
+
+async function runDemoPipeline(archetypeId) {
+  clearCsvStatus();
+  hideCsvProgress();
+  resultsCard.classList.add('hidden');
+  btnCsvAnalyse.disabled = true;
+
+  try {
+    showCsvProgress(`Loading demo: ${archetypeId}…`);
+    const demoResult = await loadDemoArchetype(archetypeId);
+
+    const fullMetadata = {
+      ...demoResult.metadata,
+      postcode:          demoResult.postcode,
+      postcode_source:   'demo',
+      mpan:              null,
+      mprn:              null,
+      gas_unit_source:   'demo',
+      input_path:        'demo',
+      meters_stitched:   false,
+    };
+
+    setIngestionResult({
+      consumption:        demoResult.consumption,
+      tariff_rates:       demoResult.tariff_rates,
+      metadata:           fullMetadata,
+      gsp_region:         demoResult.gsp_region,
+      timezone_detection: demoResult.timezone_detection,
+      days_with_data:     demoResult.days_with_data,
+    });
+
+    await runExternalData(
+      (text) => showCsvProgress(text),
+      (msg, type) => showCsvStatus(msg, type)
+    );
+    await runBaseloadSeparation(
+      (text) => showCsvProgress(text),
+      (msg, type) => showCsvStatus(msg, type)
+    );
+    await runHeatLoss(
+      (text) => showCsvProgress(text),
+      (msg, type) => showCsvStatus(msg, type)
+    );
+    await runThermalCharacter(
+      (text) => showCsvProgress(text),
+      (msg, type) => showCsvStatus(msg, type)
+    );
+    await runHeatPumpModel(
+      (text) => showCsvProgress(text),
+      (msg, type) => showCsvStatus(msg, type)
+    );
+    await runScenarioConsumption(
+      (text) => showCsvProgress(text),
+      (msg, type) => showCsvStatus(msg, type)
+    );
+    await runPricingEngine(
+      (text) => showCsvProgress(text),
+      (msg, type) => showCsvStatus(msg, type)
+    );
+    await runFinancialAnalysis(
+      (text) => showCsvProgress(text),
+      (msg, type) => showCsvStatus(msg, type)
+    );
+    hideCsvProgress();
+  } catch (err) {
+    hideCsvProgress();
+    showCsvStatus(err.message || 'Demo pipeline failed.', 'error');
+  }
+
+  btnCsvAnalyse.disabled = false;
+}
+
+document.querySelectorAll('#demo-triggers .demo-btn').forEach(btn => {
+  btn.addEventListener('click', () => runDemoPipeline(btn.dataset.id));
+});
 
 window.__getThermalDiagnostics = () => {
   const tc = getThermalCharacterResult();

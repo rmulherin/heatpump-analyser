@@ -28,7 +28,8 @@
     "elec_appliance_events_per_week": 9
   },
   "location": {
-    "postcode": "S10 2HQ"
+    "postcode": "S10 2HQ",
+    "gsp_region": "M"
   },
   "time_window": {
     "start": "2025-01-01",

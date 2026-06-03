@@ -28,7 +28,8 @@
     "elec_appliance_events_per_week": 14
   },
   "location": {
-    "postcode": "DG2 7AS"
+    "postcode": "DG2 7AS",
+    "gsp_region": "N"
   },
   "time_window": {
     "start": "2025-01-01",

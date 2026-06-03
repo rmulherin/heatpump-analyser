@@ -29,7 +29,8 @@
     "elec_appliance_events_per_week": 4
   },
   "location": {
-    "postcode": "E14 9SH"
+    "postcode": "E14 9SH",
+    "gsp_region": "C"
   },
   "time_window": {
     "start": "2025-01-01",

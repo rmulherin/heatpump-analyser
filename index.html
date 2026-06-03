@@ -131,28 +131,6 @@
                target="_blank" rel="noopener">look up your region</a>.</p>
         </div>
 
-        <div class="form-row">
-          <div class="form-group">
-            <label for="csv-gas-rate">Gas rate (p/kWh)</label>
-            <input type="number" id="csv-gas-rate" value="5.7" step="0.1" min="0">
-          </div>
-          <div class="form-group">
-            <label for="csv-elec-rate">Electricity rate (p/kWh)</label>
-            <input type="number" id="csv-elec-rate" value="24.5" step="0.1" min="0">
-          </div>
-        </div>
-
-        <div class="form-row">
-          <div class="form-group">
-            <label for="csv-gas-standing">Gas standing charge (p/day)</label>
-            <input type="number" id="csv-gas-standing" value="31.4" step="0.1" min="0">
-          </div>
-          <div class="form-group">
-            <label for="csv-elec-standing">Elec standing charge (p/day)</label>
-            <input type="number" id="csv-elec-standing" value="61.6" step="0.1" min="0">
-          </div>
-        </div>
-
         <button class="btn btn-primary btn-full" id="btn-csv-analyse">Analyse</button>
 
         <!-- Default postcode note -->
@@ -172,6 +150,14 @@
         </details>
       </div>
     </section>
+
+    <!-- Demo test triggers (functional scaffold; hidden until UI plan ships) -->
+    <div id="demo-triggers" style="display:none">
+      <button class="demo-btn" data-id="modern-out-for-work">Demo: Modern out for work</button>
+      <button class="demo-btn" data-id="average-in-all-day">Demo: Average in all day</button>
+      <button class="demo-btn" data-id="small-and-efficient">Demo: Small and efficient</button>
+      <button class="demo-btn" data-id="big-old-draughty">Demo: Big old draughty</button>
+    </div>
 
     <div class="section-tiles" id="results-tiles">
       <!-- Verdict Card -->

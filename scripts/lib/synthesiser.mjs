@@ -820,8 +820,57 @@ async function runModuleSanityCheck(csvPath, archetypeConfig, opts) {
   return result;
 }
 
+// ──────────────────────────────────────────���──
+// Step 16 — Write m1-contract demo JSON
 // ─────────────────────────────────────────────
-// Step 16 — Main synthesise()
+
+export function writeDemoJson(timestamps, gasArr, elecArr, archetypeConfig, demoOutputDir) {
+  const slug      = archetypeConfig.slug;
+  const postcode  = archetypeConfig.location.postcode;
+  const region    = archetypeConfig.location.gsp_region ?? null;
+  const n         = timestamps.length;
+
+  // Build consumption in normaliseConsumption() output format: {timestamp, gas_kwh, elec_kwh}
+  const consumption = [];
+  const daysWithData = new Set();
+  for (let i = 0; i < n; i++) {
+    const isoTs = timestamps[i].replace(' ', 'T') + ':00.000Z';
+    consumption.push({
+      timestamp: isoTs,
+      gas_kwh:   gasArr[i],
+      elec_kwh:  elecArr[i],
+    });
+    daysWithData.add(isoTs.slice(0, 10));
+  }
+
+  const totalDays = Math.round(n / 48);
+  const metadata = {
+    data_start:       consumption[0].timestamp,
+    data_end:         consumption[n - 1].timestamp,
+    total_days:       totalDays,
+    gap_count:        0,
+    gap_percentage:   0,
+    expected_periods: n,
+    days_with_data:   daysWithData.size,
+  };
+
+  const demoJson = {
+    slug,
+    postcode,
+    region,
+    days_with_data: daysWithData.size,
+    consumption,
+    metadata,
+  };
+
+  fs.mkdirSync(demoOutputDir, { recursive: true });
+  const demoPath = path.join(demoOutputDir, `${slug}.json`);
+  fs.writeFileSync(demoPath, JSON.stringify(demoJson, null, 2));
+  return demoPath;
+}
+
+// ─────────────────────────────────────────────
+// Step 17 — Main synthesise()
 // ─────────────────────────────────────────────
 
 export async function synthesise(archetypeConfigPath, noiseConfigPath, opts = {}) {
@@ -829,8 +878,9 @@ export async function synthesise(archetypeConfigPath, noiseConfigPath, opts = {}
   const slug = archetype.slug;
 
   const resolvedOpts = {
-    outputDir:      opts.outputDir      ?? `./bake-output/${slug}`,
+    outputDir:      opts.outputDir       ?? `./bake-output/${slug}`,
     weatherCacheDir: opts.weatherCacheDir ?? './bake-input/weather',
+    demoOutputDir:  opts.demoOutputDir   ?? './data/demos',
     runToolModules: opts.runToolModules  ?? false,
     verbose:        opts.verbose         ?? false,
   };
@@ -903,5 +953,9 @@ export async function synthesise(archetypeConfigPath, noiseConfigPath, opts = {}
     await runModuleSanityCheck(csvPath, archetype, resolvedOpts);
   }
 
-  return { slug, outputDir: resolvedOpts.outputDir, stats, csvPath, statsPath, reportPath };
+  const demoJsonPath = writeDemoJson(
+    timestamps, gasArr, elecArr, archetype, resolvedOpts.demoOutputDir
+  );
+
+  return { slug, outputDir: resolvedOpts.outputDir, stats, csvPath, statsPath, reportPath, demoJsonPath };
 }

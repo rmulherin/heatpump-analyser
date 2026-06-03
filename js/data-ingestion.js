@@ -16,9 +16,7 @@ export const CONFIG = {
   CONSUMPTION_PAGE_SIZE: 25000,
   TARIFF_PAGE_SIZE: 1500,
   LOOKBACK_MS: 365 * 24 * 60 * 60 * 1000,
-  MIN_DAYS_FOR_ANALYSIS: 30,
-  WARNING_DAYS_THRESHOLD: 90,
-  GAP_WARNING_PERCENTAGE: 10,
+  MIN_DAYS_WITH_DATA: 90,     // non-blank days required; replaces MIN_DAYS_FOR_ANALYSIS gate
   HH_INTERVAL_MS: 30 * 60 * 1000,
 };
 
@@ -389,6 +387,105 @@ export async function buildTariffTimeline(agreements, fuelType, paymentMethod, d
 
 // ===== Step 10: CSV Parsing =====
 
+// ---- DST helpers ----
+
+function lastSundayOf(year, month) {
+  const last = new Date(Date.UTC(year, month, 0)); // day 0 = last day of (month - 1)
+  const dow = last.getUTCDay();
+  last.setUTCDate(last.getUTCDate() - dow);
+  return last.toISOString().slice(0, 10);
+}
+
+function findTransitionDatesInRange(naiveDateSet) {
+  if (naiveDateSet.size === 0) return { autumnDate: null, springDate: null };
+  const dates = [...naiveDateSet].sort();
+  const minYear = parseInt(dates[0].slice(0, 4), 10);
+  const maxYear = parseInt(dates[dates.length - 1].slice(0, 4), 10);
+  let autumnDate = null, springDate = null;
+  for (let y = minYear; y <= maxYear; y++) {
+    const oct = lastSundayOf(y, 10);
+    const mar = lastSundayOf(y, 3);
+    if (autumnDate === null && naiveDateSet.has(oct)) autumnDate = oct;
+    if (springDate === null && naiveDateSet.has(mar)) springDate = mar;
+    if (autumnDate !== null && springDate !== null) break;
+  }
+  return { autumnDate, springDate };
+}
+
+function detectAutumnBack(naiveTimestamps, autumnDate) {
+  if (!autumnDate) return null;
+  let count00 = 0, count30 = 0;
+  for (const ts of naiveTimestamps) {
+    if (!ts.startsWith(autumnDate)) continue;
+    const time = ts.slice(11, 16);
+    if (time === '01:00') count00++;
+    else if (time === '01:30') count30++;
+  }
+  return count00 > 1 || count30 > 1;
+}
+
+function detectSpringForward(naiveTimestamps, springDate) {
+  if (!springDate) return null;
+  let has0030 = false, has0200 = false, has0100 = false, has0130 = false;
+  for (const ts of naiveTimestamps) {
+    if (!ts.startsWith(springDate)) continue;
+    const time = ts.slice(11, 16);
+    if (time === '00:30') has0030 = true;
+    else if (time === '02:00') has0200 = true;
+    else if (time === '01:00') has0100 = true;
+    else if (time === '01:30') has0130 = true;
+  }
+  return has0030 && has0200 && !has0100 && !has0130;
+}
+
+function detectCsvTimezone(naiveTimestamps) {
+  const naiveDateSet = new Set(naiveTimestamps.map(ts => ts.slice(0, 10)));
+  const { autumnDate, springDate } = findTransitionDatesInRange(naiveDateSet);
+  const autumnBack    = detectAutumnBack(naiveTimestamps, autumnDate);
+  const springForward = detectSpringForward(naiveTimestamps, springDate);
+
+  const detection_signals = {
+    autumn_back_observed:    autumnBack,
+    spring_forward_observed: springForward,
+    confidence: null,
+  };
+  const warnings = [];
+  let source;
+
+  if (autumnBack === true && springForward === true) {
+    source = 'csv_local_detected';
+    detection_signals.confidence = 'high';
+  } else if (autumnBack === true && springForward === null) {
+    source = 'csv_local_detected';
+    detection_signals.confidence = 'medium';
+    warnings.push('Spring clock-forward transition not in data range; timezone detection based on autumn-back signal only.');
+  } else if (autumnBack === null && springForward === true) {
+    source = 'csv_local_detected';
+    detection_signals.confidence = 'medium';
+    warnings.push('Autumn clock-back transition not in data range; timezone detection based on spring-forward signal only.');
+  } else if (autumnBack === false && springForward === false) {
+    source = 'csv_utc_assumed';
+    detection_signals.confidence = 'high';
+  } else if ((autumnBack === true && springForward === false) ||
+             (autumnBack === false && springForward === true)) {
+    source = 'csv_uncertain_assumed_utc';
+    detection_signals.confidence = 'low';
+    warnings.push('Contradictory timezone signals detected. Timestamps assumed to be UTC — verify with your data provider.');
+  } else if (autumnBack === null && springForward === null) {
+    source = 'csv_uncertain_assumed_utc';
+    detection_signals.confidence = 'low';
+    warnings.push('Data does not span a clock-change date. Cannot determine whether timestamps are local time or UTC. Assuming UTC.');
+  } else {
+    source = 'csv_uncertain_assumed_utc';
+    detection_signals.confidence = 'low';
+    warnings.push('Timezone could not be confirmed. Assuming UTC — verify with your data provider.');
+  }
+
+  return { source, detection_signals, warnings };
+}
+
+// ---- end DST helpers ----
+
 function londonToUtc(dateStr) {
   // Parse a naive datetime string as Europe/London and return UTC ISO string.
   // Uses Intl to detect the offset for the given date in Europe/London.
@@ -435,111 +532,175 @@ export function parseCSV(fileContent) {
   const errors = [];
 
   if (lines.length === 0) {
-    errors.push("CSV file is empty.");
-    return { records: [], errors };
+    errors.push('CSV file is empty.');
+    return { records: [], errors, timezone_detection: null, days_with_data: 0 };
   }
 
-  // Validate header
   const headerLine = lines[0].toLowerCase().replace(/\s/g, '');
   if (headerLine !== 'datetime,gas_kwh,electricity_kwh') {
     errors.push("CSV format doesn't match the template. Expected columns: datetime, gas_kwh, electricity_kwh.");
-    return { records: [], errors };
+    return { records: [], errors, timezone_detection: null, days_with_data: 0 };
   }
 
-  const records = [];
-  const utcTimestampMap = new Map(); // track duplicates for autumn clock change
+  // Pass 1: separate explicit-tz rows from naive rows
+  const explicitRows = [];  // { rowNum, utcIso, rawGas, rawElec }
+  const naiveRows    = [];  // { rowNum, ts, rawGas, rawElec }
 
   for (let i = 1; i < lines.length; i++) {
     const rowNum = i + 1;
     const fields = lines[i].split(',');
-
     if (fields.length !== 3) {
       errors.push(`Row ${rowNum}: expected 3 columns, found ${fields.length}.`);
       continue;
     }
-
     const rawTimestamp = fields[0].trim();
-    const rawGas = fields[1].trim();
+    const rawGas  = fields[1].trim();
     const rawElec = fields[2].trim();
 
-    // Parse timestamp
-    // Honour explicit timezone (Z or ±HH:MM offset); otherwise assume Europe/London local.
-    let utcIso;
-    const hasExplicitTz = /Z$|[+-]\d{2}:?\d{2}$/i.test(rawTimestamp);
-    if (hasExplicitTz) {
+    if (/Z$|[+-]\d{2}:?\d{2}$/i.test(rawTimestamp)) {
       const parsed = new Date(rawTimestamp.replace(' ', 'T'));
       if (isNaN(parsed.getTime())) {
         errors.push(`Row ${rowNum}: timestamp "${rawTimestamp}" is not a valid date format.`);
         continue;
       }
-      utcIso = parsed.toISOString();
+      explicitRows.push({ rowNum, utcIso: parsed.toISOString(), rawGas, rawElec });
     } else {
-      const result = londonToUtc(rawTimestamp);
-      if (result === null) {
-        errors.push(`Row ${rowNum}: timestamp "${rawTimestamp}" is not a valid date format. Use YYYY-MM-DD HH:MM or ISO 8601 with timezone.`);
-        continue;
-      }
-      if (result.error === 'spring_gap') {
-        errors.push(`Timestamp at row ${rowNum} falls in the spring clock-forward gap and is invalid.`);
-        continue;
-      }
-      utcIso = result;
+      naiveRows.push({ rowNum, ts: rawTimestamp, rawGas, rawElec });
     }
+  }
 
-    // Validate HH interval (00 or 30 minutes)
+  // Detect timezone from naive timestamps
+  let timezone_detection;
+  if (naiveRows.length === 0) {
+    timezone_detection = {
+      source: 'csv_utc_assumed',
+      detection_signals: { autumn_back_observed: null, spring_forward_observed: null, confidence: 'high' },
+      warnings: [],
+    };
+  } else {
+    timezone_detection = detectCsvTimezone(naiveRows.map(r => r.ts));
+  }
+
+  // Determine autumn transition date for disambiguation in Pass 2
+  const naiveDateSet = new Set(naiveRows.map(r => r.ts.slice(0, 10)));
+  const { autumnDate } = findTransitionDatesInRange(naiveDateSet);
+  const isLocalDetected = timezone_detection.source === 'csv_local_detected';
+  const autumnCounters  = {};
+
+  // Shared record builder
+  const records = [];
+  const utcTimestampMap = new Map();
+
+  function addRecord(rowNum, utcIso, rawGas, rawElec) {
     const mins = new Date(utcIso).getUTCMinutes();
     if (mins !== 0 && mins !== 30) {
-      errors.push("Timestamps must be at half-hour intervals (e.g. 09:00, 09:30, 10:00).");
-      continue;
+      errors.push('Timestamps must be at half-hour intervals (e.g. 09:00, 09:30, 10:00).');
+      return;
     }
-
-    // Check for autumn clock-change duplicates — reject both rows
-    if (utcTimestampMap.has(utcIso)) {
-      const prevRow = utcTimestampMap.get(utcIso);
-      errors.push(`Rows ${prevRow} and ${rowNum} resolve to the same UTC timestamp (autumn clock change). Please resolve the ambiguity in your CSV.`);
-      // Remove the first row's record too
-      const idx = records.findIndex(r => r.interval_start === utcIso);
-      if (idx !== -1) records.splice(idx, 1);
-      continue;
-    }
-    utcTimestampMap.set(utcIso, rowNum);
-
-    // Parse consumption values
-    const gasKwh = parseFloat(rawGas);
+    const gasKwh  = parseFloat(rawGas);
     const elecKwh = parseFloat(rawElec);
-
     if (isNaN(gasKwh) || isNaN(elecKwh)) {
       errors.push(`Row ${rowNum}: gas_kwh and electricity_kwh must be numbers.`);
-      continue;
+      return;
     }
-
     if (gasKwh < 0) {
       errors.push(`Negative consumption value at row ${rowNum}. Check your data — consumption should be ≥ 0.`);
-      continue;
+      return;
     }
     if (elecKwh < 0) {
       errors.push(`Negative consumption value at row ${rowNum}. Check your data — consumption should be ≥ 0.`);
-      continue;
+      return;
     }
-
-    records.push({
-      interval_start: utcIso,
-      gas_kwh: gasKwh,
-      elec_kwh: elecKwh,
-    });
+    if (utcTimestampMap.has(utcIso)) {
+      const prevRow = utcTimestampMap.get(utcIso);
+      errors.push(`Rows ${prevRow} and ${rowNum} resolve to the same UTC timestamp. Please check for duplicates.`);
+      return;
+    }
+    utcTimestampMap.set(utcIso, rowNum);
+    records.push({ interval_start: utcIso, gas_kwh: gasKwh, elec_kwh: elecKwh });
   }
 
-  // Minimum data check
-  if (records.length > 0 && errors.length === 0) {
-    const timestamps = records.map(r => new Date(r.interval_start).getTime());
-    const rangeMs = Math.max(...timestamps) - Math.min(...timestamps);
-    const rangeDays = rangeMs / (24 * 60 * 60 * 1000);
-    if (rangeDays < CONFIG.MIN_DAYS_FOR_ANALYSIS) {
-      errors.push(`Only ${Math.round(rangeDays)} days of data. At least ${CONFIG.MIN_DAYS_FOR_ANALYSIS} days needed for a meaningful analysis.`);
-    }
+  // Pass 2a: process explicit-tz rows
+  for (const row of explicitRows) {
+    addRecord(row.rowNum, row.utcIso, row.rawGas, row.rawElec);
   }
 
-  return { records, errors };
+  // Pass 2b: process naive rows using detected timezone
+  for (const row of naiveRows) {
+    let utcIso;
+
+    if (isLocalDetected && autumnDate && row.ts.startsWith(autumnDate)) {
+      // Autumn-back date: explicit offset arithmetic for 01:00 / 01:30 duplicates
+      const time = row.ts.slice(11, 16);
+      if (time === '01:00' || time === '01:30') {
+        const key = row.ts.trim();
+        const count = autumnCounters[key] ?? 0;
+        autumnCounters[key] = count + 1;
+        const m = row.ts.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})/);
+        if (!m) {
+          errors.push(`Row ${row.rowNum}: timestamp "${row.ts}" is not a valid date format.`);
+          continue;
+        }
+        const [, date, hStr, mStr] = m;
+        if (count === 0) {
+          // First occurrence: BST → UTC (subtract 1 h)
+          const utcH = String(parseInt(hStr, 10) - 1).padStart(2, '0');
+          utcIso = `${date}T${utcH}:${mStr}:00.000Z`;
+        } else {
+          // Second occurrence: GMT → UTC (no offset)
+          utcIso = `${date}T${hStr}:${mStr}:00.000Z`;
+        }
+      } else {
+        const result = londonToUtc(row.ts);
+        if (result === null) {
+          errors.push(`Row ${row.rowNum}: timestamp "${row.ts}" is not a valid date format.`);
+          continue;
+        }
+        if (result?.error === 'spring_gap') {
+          errors.push(`Timestamp at row ${row.rowNum} falls in the spring clock-forward gap and is invalid.`);
+          continue;
+        }
+        utcIso = result;
+      }
+    } else if (isLocalDetected) {
+      const result = londonToUtc(row.ts);
+      if (result === null) {
+        errors.push(`Row ${row.rowNum}: timestamp "${row.ts}" is not a valid date format. Use YYYY-MM-DD HH:MM or ISO 8601 with timezone.`);
+        continue;
+      }
+      if (result?.error === 'spring_gap') {
+        errors.push(`Timestamp at row ${row.rowNum} falls in the spring clock-forward gap and is invalid.`);
+        continue;
+      }
+      utcIso = result;
+    } else {
+      // UTC or assumed UTC: treat naive timestamp as UTC
+      const normalised = row.ts.trim().replace(' ', 'T');
+      const withZ = /T\d{2}:\d{2}$/.test(normalised) ? normalised + ':00Z' : normalised + 'Z';
+      const parsed = new Date(withZ);
+      if (isNaN(parsed.getTime())) {
+        errors.push(`Row ${row.rowNum}: timestamp "${row.ts}" is not a valid date format.`);
+        continue;
+      }
+      utcIso = parsed.toISOString();
+    }
+
+    addRecord(row.rowNum, utcIso, row.rawGas, row.rawElec);
+  }
+
+  // Sort merged records by interval_start
+  records.sort((a, b) => (a.interval_start < b.interval_start ? -1 : a.interval_start > b.interval_start ? 1 : 0));
+
+  // Step 9: days_with_data gate (data density, not calendar span)
+  const daysPresent = new Set(records.map(r => r.interval_start.slice(0, 10))).size;
+  if (records.length > 0 && daysPresent < CONFIG.MIN_DAYS_WITH_DATA) {
+    errors.push(
+      `Only ${daysPresent} days of data found. ` +
+      `At least ${CONFIG.MIN_DAYS_WITH_DATA} days with readings are needed for a reliable analysis.`
+    );
+  }
+
+  return { records, errors, timezone_detection, days_with_data: daysPresent };
 }
 
 
@@ -711,6 +872,7 @@ export function normaliseConsumption(elecRecords, gasRecords, dataStart, dataEnd
   const consumption = [];
   let gapCount = 0;
   let expectedPeriods = 0;
+  const daysWithDataSet = new Set();
 
   for (let ts = startMs; ts < endMs; ts += CONFIG.HH_INTERVAL_MS) {
     expectedPeriods++;
@@ -719,7 +881,11 @@ export function normaliseConsumption(elecRecords, gasRecords, dataStart, dataEnd
     const elecVal = elecMap.has(isoStr) ? elecMap.get(isoStr) : null;
     const gasVal = gasMap.has(isoStr) ? gasMap.get(isoStr) : null;
 
-    if (elecVal === null && gasVal === null) gapCount++;
+    if (elecVal === null && gasVal === null) {
+      gapCount++;
+    } else {
+      daysWithDataSet.add(isoStr.slice(0, 10));
+    }
 
     consumption.push({
       timestamp: isoStr,
@@ -742,6 +908,36 @@ export function normaliseConsumption(elecRecords, gasRecords, dataStart, dataEnd
       gap_count: gapCount,
       gap_percentage: gapPercentage,
       expected_periods: expectedPeriods,
+      days_with_data: daysWithDataSet.size,
+    },
+  };
+}
+
+
+// ===== Demo Archetype Loader =====
+
+export const DEMO_ARCHETYPES = [
+  { id: 'modern-out-for-work', label: 'Modern home, out for work' },
+  { id: 'average-in-all-day',  label: 'Average home, in all day' },
+  { id: 'small-and-efficient', label: 'Small efficient flat' },
+  { id: 'big-old-draughty',    label: 'Big old draughty house' },
+];
+
+export async function loadDemoArchetype(archetypeId) {
+  const resp = await fetch(`data/demos/${archetypeId}.json`);
+  if (!resp.ok) throw new Error(`Demo dataset not found: ${archetypeId}`);
+  const data = await resp.json();
+  return {
+    consumption:        data.consumption,
+    postcode:           data.postcode,
+    gsp_region:         data.region,
+    days_with_data:     data.days_with_data,
+    metadata:           data.metadata,
+    tariff_rates:       null,
+    timezone_detection: {
+      source: 'demo',
+      detection_signals: { autumn_back_observed: null, spring_forward_observed: null, confidence: 'high' },
+      warnings: [],
     },
   };
 }

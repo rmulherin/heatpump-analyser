@@ -29,7 +29,8 @@
     "elec_appliance_events_per_week": 8
   },
   "location": {
-    "postcode": "CB1 2BX"
+    "postcode": "CB1 2BX",
+    "gsp_region": "A"
   },
   "time_window": {
     "start": "2025-01-01",

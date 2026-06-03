@@ -29,6 +29,7 @@ try {
   console.log(`  CSV:    ${result.csvPath}`);
   console.log(`  Stats:  ${result.statsPath}`);
   console.log(`  Report: ${result.reportPath}`);
+  console.log(`  Demo JSON: ${result.demoJsonPath}`);
   const at = result.stats.annual_totals;
   console.log(`  Gas:  ${at.gas_kwh.toFixed(0)} kWh (${at.gas_delta_pct > 0 ? '+' : ''}${at.gas_delta_pct.toFixed(1)}%)`);
   console.log(`  Elec: ${at.elec_kwh.toFixed(0)} kWh (${at.elec_delta_pct > 0 ? '+' : ''}${at.elec_delta_pct.toFixed(1)}%)`);

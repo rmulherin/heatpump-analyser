@@ -474,7 +474,14 @@ Add entry for `m1-data-ingestion-v2` to the Current Sequencing Position checklis
 
 ## Implementation Deviations
 
-None — plan not yet implemented.
+**D1 — `runDemoPipeline` omits `showSuccessSummary`**
+Plan says to proceed "same path as Octopus/CSV after `setIngestionResult()`", which technically includes `showSuccessSummary`. Omitted intentionally: plan also says "functional scaffold for CLI/browser verification only; UI plan will replace it with the designed tab." No analysis output is affected.
+
+**D2 — DEMO_ARCHETYPES label for `small-and-efficient` uses "Small efficient flat"**
+Plan's example code showed "Small and efficient home". The plan's risk note said "confirm exact wording from config label fields before hardcoding in Step 17." Config file `small-and-efficient.json` has `"label": "Small efficient flat"` — this label is used. Not a functional deviation; the plan's own guidance instructed the correction.
+
+**D3 — `findTransitionDatesInRange` called twice in `parseCSV`**
+Called once inside `detectCsvTimezone()` and a second time directly in `parseCSV()` to obtain `autumnDate` for Pass 2 disambiguation. Minor double-work; no functional impact.
 
 ---
 
