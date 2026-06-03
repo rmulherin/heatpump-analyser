@@ -1,7 +1,7 @@
 # m1-data-ingestion-v2 — Full v2 delta (re-cut 2026-06-03)
 
 **Date:** 2026-06-03
-**Status:** Awaiting review — Opus architect review pending.
+**Status:** ⚠ Approved with edits — 2026-06-03. Implementation may begin.
 
 ---
 
@@ -81,8 +81,8 @@ flag any change-from-design in the deviations section.
 **CSV rate fields (`index.html` lines ~134–153):**
 - 4 inputs across 2 `.form-row` blocks: `csv-gas-rate` (5.7), `csv-elec-rate` (24.5),
   `csv-gas-standing` (31.4), `csv-elec-standing` (61.6).
-- ⚠️ Design doc §10 flags: "⚠ Confirm: Rhiannon to veto if CSV rate entry should stay on
-  the m1 form." Confirm before implementing Steps 14–15.
+- ✅ Removal **confirmed** (Opus review 2026-06-03): the design now states m1 collects no rates
+  (reference rates are m2's Ofgem-cap defaults). Steps 14–15 proceed.
 
 **Demo path:**
 - No demo function or wire-up exists in the tool.
@@ -295,12 +295,15 @@ Before touching the HTML, audit all reads of `csv-gas-rate`, `csv-elec-rate`,
 usage that would break when the elements are absent (values passed to m2 via the M1
 result envelope, or used in `prefillRateInputs()`). In v2, m2 owns these rates.
 
+**Interim fallback (review clarification):** until m2 ships, CSV pricing must fall back to the
+CONFIG Ofgem-cap defaults (`DEFAULT_GAS_RATE_P_KWH` etc., retained per Step 1) — removing the
+field reads degrades to defaults, **not** an empty/broken rate.
+
 #### Step 15 — Remove CSV rate form fields from `index.html`
 
 After Step 14, remove the two `.form-row` blocks containing the four rate inputs.
 
-⚠️ Design doc §10 flags this for Rhiannon confirmation. Do not implement until confirmed
-at plan review.
+✅ **Confirmed at review (2026-06-03)** — proceed. The design has m1 collecting no rates; m2 owns them.
 
 ---
 
@@ -472,3 +475,69 @@ Add entry for `m1-data-ingestion-v2` to the Current Sequencing Position checklis
 ## Implementation Deviations
 
 None — plan not yet implemented.
+
+---
+
+## Design Review
+
+**Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Date:** 2026-06-03
+**Review type:** Plan review (pre-implementation) — re-cut after the first cut was blocked.
+**Authoritative design:** `praxis-claude-hub/projects/tools/heatpump-analyser/design/m1-data-ingestion-v2.md`
+
+### Context
+
+Re-cut m1 plan reviewed against the realigned m1-v2 design. Codebase claims verified by read-only
+Grep against `heatpump-analyser/js/` + `index.html` (parseCSV:433, normaliseConsumption:697, the
+seven sufficiency checks incl. `app.js:643`/`:3039`, the `gsp-region` blank-first dropdown, the CSV
+rate fields, the CONFIG constants — all confirmed). The first cut was **Blocked** on three findings;
+this re-cut resolves all three.
+
+### Required changes for implementation
+
+1. **Missing 30-day removals** — the first cut omitted `app.js:643` + `:3039`.
+2. **Demo bake mechanism** — the first cut ran the browser `parseCSV` in Node (unresolved).
+3. **API `<90` block vs warn** — the first cut continued; architecture says block both paths.
+
+### Resolution of review changes
+
+1. **Missing removals** — RESOLVED: the research table now lists all **seven** checks (incl.
+   `:643`/`:3039`); Step 11 removes them + the `MIN_DAYS_FOR_ANALYSIS` constant (grep-first).
+2. **Demo bake** — RESOLVED: Step 16b extends the **synthesiser to emit the m1-contract JSON
+   directly** (no `parseCSV` in Node); runtime served-fetch (relative path) retained; shape
+   cross-check flagged.
+3. **API `<90`** — RESOLVED: Step 12 **blocks** the Octopus path (both paths block identically);
+   success criterion updated.
+
+### Items noted / clarifications
+
+- **Hygiene (applied):** cleared the stale "⚠ confirm CSV rate removal" flag — the design has
+  resolved it (m1 collects no rates; rates are m2's Ofgem-cap defaults).
+- **MEDIUM (clarified inline, Step 14):** interim CSV pricing falls back to the CONFIG Ofgem-cap
+  defaults until m2 ships — removing the rate-field reads degrades to defaults, not a broken rate.
+- **LOW:** design `region` = code `gsp_region` (the plan maps correctly).
+
+## Review Summary
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| CRITICAL | 0 | ✓ pass |
+| HIGH | 3 | ✅ resolved (re-cut) |
+| MEDIUM | 1 | ℹ clarified inline |
+| LOW | 2 | — noted |
+
+Verdict: ⚠ APPROVED WITH EDITS — re-cut resolves the three blocking findings; hygiene + two clarifications applied.
+
+---
+
+## Approval
+
+**Status:** ⚠ Approved with edits — 2026-06-03
+**Approved by:** Rhiannon (via Opus review)
+**Clarifications confirmed:**
+- API `<90` days **blocks** both paths (CSV + Octopus) — not warn-and-continue.
+- Demo data: the synthesiser emits the normalised m1-contract JSON to `data/demos/`; runtime
+  served-fetch (relative path); **no `parseCSV` in Node**.
+- CSV rate fields removed from m1 (m1 collects no rates); **interim CSV pricing uses the CONFIG
+  Ofgem-cap defaults until m2** lands.
+- `region` = the CSV dropdown value, no postcode interaction; code field is `gsp_region`.
