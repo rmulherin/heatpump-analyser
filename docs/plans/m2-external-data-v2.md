@@ -1,7 +1,7 @@
 # m2-external-data-v2 — Re-cut against self-contained v2 design
 
 **Date:** 2026-06-03
-**Status:** Awaiting review — Opus architect review pending.
+**Status:** ⚠ Approved with edits — 2026-06-03. Implementation may begin.
 
 ---
 
@@ -682,8 +682,12 @@ remove it from this function.
    ```
 
 2. **Grep for any remaining `wholesale_p_kwh` references** in app.js and update or
-   remove them (the progress summary is Step 12; any other accesses into `external[]`
-   for price data should no longer exist).
+   remove them. The progress summary is Step 12. The known remaining site is
+   **`buildRateArrays` (app.js ~line 1547)**, which reads `external[i]?.wholesale_p_kwh`
+   to build a local M7 rate array — it is **superseded by `prepareRates`** (M7 switched
+   to `prepareRates` on 2026-05-07 and now consumes m2's `hh_rate`). Confirm
+   `buildRateArrays` is no longer called and **remove it**; if a live caller is found,
+   surface to Opus rather than leaving it reading the removed field.
 
 3. **Grep for `external_metadata.agile_calibration`** — should be zero hits after
    Steps 13–15. Confirm.
@@ -724,8 +728,9 @@ solar_w_m2}` and **no** `wholesale_p_kwh` key. Assertion:
 **TC15 — Negative wholesale not clamped:**
 - W=−5.0, D=2.2, calibrated, off-peak → `hh_rate[i] < 0` (not clamped to 0).
 - Exact value: −11.0 (calibrated). Confirm no `Math.max(0, ...)` guard.
-- Note: design doc TC15 quotes −5.78 for the table path; this appears to be an error
-  (see Research findings). Test checks only `hh_rate < 0`; flag discrepancy for Opus.
+- Note: the design doc §5 TC15 table-path value is **−11.55** (`min(2.2×−5, 95)×1.05`),
+  corrected this review from a typo'd −5.78 (which was D=1.1). Test checks `hh_rate < 0`
+  (the load-bearing principle); the corrected exact table-path value is −11.55.
 
 **TC16 — Null-wholesale fallback:**
 - Build priceLookup with 10% of slots set to null.
@@ -753,9 +758,12 @@ solar_w_m2}` and **no** `wholesale_p_kwh` key. Assertion:
 - BST: 2025-06-15, SP1 → `2025-06-14T23:00:00Z`.
 (Existing `convertSpToUtc` logic; just regression-guard it.)
 
-Run with: `node test-m2-v2.mjs` (check test-m8.mjs for exact import pattern and shim
-requirements — the project may need `--experimental-vm-modules` or a helper shim for
-ES module imports from the JS files).
+Run with: `node test-m2-v2.mjs`. **`external-data.js` has a top-level
+`const { DateTime } = luxon;`**, so the test must set `globalThis.luxon` (import the
+`luxon` package and assign it) **before** importing `external-data.js` — otherwise the
+import throws `luxon is not defined` and no tests run. `test-m8.mjs`'s pattern alone does
+**not** cover this (it imports `pricing-engine.js`, which does not use Luxon); use it for
+the base plain-ESM import pattern only.
 
 ---
 
@@ -818,10 +826,10 @@ price cap documentation before v2 launch.
 Q1 2026) are marked PROVISIONAL and copy the nearest confirmed value. Affects CSV/demo
 path only. Research task to populate before v2 launch.
 
-**F3 — TC15 design-doc value discrepancy:** Design doc §5 TC15 quotes table-path result
-as −5.78 for D=2.2, W=−5.0. The formula gives −11.55; −5.78 arises from D=1.1. Likely
-a typo. Implementation tests the principle (negative → negative, not clamped). Opus to
-confirm the design-doc value or correct it.
+**F3 — TC15 design-doc value — RESOLVED (Opus review 2026-06-03):** the design doc §5 TC15
+table-path value has been corrected from −5.78 to **−11.55** (`min(2.2×−5, 95)×1.05`; the
+−5.78 was a D=1.1 typo). Implementation tests the principle (negative → negative, not
+clamped); the exact table-path value is −11.55.
 
 **F4 — `data/mid-prices.json` CORS fallback:** Referenced in design §2.5.3 as a static
 fallback for Elexon CORS blocks; the file was never built. Out of scope for this plan.
@@ -836,3 +844,91 @@ audits this in app.js; confirm no other references exist (index.html, display fu
 ## Implementation Deviations
 
 [Populated after implementation.]
+
+---
+
+## Design Review
+
+**Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Date:** 2026-06-03
+**Review type:** Plan review (pre-implementation)
+**Authoritative design:** `~/Documents/git-repos/praxis-claude-hub/projects/tools/heatpump-analyser/design/m2-external-data-v2.md`
+
+### Context
+
+Re-cut of the M2 plan against the realigned, self-contained m2-v2 design doc (m2 = single
+tariff source; supplied-vs-default; regional Agile D/P + regional standing; §14 what-if
+entirely in m8; wholesale containment). The plan is faithful to the design on every
+load-bearing point. Codebase claims were verified via a read-only Explore sub-agent and all
+CONFIRMED: the GSP-region access path (`ingestion.gsp_region`, top-level), the m1
+`tariff_rates` schema (`{gas,electricity}` arrays with `rate_p_kwh` / `valid_from` /
+`valid_to` / `standing_p_day`), the `isPeakHour` removal safety (single caller, the loop
+being removed), and `external-data.js` Node-importability. The null-wholesale / coverage
+machinery the plan relocates is **pre-existing** (agile-rate-robustness, live since
+2026-04-30) — it guards isolated Elexon data gaps (~1–2% of slots), **not** APX provider
+failure (APX is reliable); the plan moves it unchanged per the defer-to-working-code guardrail.
+
+### Required changes for implementation
+
+**1. Complete the wholesale-containment audit — `buildRateArrays` (app.js ~1547).** Step 15.2
+asserted "any other accesses into `external[]` for price data should no longer exist," but
+`buildRateArrays` still reads `external[i]?.wholesale_p_kwh`. It is superseded by `prepareRates`
+(M7 switched on 2026-05-07). Step 15.2 amended to name it + disposition: confirm uncalled and
+remove; surface to Opus if a live caller is found.
+
+**2. Luxon global for the Node test (Step 16).** `external-data.js` has a top-level
+`const { DateTime } = luxon;`, so `test-m2-v2.mjs` must set `globalThis.luxon` before importing
+it — `test-m8.mjs`'s pattern does not cover this (it imports `pricing-engine.js`, no Luxon).
+Step 16 amended.
+
+**3. TC15 design-doc value (F3).** The design doc §5 TC15 table-path value was a typo (−5.78 =
+D=1.1); corrected to **−11.55** in the design doc this review (separate praxis-hub commit). The
+plan's TC15 note and F3 updated to the corrected value; the implementation correctly tests the
+principle (negative → negative, not clamped).
+
+### Resolution of review changes
+
+1. **buildRateArrays audit** — Step 15.2 amended (names app.js:1547 + confirm-uncalled-and-remove).
+2. **Luxon global** — Step 16 amended with the `globalThis.luxon` setup requirement.
+3. **TC15 value** — design doc corrected (−5.78 → −11.55); plan TC15 note + F3 reconciled.
+
+### Items noted but not edited
+
+- **LOW — `imputeWholesaleForSlot` hardcodes `24.50`** (Step 5 call) for the all-null last-resort
+  cap. Reference the Ofgem-cap constant during implementation rather than the literal;
+  degenerate-case only, non-blocking.
+- **MEDIUM (observation) — plan size.** 16 steps, 3 files modified heavily + 3 created — beyond the
+  sizing guide, but the `prepareRates` relocation is atomic (splitting leaves a broken
+  intermediate). Kept as one plan deliberately.
+- **Accepted as provisional (architect-owned):** F1 (regional standing-charge figures,
+  PENDING_SOURCE) and F2 (quarterly Ofgem schedule, PROVISIONAL) match the agreed architect-note
+  approach. Opus owns sourcing `data/regional-standing-charges.csv` and the quarterly cap schedule
+  before v2 launch; correctly deferred, not blockers.
+
+## Review Summary
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| CRITICAL | 0     | ✓ pass |
+| HIGH     | 0     | ✓ pass |
+| MEDIUM   | 3     | ✅ resolved (2) / ℹ noted (1) |
+| LOW      | 1     | — noted |
+
+Verdict: ⚠ APPROVED WITH EDITS — faithful relocation; three hygiene edits applied
+(containment-audit completion, test Luxon-global, TC15 reconcile); regional-figure sourcing
+remains architect-owned.
+
+---
+
+## Approval
+
+**Status:** ⚠ Approved with edits — 2026-06-03
+**Approved by:** Rhiannon (via Opus review)
+**Clarifications confirmed:**
+- The null-wholesale / coverage machinery is **pre-existing** (relocated unchanged), guarding
+  Elexon data gaps, **not** APX failure (APX reliable) — not new scope.
+- §14 (scale-all + rate/standing overrides) stays entirely in m8; m2 builds base tariffs only.
+- Regional standing-charge figures + the full quarterly Ofgem cap schedule are **architect-owned**
+  sourcing tasks; the PENDING_SOURCE / PROVISIONAL placeholders are accepted for now.
+- `buildRateArrays` (app.js:1547) is the dead remnant of the 2026-05-07 prepareRates switch —
+  confirm uncalled and remove.
