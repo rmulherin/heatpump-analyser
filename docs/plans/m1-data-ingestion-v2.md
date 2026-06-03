@@ -1,54 +1,93 @@
-# m1-data-ingestion-v2 — CSV timezone detection + days_with_data load gate
+# m1-data-ingestion-v2 — Full v2 delta (re-cut 2026-06-03)
 
-**Date:** 2026-06-02
+**Date:** 2026-06-03
 **Status:** Awaiting review — Opus architect review pending.
 
 ---
 
 ## Task description
 
-Implement the M1 v2 delta as specified in `design/m1-data-ingestion-v2.md`. Two changes to
-`data-ingestion.js`: (1) flip the CSV naive-timestamp default from assume-Europe/London to
-assume-UTC, adding DST artefact auto-detection to identify UK-local data; (2) add a
-`days_with_data` load gate (≥ 90 non-blank days) on both the CSV and Octopus paths. A new
-`timezone_detection` field is added to the M1 result envelope and wired into app.js.
-All other M1 behaviour (Octopus path, gas-unit detection, meter stitching, tariff timeline,
-normalisation, postcode validation) is unchanged.
+Re-cut of the m1 v2 plan against the **realigned** `m1-data-ingestion-v2.md` design doc
+(committed `62f4fc0`, updated `eb538da`, `20a7d99`). The prior plan (2026-06-02) was
+rejected — it covered only DST detection + `days_with_data`, predating the architecture-v2
+alignment pass.
+
+This plan implements the **full v2 delta** across five areas:
+
+1. **DST auto-detection + UTC default (INV-19)** — two-pass `parseCSV()`, autumn-back
+   disambiguation, classification table, `timezone_detection` output.
+2. **`days_with_data` load gate** — single `<90` block (data-density, not calendar span),
+   replacing v1's three scattered checks.
+3. **Region as first-class M1 output** — Octopus path already done (verify only); CSV path:
+   no change needed (plain user-selected dropdown, no default); demo: baked in asset.
+4. **Demo-archetype source path** — `loadDemoArchetype(archetypeId)` + baked JSON assets
+   in `data/demos/`; no fetch, no timezone detection; visual selector UI is NOT in m1 scope.
+5. **CSV rate fields removed** — `csv-gas-rate/elec-rate/gas-standing/elec-standing`
+   deleted (relocated to m2 §14).
+
+**Implementation note (from design doc):** reproduced v1 mechanics are descriptive only;
+only §10 deltas are mandates. Defer to working code where v2 describes unchanged behaviour;
+flag any change-from-design in the deviations section.
 
 ---
 
 ## Research findings
 
-**Existing code reviewed:**
+### Existing code baseline
 
-- `parseCSV()` — single-pass parser. Naive timestamps go straight to `londonToUtc()` (assumes
-  Europe/London). Autumn-back duplicates are detected post-UTC-conversion and both rows are
-  rejected. Min-days check uses calendar span (`rangeDays < 30`), not non-blank-day count.
-- `londonToUtc()` — converts a naive datetime string assuming Europe/London. Returns UTC ISO
-  string or `{error: 'spring_gap'}`. Kept as-is; used only in the convert step once
-  timezone is confirmed as Europe/London.
-- `normaliseConsumption()` — returns `metadata.total_days` (calendar span). Needs additive
-  `days_with_data` field (non-blank days count).
-- `CONFIG.MIN_DAYS_FOR_ANALYSIS` — currently 30. The 90-day gate is a separate concept
-  (`days_with_data`, not span); a new constant is added rather than changing this one.
-- No existing DST detection logic. New helpers required.
-- Octopus path (`fetchConsumptionStitched`, `normaliseConsumption`) assembles the result
-  object in `app.js`; `timezone_detection` must be added there for the Octopus path.
+**`parseCSV()` (`data-ingestion.js`, line ~537):**
+- Single-pass. Naive timestamps passed straight to `londonToUtc()` — assumes Europe/London.
+- Autumn-back duplicates: both rows rejected.
+- Sufficiency: `rangeDays < CONFIG.MIN_DAYS_FOR_ANALYSIS` (30) — calendar span, not data
+  density.
 
-**Design doc:** `praxis-claude-hub/projects/tools/heatpump-analyser/design/m1-data-ingestion-v2.md`
+**`normaliseConsumption()` (`data-ingestion.js`, line ~739):**
+- Returns `metadata.total_days` (calendar span). No `days_with_data` field.
 
-**Key decisions:**
-- Two-pass approach in `parseCSV()`: collect all rows first (storing raw timestamp strings for
-  naive rows), run detection on the full set, then convert. Required because detection needs
-  the full date range before committing to a timezone.
-- Autumn-back handling changes: v1 rejects both duplicate rows; v2 keeps both and uses row
-  order to disambiguate (first occurrence = BST → UTC 00:00; second = GMT → UTC 01:00). This
-  is correct per design doc §4.2 Step 4 and §5 (row order preserved).
-- `days_with_data` counted in `normaliseConsumption()` — it already iterates every HH slot,
-  making it the natural place to count non-blank days. Additive field; no downstream impact.
-- No new test file: design doc §7 test criteria are Rhiannon's browser/integration tests
-  (require real CSVs and API), not unit tests. Code-level correctness verified via the
-  implementation steps and success criteria below.
+**Three scattered sufficiency checks to remove:**
+
+| Location | Code | Action |
+|----------|------|--------|
+| `parseCSV()` line ~537 | `rangeDays < MIN_DAYS_FOR_ANALYSIS` | Replace with `days_with_data < 90` block |
+| `app.js` line ~653 (Octopus) | `meta.total_days < WARNING_DAYS_THRESHOLD` | Delete |
+| `app.js` line ~660 (Octopus) | `meta.gap_percentage > GAP_WARNING_PERCENTAGE` | Delete |
+| `app.js` line ~3049 (CSV) | `meta.total_days < WARNING_DAYS_THRESHOLD` | Delete |
+| `app.js` line ~3056 (CSV) | `meta.gap_percentage > GAP_WARNING_PERCENTAGE` | Delete |
+
+**CONFIG constants (`data-ingestion.js`):**
+- `MIN_DAYS_FOR_ANALYSIS: 30` — parseCSV() block (to replace).
+- `WARNING_DAYS_THRESHOLD: 90` — two app.js warning blocks (to remove).
+- `GAP_WARNING_PERCENTAGE: 10` — two app.js warning blocks (to remove).
+- `DEFAULT_GAS_RATE_P_KWH/ELEC_RATE_P_KWH/GAS_STANDING_P_DAY/ELEC_STANDING_P_DAY` —
+  defaults for CSV form fields. **Defer removal to m2 plan** (m2 inherits these constants).
+
+**Region — Octopus path (`data-ingestion.js` line ~120, `app.js` line ~701):**
+- `gsp_region` already extracted from tariff code last letter, validated against
+  `VALID_GSP_REGIONS`, placed in `setIngestionResult()` via `gsp_region: prop.gsp_region ?? null`.
+- ✅ No changes needed. Verify only in Step 19.
+
+**Region — CSV path (`index.html` line ~111):**
+- `gsp-region` `<select>` already exists with all 15 options (A–P) and a blank
+  "— select your region —" first option. This is the correct v2 behaviour — plain
+  user-selected, no default, no postcode interaction.
+- ✅ No changes needed to the dropdown or to app.js region handling.
+
+**CSV rate fields (`index.html` lines ~134–153):**
+- 4 inputs across 2 `.form-row` blocks: `csv-gas-rate` (5.7), `csv-elec-rate` (24.5),
+  `csv-gas-standing` (31.4), `csv-elec-standing` (61.6).
+- ⚠️ Design doc §10 flags: "⚠ Confirm: Rhiannon to veto if CSV rate entry should stay on
+  the m1 form." Confirm before implementing Steps 14–15.
+
+**Demo path:**
+- No demo function or wire-up exists in the tool.
+- 4 archetype configs: `demo-configs/*.json` — each has `slug`, `label`, `bio`,
+  `location.postcode`. No `gsp_region` field yet — must be added (Step 16a).
+- Bake outputs (`bake-output/`) exist for all 4 archetypes but are gitignored.
+- `data/demos/` directory exists; `data/demos/*.json` files are gitignore-exempt and
+  ready to commit.
+- The synthesiser `-tool-modules.json` output is a validation result only — not the m1
+  output contract. A new `scripts/bake-demos.mjs` script is needed to produce normalised
+  JSONs (Step 16b).
 
 ---
 
@@ -56,68 +95,67 @@ normalisation, postcode validation) is unchanged.
 
 | Action | File | Purpose |
 |--------|------|---------|
-| MODIFY | `js/data-ingestion.js` | DST detection helpers, revised `parseCSV()`, `days_with_data` in `normaliseConsumption()`, Octopus-path `timezone_detection` |
-| MODIFY | `js/app.js` | Wire `timezone_detection` + `days_with_data` into M1 result; Octopus-path `< 90` pop-up |
+| MODIFY | `js/data-ingestion.js` | DST helpers; revised `parseCSV()`; `days_with_data` in `normaliseConsumption()`; new CONFIG constant; `loadDemoArchetype()` + `DEMO_ARCHETYPES` export |
+| MODIFY | `js/app.js` | Octopus `timezone_detection` stub + `days_with_data` popup; remove 4 scattered check blocks; remove reads of CSV rate fields; demo pipeline wire-up |
+| MODIFY | `index.html` | Remove CSV rate fields; `#insufficient-data-warning` element; minimal demo test trigger |
+| MODIFY | `demo-configs/*.json` (×4) | Add `gsp_region` field to each archetype config |
+| CREATE | `scripts/bake-demos.mjs` | CLI: reads archetype configs + bake-output CSVs → normalised m1-contract JSON → `data/demos/{slug}.json` |
+| CREATE | `data/demos/*.json` (×4) | Baked normalised demo datasets (generated by bake-demos.mjs; committed) |
 | MODIFY | `CLAUDE.md` | Update status block |
 
 ---
 
 ## Implementation steps
 
-### Step 1 — Add CONFIG constants
+### Group A — DST detection + timezone overhaul (`data-ingestion.js`)
 
-In `data-ingestion.js` `CONFIG` object, add:
+#### Step 1 — Add CONFIG constant
 
+In `data-ingestion.js` CONFIG, add:
 ```js
-MIN_DAYS_WITH_DATA: 90,   // non-blank days required for reliable analysis
+MIN_DAYS_WITH_DATA: 90,   // non-blank days required; replaces the MIN_DAYS_FOR_ANALYSIS gate
 ```
+Keep `MIN_DAYS_FOR_ANALYSIS`, `WARNING_DAYS_THRESHOLD`, `GAP_WARNING_PERCENTAGE` until
+their removal steps in Group B. Do **not** remove `DEFAULT_GAS_RATE_P_KWH` etc. —
+deferred to m2.
 
-Keep `MIN_DAYS_FOR_ANALYSIS: 30` and `WARNING_DAYS_THRESHOLD: 90` unchanged (used elsewhere).
+#### Step 2 — `lastSundayOf(year, month)` helper
 
-### Step 2 — Add `lastSundayOf(year, month)` helper
-
-New private helper in `data-ingestion.js`. Returns the date string (`YYYY-MM-DD`) of the
-last Sunday of the given month/year. Used to locate the autumn-back (October) and
-spring-forward (March) transition dates.
+Private function in `data-ingestion.js`. Returns `YYYY-MM-DD` of the last Sunday in the
+given year/month (1-indexed). Locates autumn-back (October) and spring-forward (March)
+DST transition dates.
 
 ```js
 function lastSundayOf(year, month) {
-  // month is 1-indexed. Find last day of month, walk back to Sunday.
-  const last = new Date(Date.UTC(year, month, 0)); // day 0 = last day of prev month+1
-  const dow = last.getUTCDay(); // 0=Sun
+  const last = new Date(Date.UTC(year, month, 0)); // day 0 = last day of (month - 1)
+  const dow = last.getUTCDay();
   last.setUTCDate(last.getUTCDate() - dow);
   return last.toISOString().slice(0, 10);
 }
 ```
 
-### Step 3 — Add `findTransitionDatesInRange(naiveDates)` helper
+#### Step 3 — `findTransitionDatesInRange(naiveDateSet)` helper
 
-Takes a `Set` of date strings (`YYYY-MM-DD`) present in the naive-timestamp data.
-Returns `{ autumnDate, springDate }` — the transition date if it falls within the data
-range, or `null` if not.
+Takes a `Set<string>` of `YYYY-MM-DD` dates present in the data. Checks every year
+spanning the data range for October and March last-Sunday dates. Returns
+`{ autumnDate, springDate }` — each a date string if it falls within the data range,
+`null` otherwise.
 
-Checks every year spanning the data range for both October (autumn-back) and March
-(spring-forward) transitions.
+#### Step 4 — `detectAutumnBack(naiveTimestamps, autumnDate)` helper
 
-### Step 4 — Add `detectAutumnBack(naiveTimestamps, autumnDate)` helper
+Checks whether `01:00` and `01:30` appear more than once on the given autumn-back date
+in the array of naive timestamp strings. Returns `true` / `false` / `null` (not in range).
 
-Given the full array of naive timestamp strings and the candidate autumn-back date,
-checks whether `HH:MM` values `01:00` and `01:30` appear more than once on that date.
-Returns `true` (duplicates found = UK local), `false` (no duplicates = UTC), `null`
-(date not in range).
+#### Step 5 — `detectSpringForward(naiveTimestamps, springDate)` helper
 
-### Step 5 — Add `detectSpringForward(naiveTimestamps, springDate)` helper
+Checks whether `01:00` and `01:30` are absent on the spring date, given that `00:30` and
+`02:00` are both present on that date (confirms real DST gap, not a meter outage).
+Returns `true` / `false` / `null`.
 
-Given the full array of naive timestamp strings and the candidate spring-forward date,
-checks whether `01:00` and `01:30` are **absent** on that date despite adjacent HH slots
-being present (verifies a real gap, not just a meter outage — checks that `00:30` and
-`02:00` are present on the same date before concluding the gap is a DST signal).
-Returns `true` (gap confirmed = UK local), `false` (contiguous = UTC), `null` (date not
-in range or insufficient data to confirm).
+#### Step 6 — `detectCsvTimezone(naiveTimestamps)` function
 
-### Step 6 — Add `detectCsvTimezone(naiveTimestamps)` function
-
-Orchestrates Steps 3–5. Returns the full `timezone_detection` object:
+Orchestrates Steps 3–5. Implements the 9-case classification table from design doc §2.5.7
+Step 3 as a decision tree. Returns:
 
 ```js
 {
@@ -131,95 +169,71 @@ Orchestrates Steps 3–5. Returns the full `timezone_detection` object:
 }
 ```
 
-Classification table from design doc §4.2 Step 3 (9 cases) implemented as a decision
-tree. Contradictory signals (autumn true + spring false, or autumn false + spring true) →
-`csv_uncertain_assumed_utc`, confidence `low`, warning emitted.
+Warning strings per design doc §2.5.7 Step 5.
 
-### Step 7 — Revise `parseCSV()` — two-pass structure
+#### Step 7 — Revise `parseCSV()` — two-pass structure
 
-**Pass 1:** iterate all data rows; for each row:
-- If explicit timezone (regex `/Z$|[+-]\d{2}:?\d{2}$/i`) → parse immediately to UTC ISO,
-  store in `explicitRows` map keyed by row index.
-- If naive → store raw timestamp string in `naiveRows` array (with row index + values).
+**Pass 1:** iterate all data rows:
+- Explicit timezone (regex `/Z$|[+-]\d{2}:?\d{2}$/i`): parse immediately to UTC ISO;
+  store in `explicitRows`.
+- Naive: store raw timestamp string + row index + values in `naiveRows`.
 
-After Pass 1, if `naiveRows.length > 0`, call `detectCsvTimezone(naiveRows.map(r => r.ts))`
-to get `timezone_detection`. If all rows have explicit timezone, set
-`timezone_detection.source = 'csv_utc_assumed'` (explicit offsets, no detection needed).
+After Pass 1:
+- If `naiveRows.length > 0`: call `detectCsvTimezone(naiveRows.map(r => r.ts))`.
+- If all explicit: `timezone_detection = { source: 'csv_utc_assumed', detection_signals:
+  { ..., confidence: 'high' }, warnings: [] }`.
 
 **Pass 2:** resolve naive rows using `timezone_detection`:
-- If `source === 'csv_local_detected'`: call `londonToUtc(ts)` for each naive timestamp.
-  Spring-gap error → skip row with warning (same as v1).
-  Autumn-back duplicate handling (see Step 8).
-- If UTC or assumed UTC: treat naive timestamp as UTC directly (`ts + 'Z'` after basic
-  validation).
+- `source === 'csv_local_detected'`: call `londonToUtc(ts)` for each. Spring-gap error →
+  skip with warning. Autumn-back → Step 8.
+- UTC or assumed UTC: treat naive timestamp as UTC (`ts + 'Z'`).
 
-Merge explicit and converted-naive rows into `records` array, sorted by `interval_start`.
+Merge explicit + converted-naive rows; sort by `interval_start`.
 
-### Step 8 — Autumn-back disambiguation in `parseCSV()`
+#### Step 8 — Autumn-back disambiguation in Pass 2
 
-During Pass 2, when `source === 'csv_local_detected'`, track UTC timestamps in
-`utcTimestampMap` as before, but on collision:
-- **Do not reject.** Instead: first occurrence maps to UTC 00:00 (BST), second to UTC 01:00
-  (GMT). Achieves this by checking which of the two `londonToUtc()` results would apply —
-  the function already handles this correctly via the round-trip check for the first
-  occurrence (BST reads back as 01:00 local; GMT reads back as 01:00 local too, but at
-  different UTC). Implement by tracking autumn-back date explicitly: on that date, first
-  `01:00` row → UTC 00:00, second → UTC 01:00 via direct UTC offset arithmetic.
+When `source === 'csv_local_detected'`, on the autumn-back date:
+- First `01:00` naive → UTC `00:00` (BST); second `01:00` naive → UTC `01:00` (GMT).
+- Implement using direct UTC offset arithmetic, tracking first/second occurrence explicitly —
+  not relying on `londonToUtc()` return value alone.
 
-For UTC-assumed paths: if a naive duplicate occurs (not on a known autumn-back date), emit
-a warning and skip the second row (ambiguous, not a known DST transition).
+For UTC-assumed paths: naive duplicate not on a known autumn-back date → warn and skip
+second row.
 
-### Step 9 — Update `days_with_data` check in `parseCSV()`
+---
 
-Replace the existing calendar-span check:
+### Group B — `days_with_data` gate
+
+#### Step 9 — Replace `parseCSV()` sufficiency check
+
+Replace the `rangeDays < CONFIG.MIN_DAYS_FOR_ANALYSIS` block with:
 
 ```js
-// OLD
-const rangeDays = rangeMs / (24 * 60 * 60 * 1000);
-if (rangeDays < CONFIG.MIN_DAYS_FOR_ANALYSIS) { ... }
-```
-
-With a non-blank-day count:
-
-```js
-// NEW — count distinct days that have at least one row present
 const daysPresent = new Set(records.map(r => r.interval_start.slice(0, 10))).size;
 if (daysPresent < CONFIG.MIN_DAYS_WITH_DATA) {
-  errors.push(`Only ${daysPresent} days of data found. At least ${CONFIG.MIN_DAYS_WITH_DATA} days are needed for a reliable analysis. See the instructions above for the minimum data requirements.`);
+  errors.push(
+    `Only ${daysPresent} days of data found. ` +
+    `At least ${CONFIG.MIN_DAYS_WITH_DATA} days with readings are needed for a reliable analysis.`
+  );
 }
 ```
 
-Return `timezone_detection` and `days_with_data` (= `daysPresent`) on the `parseCSV()`
-result alongside `records` and `errors`:
+Return `{ records, errors, timezone_detection, days_with_data: daysPresent }`.
 
-```js
-return { records, errors, timezone_detection, days_with_data: daysPresent };
-```
+#### Step 10 — Add `days_with_data` to `normaliseConsumption()`
 
-### Step 10 — Add `days_with_data` to `normaliseConsumption()`
+In the HH iteration loop, accumulate a `Set` of date strings for slots with ≥1 non-null
+reading; add `days_with_data: daysWithDataSet.size` to the returned `metadata`.
 
-In the loop that builds `consumption[]`, count distinct days with at least one non-null
-reading:
+#### Step 11 — Remove scattered sufficiency checks from `app.js`
 
-```js
-const daysWithDataSet = new Set();
-for (let ts = startMs; ts < endMs; ts += CONFIG.HH_INTERVAL_MS) {
-  const isoStr = new Date(ts).toISOString();
-  const elecVal = elecMap.has(isoStr) ? elecMap.get(isoStr) : null;
-  const gasVal  = gasMap.has(isoStr)  ? gasMap.get(isoStr)  : null;
-  if (elecVal !== null || gasVal !== null) {
-    daysWithDataSet.add(isoStr.slice(0, 10));
-  }
-  // ... existing gapCount logic unchanged
-}
-```
+Remove all four blocks from the research table. Then remove `WARNING_DAYS_THRESHOLD` and
+`GAP_WARNING_PERCENTAGE` from CONFIG in `data-ingestion.js` — grep all files in `js/`
+first to confirm no other consumers before deleting.
 
-Add to `metadata` return: `days_with_data: daysWithDataSet.size`.
+#### Step 12 — Octopus path: `timezone_detection` stub + `days_with_data` popup
 
-### Step 11 — Octopus path `timezone_detection` + `days_with_data` check
-
-In `app.js`, where the Octopus ingestion result is assembled (after `normaliseConsumption()`
-is called), add:
+In `app.js`, after `normaliseConsumption()`:
 
 ```js
 const timezone_detection = {
@@ -229,34 +243,161 @@ const timezone_detection = {
 };
 ```
 
-After `normaliseConsumption()` returns, check `metadata.days_with_data`:
-
 ```js
 if (normResult.metadata.days_with_data < CONFIG.MIN_DAYS_WITH_DATA) {
-  // Surface pop-up / inline warning to user
   showInsufficientDataWarning(normResult.metadata.days_with_data);
-  // Do not block — allow pipeline to continue with warning visible
 }
 ```
 
-`showInsufficientDataWarning()` is a new minimal helper in app.js that reveals an existing
-or new `#insufficient-data-warning` element in index.html, pre-filled with the day count.
-Add the element to index.html in the CSV/Octopus input section.
+`showInsufficientDataWarning()` reveals `#insufficient-data-warning` in index.html. The
+Octopus pipeline continues past this check (reactive/informational per design doc §2.5.6).
 
-### Step 12 — Wire into M1 result envelope
+Add `<div id="insufficient-data-warning" class="hidden status-msg warning"></div>` to the
+Octopus input section of `index.html`.
 
-Wherever `setIngestionResult()` is called in `app.js`, include `timezone_detection` and
-`days_with_data` in the result object stored. These are consumed by:
-- The CSV input card UI (warnings surfaced to user)
-- Integration-v2 §6.1 (data-sufficiency gate)
+---
 
-No downstream module (M2–M9) consumes `timezone_detection` — it is display-only on the
-input card.
+### Group C — Region
 
-### Step 13 — Update `CLAUDE.md` status block
+#### Step 13 — No change needed
 
-Add entry for `m1-data-ingestion-v2` to the Current Sequencing Position checklist once
-implemented.
+CSV `gsp-region` dropdown is already correct — plain user-selected list with blank first
+option, no default, no postcode interaction. Verify only; no code changes.
+
+---
+
+### Group D — CSV rate field removal
+
+#### Step 14 — Remove CSV rate field reads from `app.js`
+
+Before touching the HTML, audit all reads of `csv-gas-rate`, `csv-elec-rate`,
+`csv-gas-standing`, `csv-elec-standing` in `app.js`. Remove each read and any downstream
+usage that would break when the elements are absent (values passed to m8 via the M1
+result envelope, or used in `prefillRateInputs()`). In v2, m2 owns these rates.
+
+#### Step 15 — Remove CSV rate form fields from `index.html`
+
+After Step 14, remove the two `.form-row` blocks containing the four rate inputs.
+
+⚠️ Design doc §10 flags this for Rhiannon confirmation. Do not implement until confirmed
+at plan review.
+
+---
+
+### Group E — Demo-archetype source path
+
+#### Step 16a — Add `gsp_region` to each archetype config
+
+Add a `"gsp_region": "<letter>"` field to each `demo-configs/*.json`. The region is a GSP
+letter (A–P) appropriate to the archetype's postcode:
+
+| Archetype | Postcode | Expected region |
+|-----------|----------|-----------------|
+| `modern-out-for-work` | CB1 2BX (Cambridge) | A — Eastern England |
+| `average-in-all-day` | TBD — read config | TBD |
+| `small-and-efficient` | TBD — read config | TBD |
+| `big-old-draughty` | TBD — read config | TBD |
+
+Read each config to confirm postcodes and assign correct GSP letters before writing.
+
+#### Step 16b — Create `scripts/bake-demos.mjs`
+
+New Node.js script. For each of the 4 archetype configs:
+1. Read `demo-configs/{slug}.json` → get `slug`, `postcode`, `gsp_region`.
+2. Read `bake-output/{slug}/{slug}.csv` → raw consumption CSV.
+3. Call `parseCSV(csvContent)` from `js/data-ingestion.js` → `{ records, errors,
+   days_with_data }`.
+4. If errors, abort with a message (bake output must be clean).
+5. Call `normaliseConsumption(records, null, null)` (or equivalent) → `{ consumption,
+   metadata }`.
+6. Write `data/demos/{slug}.json`:
+```json
+{
+  "slug": "...",
+  "postcode": "...",
+  "region": "A",
+  "days_with_data": 365,
+  "consumption": [...],
+  "metadata": { ... }
+}
+```
+
+Run via `node scripts/bake-demos.mjs` — no arguments needed (loops all 4 configs).
+
+#### Step 16c — Run bake-demos.mjs and commit outputs
+
+Run the script. Confirm all 4 `data/demos/*.json` files are generated without errors.
+Commit them to the repo (already gitignore-exempt).
+
+#### Step 17 — `loadDemoArchetype(archetypeId)` + archetype ID list (`data-ingestion.js`)
+
+Export a canonical archetype list:
+```js
+export const DEMO_ARCHETYPES = [
+  { id: 'modern-out-for-work',  label: 'Modern home, out for work' },
+  { id: 'average-in-all-day',   label: 'Average home, in all day' },
+  { id: 'small-and-efficient',  label: 'Small and efficient home' },
+  { id: 'big-old-draughty',     label: 'Big old draughty house' },
+];
+```
+
+Export a load function:
+```js
+export async function loadDemoArchetype(archetypeId) {
+  const resp = await fetch(`data/demos/${archetypeId}.json`);
+  if (!resp.ok) throw new Error(`Demo dataset not found: ${archetypeId}`);
+  const data = await resp.json();
+  return {
+    consumption: data.consumption,
+    postcode: data.postcode,
+    gsp_region: data.region,
+    days_with_data: data.days_with_data,
+    metadata: data.metadata,
+    tariff_rates: null,
+    timezone_detection: {
+      source: 'demo',
+      detection_signals: { autumn_back_observed: null, spring_forward_observed: null, confidence: 'high' },
+      warnings: [],
+    },
+  };
+}
+```
+
+#### Step 18 — Demo pipeline wire-up in `app.js` + minimal test trigger
+
+In `app.js`: add a `runDemoPipeline(archetypeId)` function that calls
+`loadDemoArchetype(archetypeId)` → passes result to `setIngestionResult()` → proceeds to
+analysis (same path as Octopus/CSV after `setIngestionResult()`).
+
+In `index.html`: add a minimal bare test trigger — a hidden `<div id="demo-triggers">` with
+one button per archetype (e.g. `<button class="demo-btn" data-id="modern-out-for-work">`).
+Wire buttons to `runDemoPipeline()` in app.js. These are **not the visual "Demo Profiles"
+tab** — that ships with the UI plan. This is a functional scaffold for CLI/browser
+verification only; the UI plan will replace it with the designed tab.
+
+---
+
+### Group F — M1 result envelope + final wiring
+
+#### Step 19 — Verify Octopus region in M1 result envelope
+
+Confirm `gsp_region` from `prop.gsp_region` flows through `setIngestionResult()`. No code
+change expected; flag any deviation in the deviations section.
+
+#### Step 20 — Wire `timezone_detection` and `days_with_data` into all path envelopes
+
+- **CSV path:** include `timezone_detection` + `days_with_data` (returned from `parseCSV()`)
+  in the `setIngestionResult()` call.
+- **Octopus path:** include `timezone_detection` stub from Step 12 + `days_with_data` from
+  `normaliseConsumption()` metadata.
+- **Demo path:** `loadDemoArchetype()` returns both directly — pass through to
+  `setIngestionResult()`.
+
+`timezone_detection` is display-only on the input card; no downstream module consumes it.
+
+#### Step 21 — Update CLAUDE.md status block
+
+Add entry for `m1-data-ingestion-v2` to the Current Sequencing Position checklist.
 
 ---
 
@@ -264,37 +405,34 @@ implemented.
 
 | Risk | Mitigation |
 |------|-----------|
-| Two-pass restructure of `parseCSV()` introduces regression in explicit-tz rows | Explicit-tz path is unchanged from v1 (same regex, same `new Date()` parse). Pass 1 just stores them separately. |
-| Autumn-back disambiguation logic is subtle | Design doc §4.2 Step 4 + §5 specifies row-order preservation. Implement by tracking first/second occurrence on the exact transition date, not by relying on `londonToUtc()` return values alone. Cover with test criterion 7. |
-| Spring-forward gap check false-positive when meter gap coincides with 01:00–01:30 | Step 5 requires `00:30` and `02:00` present on the same date to confirm the gap is a DST signal. Meter gaps typically extend beyond 01:00–01:30. |
-| `days_with_data < 90` reject breaks users who previously passed the `< 30` span check | Intentional per design doc §4.4 — the 90-day gate is a tighter, more correct threshold. Copy explains the requirement up front. |
-| Octopus pop-up for `< 90` days — no existing UI element | Step 11 adds a minimal `#insufficient-data-warning` element. Full UI treatment is a UI plan concern; this plan only wires the logic and reveals the element. |
+| Two-pass `parseCSV()` restructure introduces regression on explicit-timezone rows | Explicit-tz path logic unchanged (same regex, same `new Date()` parse). Pass 1 only separates them into a different array. |
+| Autumn-back disambiguation — row-order dependency is subtle | Implement via direct UTC offset arithmetic on the transition date, tracking first/second occurrence explicitly. |
+| Spring-forward false-positive when a meter gap coincides with 01:00–01:30 | Step 5 requires `00:30` and `02:00` present before confirming the gap. Real meter gaps typically extend beyond 01:00–01:30. |
+| `WARNING_DAYS_THRESHOLD` / `GAP_WARNING_PERCENTAGE` may have undiscovered consumers | Grep all `js/` files for both constant names before removing from CONFIG. |
+| CSV rate field removal breaks downstream code that still reads those element IDs | Step 14 audits and removes all reads before Step 15 removes the HTML. Rate CONFIG defaults remain until m2. |
+| `bake-demos.mjs` imports `parseCSV` from a browser ES module into Node.js | `data-ingestion.js` uses browser APIs (fetch, DOM) — the import may fail in Node. Workaround: replicate only the parsing logic needed, or use a dynamic import with mocked globals. Flag as implementation risk; resolve at implementation time. |
+| Demo JSON `region` field must match what `setIngestionResult()` expects (`gsp_region`) | `loadDemoArchetype()` maps `data.region → gsp_region` explicitly (Step 17). |
+| Labels for `average-in-all-day`, `small-and-efficient`, `big-old-draughty` in `DEMO_ARCHETYPES` — confirm exact wording from config `label` fields | Read each `demo-configs/*.json` for canonical label text before hardcoding in Step 17. |
 
 ---
 
 ## Success criteria
 
-- [ ] `parseCSV()` with a CSV containing `Z`-suffixed timestamps: `timezone_detection.source`
-      = `'csv_utc_assumed'`; no warning; timestamps unchanged.
-- [ ] CSV with naive timestamps spanning autumn 2025-10-26 (duplicated 01:00-01:30) and
-      spring 2026-03-29 (missing 01:00-01:30): `source = 'csv_local_detected'`;
-      `confidence = 'high'`; both signals `true`; timestamps converted to UTC.
-- [ ] CSV with naive timestamps, autumn transition only: `confidence = 'medium'`;
-      `spring_forward_observed = null`; converted; medium-confidence warning surfaced.
-- [ ] CSV with naive timestamps, no DST transitions in range: `source =
-      'csv_uncertain_assumed_utc'`; `confidence = 'low'`; verbose warning surfaced.
-- [ ] Contradictory signals (autumn true, spring false): `source =
-      'csv_uncertain_assumed_utc'`; `confidence = 'low'`; contradiction warning surfaced;
-      pipeline not blocked.
-- [ ] Autumn-back row-order disambiguation: first `01:00` row on transition date → UTC
-      `00:00`; second `01:00` row → UTC `01:00`.
-- [ ] CSV with `days_with_data < 90` non-blank days: rejected at load with copy referencing
-      the 90-day requirement.
-- [ ] Octopus path: `timezone_detection.source = 'octopus'`; no detection logic runs;
-      `days_with_data` present on normalised metadata.
-- [ ] Octopus path with `days_with_data < 90`: pop-up / warning surfaced; pipeline continues.
-- [ ] All existing M1 tests (Octopus path, gas-unit detection, meter stitching) unaffected.
-- [ ] All existing module test suites (M3, M5, M5b, M6, M7, M8, M9) still green after change.
+- [ ] `parseCSV()` with `Z`-suffixed timestamps: `timezone_detection.source = 'csv_utc_assumed'`; no warning; timestamps unchanged.
+- [ ] CSV with naive timestamps spanning 2025-10-26 + 2026-03-29 (both transitions): `source = 'csv_local_detected'`; `confidence = 'high'`; converted to UTC.
+- [ ] CSV, autumn-only naive: `confidence = 'medium'`; `spring_forward_observed = null`; converted; medium-confidence warning shown.
+- [ ] CSV, summer-only naive: `source = 'csv_uncertain_assumed_utc'`; `confidence = 'low'`; verbose warning shown.
+- [ ] Contradictory signals: `source = 'csv_uncertain_assumed_utc'`; `confidence = 'low'`; pipeline not blocked.
+- [ ] Autumn-back row-order: first `01:00` → UTC `00:00`; second `01:00` → UTC `01:00`.
+- [ ] CSV with `days_with_data < 90` non-blank days: blocked with 90-day message; no calendar-span check fires.
+- [ ] `days_with_data ≥ 90`: proceeds; old `<90` warning and gap-percentage warning absent.
+- [ ] Octopus path: `timezone_detection.source = 'octopus'`; `days_with_data` on metadata; popup shown if `< 90`.
+- [ ] CSV `gsp-region` dropdown unchanged — blank first option, no pre-selection.
+- [ ] CSV rate form fields absent from UI (once confirmed at plan review).
+- [ ] `DEMO_ARCHETYPES` exported constant lists all 4 archetype IDs.
+- [ ] `loadDemoArchetype('modern-out-for-work')` returns correct consumption[], postcode, gsp_region, days_with_data, timezone_detection.
+- [ ] Demo minimal test trigger: clicking a demo button loads the archetype, calls setIngestionResult(), and proceeds to analysis.
+- [ ] All existing module test suites (M3, M5, M5b, M6, M7, M8, M9) still green.
 
 ---
 
