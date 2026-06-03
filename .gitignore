@@ -9,7 +9,7 @@ desktop.ini
 *.swo
 *~
 
-# Node dependencies (never committed; no package.json — installed ad-hoc when needed)
+# Node dependencies (node_modules excluded; package.json committed for devDependencies)
 node_modules/
 
 # Test data (never commit user consumption data)
@@ -30,6 +30,10 @@ bake-test-tmp/
 # Shipped demo files (exempt from *.csv exclusion)
 !data/demos/*.csv
 !data/demos/*.json
+
+# M2 reference rate tables (canonical source for JS constants; committed)
+!data/agile-regional-rates.csv
+!data/regional-standing-charges.csv
 
 # Committable noise calibration output (exempt from test-data/ exclusion)
 !test-data/noise-config.json

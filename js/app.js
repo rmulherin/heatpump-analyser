@@ -26,6 +26,7 @@ import {
   needsFallback,
   buildExpectedHours,
   alignExternalData,
+  buildBaseTariffs,
   buildExternalMetadata,
   fetchAgileCalibration,
   setExternalResult,
@@ -66,7 +67,6 @@ import {
   prepareRates, computeCosts,
   setRateMetadata, getRateMetadata,
   setPricingResult, getPricingResult,
-  PE_CONFIG,
 } from './pricing-engine.js';
 
 import {
@@ -308,10 +308,9 @@ function parseRate(input, fallback) {
 function readRateParams() {
   const gasRate = parseFloat(wiGasRateInput.value);
   return {
-    svt_rate_p_per_kwh:      parseRate(wiSvtRateInput,      PE_CONFIG.SVT_RATE_DEFAULT_P),
-    svt_standing_charge_p:   parseRate(wiElecStandingInput, PE_CONFIG.ELEC_STANDING_DEFAULT_P_DAY),
-    gas_standing_charge_p:   parseRate(wiGasStandingInput,  PE_CONFIG.GAS_STANDING_DEFAULT_P_DAY),
-    ofgem_cap_elec_p_kwh:    OFGEM_CAP_ELEC_P_KWH,
+    svt_rate_p_per_kwh:      parseRate(wiSvtRateInput,      null),
+    svt_standing_charge_p:   parseRate(wiElecStandingInput, null),
+    gas_standing_charge_p:   parseRate(wiGasStandingInput,  null),
     gas_rate_override_p_kwh: Number.isFinite(gasRate) ? gasRate : null,
   };
 }
@@ -911,40 +910,41 @@ async function runExternalData(showProgressFn, showStatusFn) {
     }
   }
 
-  // Step 5: Align external data to consumption timeline
+  // Step 5: Align external data to consumption timeline (weather only)
   showProgressFn('Aligning external data…');
-  const external = alignExternalData(consumption, weatherMap, priceLookup);
+  const external = alignExternalData(consumption, weatherMap);
 
   // Step 6: Agile calibration
   const agileCalResult = await fetchAgileCalibration(ingestion?.gsp_region ?? null);
 
-  // Merge null_wholesale_fraction — computed here where both fetch results are visible
-  const wholesaleArr   = external.map(e => e.wholesale_p_kwh ?? null);
-  const totalSlots     = wholesaleArr.length;
-  const nullSlots      = wholesaleArr.filter(w => w === null).length;
-  const null_wholesale_fraction = totalSlots > 0 ? nullSlots / totalSlots : 1.0;
-
-  const agileCalibration = agileCalResult
-    ? { ...agileCalResult, null_wholesale_fraction }
-    : { D: 2.2, P_peak_p_kwh: 12,
-        D_sample_count: 0, P_sample_count: 0,
-        null_wholesale_fraction, source: 'default' };
+  // Step 6b: Build base tariffs — M2 is sole owner of operative rate arrays
+  const {
+    hh_rate, gas_rate, flat_rate, standing_charge,
+    null_wholesale_fraction, coverage_warnings, non_null_wholesale_count,
+  } = buildBaseTariffs(
+    consumption, priceLookup, agileCalResult,
+    ingestion.tariff_rates, ingestion.gsp_region ?? null
+  );
+  agileCalResult.null_wholesale_fraction = null_wholesale_fraction;
 
   // Step 7: Build metadata
   const externalMetadata = buildExternalMetadata(
-    latitude, longitude, elevation_m, weatherSource, priceSource, priceWarnings, agileCalibration
+    latitude, longitude, elevation_m, weatherSource, priceSource, priceWarnings, coverage_warnings
   );
 
   // Step 8: Store result
-  setExternalResult({ external, external_metadata: externalMetadata });
+  setExternalResult({
+    external, hh_rate, gas_rate, flat_rate, standing_charge,
+    agile_calibration: agileCalResult,
+    external_metadata: externalMetadata,
+  });
 
   // Step 9: Show summary
   const weatherCount = external.filter(e => e.temp_c !== null).length;
-  const priceCount = external.filter(e => e.wholesale_p_kwh !== null).length;
   const gapCount = external.filter(e => e.temp_c === null).length;
 
   showStatusFn(
-    `External data loaded. Weather: ${weatherCount} periods. Wholesale prices: ${priceCount} periods (${priceSource}). Gaps: ${gapCount}.`,
+    `External data loaded. Weather: ${weatherCount} periods. Wholesale prices: ${non_null_wholesale_count} periods (${priceSource}). Gaps: ${gapCount}.`,
     'success'
   );
 }
@@ -1527,28 +1527,6 @@ async function runHeatPumpModel(showProgressFn, showStatusFn) {
 
 // ===== Module 7: Scenario Consumption =====
 
-function buildRateArrays(consumption, external, tariffRates) {
-  const n = consumption.length;
-  const gasRateByHh    = new Array(n);
-  const elecHhRateByHh = new Array(n);
-
-  const gasWindows = [...tariffRates.gas].sort((a, b) =>
-    new Date(a.valid_from) - new Date(b.valid_from));
-
-  for (let i = 0; i < n; i++) {
-    const tsDate = new Date(consumption[i].timestamp);
-
-    let gasRate = null;
-    for (const w of gasWindows) {
-      if (new Date(w.valid_from) > tsDate) break;
-      if (!w.valid_to || new Date(w.valid_to) > tsDate) gasRate = w.rate_p_kwh;
-    }
-    gasRateByHh[i]    = gasRate;
-    elecHhRateByHh[i] = external[i]?.wholesale_p_kwh ?? null;
-  }
-
-  return { gasRateByHh, elecHhRateByHh };
-}
 
 const SCENARIO_LABELS = {
   current:     'Your current boiler',
@@ -1629,9 +1607,8 @@ async function runScenarioConsumption(showProgressFn, showStatusFn) {
   // Yield to the browser so the progress message paints before the greedy LP runs
   await new Promise(r => setTimeout(r, 0));
 
-  const agileCalibration  = externalResult.external_metadata?.agile_calibration ?? null;
-  const rateParamsForM7   = { ...readRateParams(), agile_calibration: agileCalibration };
-  const rateMetadataForM7 = prepareRates(ingestion, externalResult.external, rateParamsForM7);
+  const rateParamsForM7   = { ...readRateParams() };
+  const rateMetadataForM7 = prepareRates(ingestion, externalResult, rateParamsForM7);
   setRateMetadata(rateMetadataForM7);
   const gasRateByHh    = rateMetadataForM7.gas_rate_by_hh;
   const elecHhRateByHh = rateMetadataForM7.elec_hh_rate_by_hh;
@@ -1713,14 +1690,14 @@ function displayPricingResults(pricingResult) {
   const rateMetadata = getRateMetadata();
 
   // Coverage warning — three-tier based on null_wholesale_fraction
-  const cal      = getExternalResult()?.external_metadata?.agile_calibration ?? null;
+  const cal      = getExternalResult()?.agile_calibration ?? null;
   const fraction = cal?.null_wholesale_fraction ?? 0;
-  const calSource = rateMetadata?.calibration_source ?? 'fetched';
+  const calSource = rateMetadata?.calibration_source ?? 'unknown';
 
   let coverageWarning = '';
   let hhScenariosInsufficient = false;
 
-  if (calSource === 'default') {
+  if (calSource === 'national_default') {
     coverageWarning = `<p class="status-msg warning">Couldn't fetch live Agile rates for your region. Half-hourly tariff scenarios use typical UK averages (D=2.2, P=12 p/kWh peak). Numbers are indicative; your actual Agile rate will differ.</p>`;
   } else if (fraction > HH_COVERAGE_INSUFFICIENT_THRESHOLD) {
     hhScenariosInsufficient = true;
@@ -1816,8 +1793,8 @@ function displayPricingResults(pricingResult) {
 
 function buildEffectivePricingResult(pricingResult, scenarioResult, rateMetadata) {
   const fraction       = rateMetadata?.agile_calibration?.null_wholesale_fraction ?? 0;
-  const calSrc         = rateMetadata?.calibration_source ?? 'fetched';
-  const hhInsufficient = calSrc !== 'default' && fraction > HH_COVERAGE_INSUFFICIENT_THRESHOLD;
+  const calSrc         = rateMetadata?.calibration_source ?? 'unknown';
+  const hhInsufficient = calSrc !== 'national_default' && fraction > HH_COVERAGE_INSUFFICIENT_THRESHOLD;
   const smartNotOk     = !['ok', 'hp_undersized'].includes(
     scenarioResult?.validation_status?.smart
   );
@@ -1849,13 +1826,9 @@ async function runPricingEngine(showProgressFn, showStatusFn) {
   }
 
   showProgressFn('Computing tariff rates…');
-  const baseloadResult   = getBaseloadResult();
-  const agileCalibration = getExternalResult()?.external_metadata?.agile_calibration ?? null;
-  const params = {
-    ...readRateParams(),
-    agile_calibration: agileCalibration,
-  };
-  const rateMetadata = prepareRates(ingestion, external.external, params);
+  const baseloadResult = getBaseloadResult();
+  const params = { ...readRateParams() };
+  const rateMetadata = prepareRates(ingestion, external, params);
   setRateMetadata(rateMetadata);
 
   showProgressFn('Computing scenario costs…');
@@ -2070,7 +2043,7 @@ function populateDroveTile(financialResult, heatLossResult, rateMetadata, primar
       : null;
     elecLabel.textContent = 'Electricity (half-hourly)';
     elecVal.textContent   = avgHhRate != null ? `${avgHhRate.toFixed(1)} p/kWh average` : 'Not available';
-    const region = externalRes?.external_metadata?.agile_calibration?.gsp_region ?? 'regional pricing';
+    const region = externalRes?.agile_calibration?.gsp_region ?? 'regional pricing';
     if (avgHhRate != null && avgHhRate < plausibility_floor) {
       elecCtx.textContent = `Agile tariff — region ${region}. Note: the displayed average (${avgHhRate.toFixed(1)} p/kWh) is below the Ofgem cap (${OFGEM_CAP_ELEC_P_KWH.toFixed(2)} p/kWh). This suggests either an off-peak-heavy heating pattern or a data quality issue. See coverage warning above for details.`;
     } else {
@@ -2078,7 +2051,7 @@ function populateDroveTile(financialResult, heatLossResult, rateMetadata, primar
     }
   } else if (primaryKey === 'dumb_hp_svt') {
     elecLabel.textContent = 'Electricity (flat rate)';
-    elecVal.textContent   = `${(rateMetadata?.svt_rate_p_per_kwh ?? 0).toFixed(1)} p/kWh`;
+    elecVal.textContent   = `${(rateMetadata?.flat_rate_by_hh?.[0] ?? 0).toFixed(1)} p/kWh`;
     elecCtx.textContent   = 'Standard variable tariff';
   } else {
     elecLabel.textContent = 'Electricity';
@@ -3129,7 +3102,6 @@ window.__getHeatLossResult            = () => getHeatLossResult();
 window.__getThermalCharacterResult    = () => getThermalCharacterResult();
 window.__getHeatPumpModelResult       = () => getHeatPumpModelResult();
 window.__getScenarioConsumptionResult = () => getScenarioConsumptionResult();
-window.__buildRateArrays              = (cs, ex, tr) => buildRateArrays(cs, ex, tr);
 window.__getRateMetadata              = () => getRateMetadata();
 window.__getPricingResult = () => {
   const pr   = getPricingResult();

@@ -1,0 +1,15 @@
+region_code,region_name,multiplier_d,peak_adder_p_pence_per_kwh
+A,Eastern England,2.10,13
+B,East Midlands,2.00,14
+C,London,2.00,12
+D,Merseyside & Northern Wales,2.20,13
+E,West Midlands,2.10,12
+F,North East England,2.10,12
+G,North West England,2.10,12
+H,Southern England,2.10,12
+J,South East England,2.20,12
+K,Southern Wales,2.20,12
+L,South West England,2.30,11
+M,Yorkshire,2.00,13
+N,Southern Scotland,2.10,13
+P,Northern Scotland,2.40,12

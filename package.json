@@ -1,0 +1,6 @@
+{
+  "type": "module",
+  "devDependencies": {
+    "luxon": "3.5.0"
+  }
+}

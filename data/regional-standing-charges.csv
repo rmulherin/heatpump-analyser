@@ -1,0 +1,19 @@
+# PENDING_SOURCE — provisional national Ofgem-cap estimates for all regions.
+# Northern Scotland (P) is known to carry higher distribution costs; current value is wrong.
+# Replace all rows with genuine regional Ofgem-cap standing charges before v2 launch.
+# Source: https://www.ofgem.gov.uk/information-for-household-consumers/energy-price-cap
+region_code,region_name,gas_standing_p_day,elec_standing_p_day
+A,Eastern England,31.66,61.64
+B,East Midlands,31.66,61.64
+C,London,31.66,61.64
+D,Merseyside & Northern Wales,31.66,61.64
+E,West Midlands,31.66,61.64
+F,North East England,31.66,61.64
+G,North West England,31.66,61.64
+H,Southern England,31.66,61.64
+J,South East England,31.66,61.64
+K,Southern Wales,31.66,61.64
+L,South West England,31.66,61.64
+M,Yorkshire,31.66,61.64
+N,Southern Scotland,31.66,61.64
+P,Northern Scotland,31.66,61.64

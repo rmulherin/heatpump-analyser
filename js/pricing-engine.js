@@ -2,25 +2,11 @@
 // Applies tariff rates to M7 scenario consumption to produce annual costs and monthly breakdowns.
 
 export const PE_CONFIG = {
-  SVT_RATE_DEFAULT_P:          24.50,   // Ofgem Q2 2026 price cap
-  ELEC_STANDING_DEFAULT_P_DAY: 61.64,
-  GAS_STANDING_DEFAULT_P_DAY:  31.66,
-  HH_OVERHEAD_DEFAULT_P:       13.00,   // retained for backward compat; no longer used in HH rate
   EXTREME_NEG_WHOLESALE_P:    -20.0,    // warn threshold (p/kWh)
   PARTIAL_MONTH_DAY_THRESHOLD: 20,      // < this days in month → partial: true
   MIN_DAYS_WARN:               90,      // < 90 days → annual estimate reliability warning
 };
 
-const D_DEFAULT            = 2.2;   // mid of typical UK regional D range (2.0–2.4)
-const P_DEFAULT_PEAK_P_KWH = 12;    // mid of typical UK P range (8–16 p/kWh)
-
-function isPeakHour(tsDate) {
-  const hour = parseInt(
-    new Intl.DateTimeFormat('en-GB', {
-      timeZone: 'Europe/London', hour: 'numeric', hour12: false,
-    }).format(tsDate), 10);
-  return hour >= 16 && hour < 19;
-}
 
 const SCENARIO_FUELS = {
   current:     ['gas', 'electricity'],
@@ -48,131 +34,45 @@ export function getRateMetadata()   { return _rateMetadata; }
 export function setPricingResult(r) { _pricingResult = r; }
 export function getPricingResult()  { return _pricingResult; }
 
-// ===== Null-wholesale imputation =====
-
-const IMPUTE_MIN_WINDOW_SAMPLES = 50; // minimum non-null slots in 7-day window to use window mean
-
-function imputeWholesaleForSlot(i, wholesale_array, global_mean_known, D, ofgem_cap) {
-  const window_start = Math.max(0, i - 336); // preceding 7 days × 48 HHs
-  const window_slots = wholesale_array.slice(window_start, i)
-                                      .filter(w => w !== null);
-  if (window_slots.length >= IMPUTE_MIN_WINDOW_SAMPLES) {
-    return window_slots.reduce((s, w) => s + w, 0) / window_slots.length;
-  }
-  if (global_mean_known !== null) return global_mean_known;
-  return ofgem_cap / D; // last resort: entire fetch null
-}
-
 // ===== Phase A: prepareRates =====
 
-export function prepareRates(ingestion, external, params) {
+export function prepareRates(ingestion, m2Result, params) {
   const warnings = [];
 
-  const gasWindows = [...ingestion.tariff_rates.gas]
-    .sort((a, b) => new Date(a.valid_from) - new Date(b.valid_from));
-
   const n = ingestion.consumption.length;
-  const gas_rate_by_hh     = new Array(n);
-  const elec_hh_rate_by_hh = new Array(n);
-  let warnedGapTariff = false;
-  let hasExtremeNeg   = false;
-
-  // Agile D×W+P calibration — validate fetched values, fall back to safe defaults
-  const D_MIN = 1.5, D_MAX = 3.0;
-  const P_MIN = 5,   P_MAX = 20;
-  const D_MIN_SAMPLES = 50;
-  const P_MIN_SAMPLES = 20;
-
-  const raw = params.agile_calibration;
-  const calibration_valid = raw
-    && raw.D            >= D_MIN && raw.D            <= D_MAX
-    && raw.P_peak_p_kwh >= P_MIN && raw.P_peak_p_kwh <= P_MAX
-    && (raw.D_sample_count ?? 0) >= D_MIN_SAMPLES
-    && (raw.P_sample_count ?? 0) >= P_MIN_SAMPLES;
-
-  const calibration = calibration_valid
-    ? raw
-    : { D: D_DEFAULT, P_peak_p_kwh: P_DEFAULT_PEAK_P_KWH, source: 'default' };
-
-  const { D, P_peak_p_kwh } = calibration;
-  const calibration_source = calibration.source ?? 'fetched';
-
-  // Pre-compute wholesale array and global mean for null-slot imputation
-  const wholesale_array = external.map(e => e?.wholesale_p_kwh ?? null);
-  const known_wholesale = wholesale_array.filter(w => w !== null);
-  const global_mean_known = known_wholesale.length > 0
-    ? known_wholesale.reduce((s, w) => s + w, 0) / known_wholesale.length
-    : null;
-  const ofgem_cap = params.ofgem_cap_elec_p_kwh ?? 24.67;
-
-  for (let i = 0; i < n; i++) {
-    const ts     = ingestion.consumption[i].timestamp;
-    const tsDate = new Date(ts);
-
-    // Gas rate — use override if provided (Policy Reform what-if), else tariff windowing
-    let gasRate;
-    if (params.gas_rate_override_p_kwh != null) {
-      gasRate = params.gas_rate_override_p_kwh;
-    } else {
-      // Forward scan through sorted windows
-      gasRate = null;
-      for (const w of gasWindows) {
-        if (new Date(w.valid_from) > tsDate) break;
-        if (!w.valid_to || new Date(w.valid_to) > tsDate) { gasRate = w.rate_p_kwh; break; }
-      }
-      if (gasRate === null) {
-        gasRate = gasWindows.findLast(w => new Date(w.valid_from) <= tsDate)?.rate_p_kwh
-               ?? gasWindows[0]?.rate_p_kwh ?? 0;
-        if (!warnedGapTariff) {
-          warnings.push('Gap in gas tariff history — using nearest rate for affected periods.');
-          warnedGapTariff = true;
-        }
-      }
-    }
-    gas_rate_by_hh[i] = gasRate;
-
-    // HH electricity rate — Agile D×W+P formula
-    const wholesale = external[i]?.wholesale_p_kwh;
-    const peak      = isPeakHour(tsDate);
-    if (wholesale === null || wholesale === undefined) {
-      const imputed = imputeWholesaleForSlot(i, wholesale_array, global_mean_known, D, ofgem_cap);
-      elec_hh_rate_by_hh[i] = D * imputed + (peak ? P_peak_p_kwh : 0);
-    } else {
-      elec_hh_rate_by_hh[i] = Math.min(
-        peak ? D * wholesale + P_peak_p_kwh : D * wholesale,
-        100,
-      );
-      if (wholesale < PE_CONFIG.EXTREME_NEG_WHOLESALE_P && !hasExtremeNeg) {
-        warnings.push('Extreme negative wholesale prices found — check Elexon data quality.');
-        hasExtremeNeg = true;
-      }
-    }
-  }
-
-  // Standing charges — most recent tariff period, fall back to params then PE_CONFIG
-  const gasArr  = ingestion.tariff_rates.gas;
-  const elecArr = ingestion.tariff_rates.electricity;
-  const gas_standing_p_day  = gasArr[gasArr.length - 1]?.standing_p_day
-                            ?? (params.gas_standing_charge_p  ?? PE_CONFIG.GAS_STANDING_DEFAULT_P_DAY);
-  const elec_standing_p_day = elecArr[elecArr.length - 1]?.standing_p_day
-                            ?? (params.svt_standing_charge_p ?? PE_CONFIG.ELEC_STANDING_DEFAULT_P_DAY);
-
   const data_period_days = new Set(
     ingestion.consumption.map(r => r.timestamp.slice(0, 10))
   ).size;
+
+  const agile_calibration = m2Result.agile_calibration;
+  const calibration_source = agile_calibration?.source ?? 'unknown';
+
+  // §14 overrides — uniform fill if provided; otherwise use m2Result per-HH arrays
+  const gas_rate_by_hh = params.gas_rate_override_p_kwh != null
+    ? new Array(n).fill(params.gas_rate_override_p_kwh)
+    : m2Result.gas_rate;
+
+  const flat_rate_by_hh = params.svt_rate_p_per_kwh != null
+    ? new Array(n).fill(params.svt_rate_p_per_kwh)
+    : m2Result.flat_rate;
+
+  const elec_hh_rate_by_hh = m2Result.hh_rate;
+
+  // Standing charges — §14 override, else m2Result
+  const gas_standing_p_day  = params.gas_standing_charge_p ?? m2Result.standing_charge.gas;
+  const elec_standing_p_day = params.svt_standing_charge_p ?? m2Result.standing_charge.elec;
 
   if (data_period_days === 0) {
     warnings.push('No consumption data found — cannot compute costs.');
     return {
       gas_rate_by_hh: [],
       elec_hh_rate_by_hh: [],
-      svt_rate_p_per_kwh:             params.svt_rate_p_per_kwh ?? PE_CONFIG.SVT_RATE_DEFAULT_P,
-      ofgem_cap_elec_p_kwh:           params.ofgem_cap_elec_p_kwh ?? null,
+      flat_rate_by_hh: [],
       gas_standing_charge_p_per_day:  gas_standing_p_day,
       elec_standing_charge_p_per_day: elec_standing_p_day,
       data_period_days: 0,
       calibration_source,
-      agile_calibration: calibration,
+      agile_calibration,
       consumption: ingestion.consumption,
       warnings,
     };
@@ -185,13 +85,12 @@ export function prepareRates(ingestion, external, params) {
   return {
     gas_rate_by_hh,
     elec_hh_rate_by_hh,
-    svt_rate_p_per_kwh:             params.svt_rate_p_per_kwh ?? PE_CONFIG.SVT_RATE_DEFAULT_P,
-    ofgem_cap_elec_p_kwh:           params.ofgem_cap_elec_p_kwh ?? null,
+    flat_rate_by_hh,
     gas_standing_charge_p_per_day:  gas_standing_p_day,
     elec_standing_charge_p_per_day: elec_standing_p_day,
     data_period_days,
     calibration_source,
-    agile_calibration: calibration,
+    agile_calibration,
     consumption: ingestion.consumption,
     warnings,
   };
@@ -220,9 +119,9 @@ function buildMonthGroups(consumption) {
   return result;
 }
 
-function electricityRateForHH(scenario, i, rateMetadata, svtRate) {
+function electricityRateForHH(scenario, i, rateMetadata) {
   if (scenario === 'current')     return 0;
-  if (scenario === 'dumb_hp_svt') return rateMetadata.ofgem_cap_elec_p_kwh ?? svtRate;
+  if (scenario === 'dumb_hp_svt') return rateMetadata.flat_rate_by_hh[i];
   return rateMetadata.elec_hh_rate_by_hh[i];
 }
 
@@ -231,9 +130,8 @@ function electricityRateForHH(scenario, i, rateMetadata, svtRate) {
 export function computeCosts(rateMetadata, scenarioResult, params, baseloadHeating = null) {
   const pricingWarnings = [];
 
-  const gasSc   = params.gas_standing_charge_p  ?? rateMetadata.gas_standing_charge_p_per_day;
-  const elecSc  = params.svt_standing_charge_p  ?? rateMetadata.elec_standing_charge_p_per_day;
-  const svtRate = params.svt_rate_p_per_kwh     ?? rateMetadata.svt_rate_p_per_kwh;
+  const gasSc  = params.gas_standing_charge_p ?? rateMetadata.gas_standing_charge_p_per_day;
+  const elecSc = params.svt_standing_charge_p ?? rateMetadata.elec_standing_charge_p_per_day;
 
   const monthGroups = buildMonthGroups(rateMetadata.consumption);
   const { scenarios, validation_status } = scenarioResult;
@@ -281,7 +179,7 @@ export function computeCosts(rateMetadata, scenarioResult, params, baseloadHeati
       const g = gas_kwh[i]  ?? 0;
       const e = elec_kwh[i] ?? 0;
       gas_pence  += g * rateMetadata.gas_rate_by_hh[i];
-      elec_pence += e * electricityRateForHH(name, i, rateMetadata, svtRate);
+      elec_pence += e * electricityRateForHH(name, i, rateMetadata);
     }
     const gas_energy_cost_gbp  = gas_pence  / 100;
     const elec_energy_cost_gbp = elec_pence / 100;
@@ -302,7 +200,7 @@ export function computeCosts(rateMetadata, scenarioResult, params, baseloadHeati
         const g = gas_kwh[i]  ?? 0;
         const e = elec_kwh[i] ?? 0;
         monthly_energy_pence += g * rateMetadata.gas_rate_by_hh[i]
-                              + e * electricityRateForHH(name, i, rateMetadata, svtRate);
+                              + e * electricityRateForHH(name, i, rateMetadata);
       }
       const monthly_sc_gbp = sc_pence_per_day * group.distinctDates / 100;
       monthly_breakdown.push({

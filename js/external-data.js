@@ -1,6 +1,8 @@
 // ===== External Data Module =====
 // Weather (Open-Meteo), wholesale prices (Elexon MID), postcode coordinates.
 // Aligns all external series to the unified HH UTC timeline from data-ingestion.
+// M2 is the single source of all operative base tariffs (HH Agile, flat/SVT elec,
+// gas, standing charges). Wholesale prices are M2-internal; external[] is weather-only.
 
 const { DateTime } = luxon;
 
@@ -19,6 +21,72 @@ const EXTERNAL_CONFIG = {
 
 const AGILE_REFORM_DATE  = new Date('2026-04-01T00:00:00Z');
 const AGILE_PRODUCT_CODE = 'AGILE-24-10-01';
+
+// ===== Ofgem price cap constants (M2-owned; relocated from PE_CONFIG) =====
+// Unit rates (p/kWh, national, quarterly). Used on CSV/demo path only;
+// API path uses m1's actual tariff timeline.
+// TO POPULATE: source the full quarterly schedule (Q1 2024→Q4 2026+) from
+// https://www.ofgem.gov.uk/check-if-energy-price-cap-affects-you before v2 launch.
+// Out-of-range quarters fall back to the nearest known value.
+const OFGEM_CAP_ELEC_BY_QUARTER = {
+  '2024-Q1': 24.50,  // PROVISIONAL — to source
+  '2024-Q2': 24.50,  // PROVISIONAL
+  '2024-Q3': 24.50,  // PROVISIONAL
+  '2024-Q4': 24.50,  // PROVISIONAL
+  '2025-Q1': 24.50,  // PROVISIONAL — to source
+  '2025-Q2': 24.50,  // PROVISIONAL
+  '2025-Q3': 24.50,  // PROVISIONAL
+  '2025-Q4': 24.50,  // PROVISIONAL
+  '2026-Q1': 24.50,  // PROVISIONAL (to source)
+  '2026-Q2': 24.50,  // confirmed (was PE_CONFIG.SVT_RATE_DEFAULT_P)
+  '2026-Q3': 24.50,  // PROVISIONAL
+  '2026-Q4': 24.50,  // PROVISIONAL
+};
+
+const OFGEM_CAP_GAS_BY_QUARTER = {
+  '2024-Q1': 5.90,   // PROVISIONAL
+  '2024-Q2': 5.90,   // PROVISIONAL
+  '2024-Q3': 5.90,   // PROVISIONAL
+  '2024-Q4': 5.90,   // PROVISIONAL
+  '2025-Q1': 5.90,   // PROVISIONAL
+  '2025-Q2': 5.90,   // PROVISIONAL
+  '2025-Q3': 5.90,   // PROVISIONAL
+  '2025-Q4': 5.90,   // PROVISIONAL
+  '2026-Q1': 5.90,   // design doc: "5.9→5.7 across quarters"
+  '2026-Q2': 5.70,   // design doc confirmed
+  '2026-Q3': 5.70,   // PROVISIONAL
+  '2026-Q4': 5.70,   // PROVISIONAL
+};
+
+// 14-region Agile D/P table (VAT-exclusive; Octopus blog post, April 2026 update).
+// Canonical source: data/agile-regional-rates.csv
+const AGILE_REGIONAL_RATES = {
+  'A': { D: 2.10, P: 13 }, 'B': { D: 2.00, P: 14 }, 'C': { D: 2.00, P: 12 },
+  'D': { D: 2.20, P: 13 }, 'E': { D: 2.10, P: 12 }, 'F': { D: 2.10, P: 12 },
+  'G': { D: 2.10, P: 12 }, 'H': { D: 2.10, P: 12 }, 'J': { D: 2.20, P: 12 },
+  'K': { D: 2.20, P: 12 }, 'L': { D: 2.30, P: 11 }, 'M': { D: 2.00, P: 13 },
+  'N': { D: 2.10, P: 13 }, 'P': { D: 2.40, P: 12 },
+};
+
+// 14-region standing charges (p/day, Ofgem-cap basis).
+// PENDING_SOURCE — provisional national estimates for all regions.
+// Northern Scotland (P) is materially wrong; source genuine regional values.
+// Canonical source: data/regional-standing-charges.csv
+const REGIONAL_STANDING_CHARGES = {
+  'A': { gas: 31.66, elec: 61.64 }, 'B': { gas: 31.66, elec: 61.64 },
+  'C': { gas: 31.66, elec: 61.64 }, 'D': { gas: 31.66, elec: 61.64 },
+  'E': { gas: 31.66, elec: 61.64 }, 'F': { gas: 31.66, elec: 61.64 },
+  'G': { gas: 31.66, elec: 61.64 }, 'H': { gas: 31.66, elec: 61.64 },
+  'J': { gas: 31.66, elec: 61.64 }, 'K': { gas: 31.66, elec: 61.64 },
+  'L': { gas: 31.66, elec: 61.64 }, 'M': { gas: 31.66, elec: 61.64 },
+  'N': { gas: 31.66, elec: 61.64 }, 'P': { gas: 31.66, elec: 61.64 },
+};
+
+const NATIONAL_GAS_STANDING_DEFAULT  = 31.66; // p/day — fallback when region null
+const NATIONAL_ELEC_STANDING_DEFAULT = 61.64;
+const D_DEFAULT_NATIONAL             = 2.2;
+const P_DEFAULT_NATIONAL             = 12;
+const IMPUTE_MIN_WINDOW_SAMPLES      = 50;    // min non-null slots in 7-day window
 
 // ===== Shared state =====
 
@@ -83,6 +151,50 @@ async function fetchWithRetry(url, label) {
     }
   }
   return resp;
+}
+
+// Returns the Ofgem-cap quarter key for a given date.
+// Falls back to the nearest known quarter if out-of-range.
+function quarterKey(tsDate) {
+  const d    = tsDate instanceof Date ? tsDate : new Date(tsDate);
+  const year = d.getUTCFullYear();
+  const q    = Math.floor(d.getUTCMonth() / 3) + 1;
+  const key  = `${year}-Q${q}`;
+  if (OFGEM_CAP_ELEC_BY_QUARTER[key] !== undefined) return key;
+  const keys     = Object.keys(OFGEM_CAP_ELEC_BY_QUARTER).sort();
+  const before   = [...keys].filter(k => k <= key).pop();
+  const after    = keys.find(k => k > key);
+  const fallback = before ?? after ?? keys[0];
+  console.warn(`Ofgem cap: quarter ${key} not in table — using ${fallback}`);
+  return fallback;
+}
+
+// Forward-scan tariff windowing: returns the rate_p_kwh active at tsDate,
+// or null if no window covers it (caller applies quarterly default).
+function getRateForTs(tsDate, sortedWindows) {
+  if (!sortedWindows || sortedWindows.length === 0) return null;
+  let rate = null;
+  for (const w of sortedWindows) {
+    if (new Date(w.valid_from) > tsDate) break;
+    if (!w.valid_to || new Date(w.valid_to) > tsDate) { rate = w.rate_p_kwh; break; }
+  }
+  if (rate === null) {
+    rate = sortedWindows.findLast(w => new Date(w.valid_from) <= tsDate)?.rate_p_kwh
+        ?? sortedWindows[0]?.rate_p_kwh ?? null;
+  }
+  return rate;
+}
+
+// Null-wholesale imputation: 7-day preceding-window mean → global mean → last-resort cap/D.
+// Relocated from pricing-engine.js (identical logic).
+function imputeWholesaleForSlot(i, wholesale_array, global_mean_known, D, ofgem_cap) {
+  const window_start = Math.max(0, i - 336); // preceding 7 days × 48 HHs
+  const window_slots = wholesale_array.slice(window_start, i).filter(w => w !== null);
+  if (window_slots.length >= IMPUTE_MIN_WINDOW_SAMPLES) {
+    return window_slots.reduce((s, w) => s + w, 0) / window_slots.length;
+  }
+  if (global_mean_known !== null) return global_mean_known;
+  return ofgem_cap / D;
 }
 
 
@@ -351,30 +463,19 @@ export function convertSpToUtc(midRecords) {
 }
 
 
-// ===== Step 8: Alignment =====
-
-export function alignExternalData(consumption, weatherMap, priceLookup) {
-  return consumption.map(({ timestamp }) => {
-    const tsCanonical = canonicaliseTs(timestamp);
-    const hourCanonical = DateTime.fromISO(tsCanonical, { zone: 'utc' })
-      .startOf('hour')
-      .toISO({ suppressMilliseconds: true });
-
-    const weather = weatherMap.get(hourCanonical);
-    return {
-      timestamp: tsCanonical,
-      temp_c: weather?.temperature_2m ?? null,
-      solar_w_m2: weather?.shortwave_radiation ?? null,
-      wholesale_p_kwh: priceLookup.get(tsCanonical) ?? null,
-    };
-  });
-}
-
-
-// ===== Step 8b: Agile calibration =====
+// ===== Step 6b: Agile calibration — 3-path source hierarchy =====
 
 export async function fetchAgileCalibration(gsp_region) {
-  if (!gsp_region) return null;
+  // Path 3 short-circuit: no region
+  if (!gsp_region) {
+    return {
+      D: D_DEFAULT_NATIONAL, P_peak_p_kwh: P_DEFAULT_NATIONAL,
+      D_sample_count: 0, P_sample_count: 0,
+      calibration_period: null, gsp_region: null,
+      null_wholesale_fraction: null,
+      source: 'national_default',
+    };
+  }
 
   const now            = new Date();
   const thisMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
@@ -383,9 +484,10 @@ export async function fetchAgileCalibration(gsp_region) {
   const calibEnd       = prevMonthStart >= AGILE_REFORM_DATE ? thisMonthStart : now;
   const isPartial      = prevMonthStart < AGILE_REFORM_DATE;
 
-  if (calibEnd <= calibStart) return null;
-
+  // Path 1: live calibration — attempt
   try {
+    if (calibEnd <= calibStart) throw new Error('Calibration window is empty.');
+
     const tariffPath = `E-1R-${AGILE_PRODUCT_CODE}-${gsp_region}`;
     let url = `https://api.octopus.energy/v1/products/${AGILE_PRODUCT_CODE}`
             + `/electricity-tariffs/${tariffPath}/standard-unit-rates/`
@@ -397,7 +499,7 @@ export async function fetchAgileCalibration(gsp_region) {
       agileRates.push(...(data.results ?? []));
       url = data.next ?? null;
     }
-    if (agileRates.length === 0) return null;
+    if (agileRates.length === 0) throw new Error('No Agile rate data returned.');
 
     const agileMap = new Map();
     for (const r of agileRates) {
@@ -407,6 +509,11 @@ export async function fetchAgileCalibration(gsp_region) {
     const { priceLookup } = await fetchWholesalePrices(
       calibStart.toISOString(), calibEnd.toISOString(), () => {}
     );
+
+    const D_MIN = 1.5, D_MAX = 3.0;
+    const P_MIN = 5,   P_MAX = 20;
+    const D_MIN_SAMPLES = 50;
+    const P_MIN_SAMPLES = 20;
 
     const D_samples = [];
     const P_samples = [];
@@ -421,16 +528,25 @@ export async function fetchAgileCalibration(gsp_region) {
         D_samples.push(agileVal / wholesale);
       }
     }
+
     const D_sample_count = D_samples.length;
     const P_sample_count = P_samples.length;
-    if (D_sample_count === 0) return null;
+
+    if (D_sample_count === 0) throw new Error('No off-peak calibration samples.');
 
     const D = median(D_samples);
     const P_computed = P_samples.map(s => s.agile - D * s.wholesale);
     const P = P_computed.length > 0 ? median(P_computed) : 0;
 
-    if (D < 1.5 || D > 3.0) console.warn(`Agile calibration D=${D.toFixed(3)} outside expected range 1.5–3.0`);
-    if (P < 5 || P > 20)    console.warn(`Agile calibration P=${P.toFixed(2)} outside expected range 5–20 p/kWh`);
+    const D_valid = D >= D_MIN && D <= D_MAX;
+    const P_valid = P >= P_MIN && P <= P_MAX;
+    const count_valid = D_sample_count >= D_MIN_SAMPLES && P_sample_count >= P_MIN_SAMPLES;
+
+    if (!D_valid || !P_valid || !count_valid) {
+      if (!D_valid) console.warn(`Agile calibration D=${D.toFixed(3)} outside expected range 1.5–3.0`);
+      if (!P_valid) console.warn(`Agile calibration P=${P.toFixed(2)} outside expected range 5–20 p/kWh`);
+      throw new Error('Calibration values outside valid range — falling back to regional table.');
+    }
 
     const monthNames = ['January','February','March','April','May','June',
                         'July','August','September','October','November','December'];
@@ -439,20 +555,156 @@ export async function fetchAgileCalibration(gsp_region) {
       : `${monthNames[calibStart.getUTCMonth()]} ${calibStart.getUTCFullYear()}`;
 
     return {
-      D, P_peak_p_kwh: P, calibration_period: calibPeriod, gsp_region,
+      D, P_peak_p_kwh: P,
       D_sample_count, P_sample_count,
-      source: 'fetched',
+      calibration_period: calibPeriod, gsp_region,
+      null_wholesale_fraction: null,
+      source: 'calibrated',
     };
 
   } catch (err) {
-    console.error('Agile calibration fetch failed:', err);
-    return null;
+    console.warn('Agile live calibration failed — using regional table:', err.message);
+    // Path 2: regional table fallback (Path 3: national if region not in table)
+    const row = AGILE_REGIONAL_RATES[gsp_region];
+    return {
+      D:              row ? row.D : D_DEFAULT_NATIONAL,
+      P_peak_p_kwh:  row ? row.P : P_DEFAULT_NATIONAL,
+      D_sample_count: 0, P_sample_count: 0,
+      calibration_period: null, gsp_region,
+      null_wholesale_fraction: null,
+      source: row ? 'regional_table' : 'national_default',
+    };
   }
 }
 
+
+// ===== Step 7: Build base tariffs (M2 single tariff source) =====
+
+export function buildBaseTariffs(consumption, priceLookup, agileCalibration, tariff_rates, gsp_region) {
+  const n = consumption.length;
+  const hh_rate   = new Array(n);
+  const gas_rate  = new Array(n);
+  const flat_rate = new Array(n);
+
+  const { D, P_peak_p_kwh } = agileCalibration;
+  // Calibrated path: D already absorbs VAT. Table/national: D and P are VAT-exclusive.
+  const isCalibrated = agileCalibration.source === 'calibrated';
+
+  const gasWindows  = [...(tariff_rates.gas         ?? [])].sort((a, b) => new Date(a.valid_from) - new Date(b.valid_from));
+  const elecWindows = [...(tariff_rates.electricity ?? [])].sort((a, b) => new Date(a.valid_from) - new Date(b.valid_from));
+
+  // Pre-compute wholesale array and global mean for null-slot imputation
+  const wholesale_array = consumption.map(({ timestamp }) => {
+    const tsCanonical = canonicaliseTs(timestamp);
+    return priceLookup.get(tsCanonical) ?? null;
+  });
+  const known_wholesale = wholesale_array.filter(w => w !== null);
+  const global_mean_known = known_wholesale.length > 0
+    ? known_wholesale.reduce((s, w) => s + w, 0) / known_wholesale.length
+    : null;
+
+  // Ofgem cap for last-resort imputation (calibrated path: VAT-inclusive; use 24.50 VAT-inc equivalent)
+  const impute_cap = OFGEM_CAP_ELEC_BY_QUARTER[quarterKey(new Date())];
+
+  let warnedGasGap  = false;
+  let warnedElecGap = false;
+
+  for (let i = 0; i < n; i++) {
+    const tsDate = new Date(consumption[i].timestamp);
+
+    // HH electricity rate — Agile D×W+P formula
+    const wholesale = wholesale_array[i];
+    const peak      = isUkPeakHour(tsDate);
+    let w;
+    if (wholesale === null) {
+      w = imputeWholesaleForSlot(i, wholesale_array, global_mean_known, D, impute_cap);
+    } else {
+      w = wholesale;
+    }
+    // Math.min(negative, cap) returns the negative unchanged — negatives are preserved.
+    // Calibrated: D absorbs VAT, cap 100p. Table/national: VAT-exclusive, cap 95p then ×1.05.
+    const rawRate = D * w + (peak ? P_peak_p_kwh : 0);
+    hh_rate[i] = isCalibrated
+      ? Math.min(rawRate, 100)
+      : Math.min(rawRate, 95) * 1.05;
+
+    // Gas rate per HH
+    const gasFromTariff = getRateForTs(tsDate, gasWindows);
+    if (gasFromTariff !== null) {
+      gas_rate[i] = gasFromTariff;
+    } else {
+      if (gasWindows.length > 0 && !warnedGasGap) {
+        console.warn('Gap in gas tariff history — using Ofgem cap quarterly default for affected periods.');
+        warnedGasGap = true;
+      }
+      gas_rate[i] = OFGEM_CAP_GAS_BY_QUARTER[quarterKey(tsDate)];
+    }
+
+    // Flat electricity rate per HH (for dumb_hp_svt / §14 base)
+    const elecFromTariff = getRateForTs(tsDate, elecWindows);
+    if (elecFromTariff !== null) {
+      flat_rate[i] = elecFromTariff;
+    } else {
+      if (elecWindows.length > 0 && !warnedElecGap) {
+        console.warn('Gap in electricity tariff history — using Ofgem cap quarterly default for affected periods.');
+        warnedElecGap = true;
+      }
+      flat_rate[i] = OFGEM_CAP_ELEC_BY_QUARTER[quarterKey(tsDate)];
+    }
+  }
+
+  // Standing charges: m1 actual → regional → national default
+  const m1GasStanding  = gasWindows[gasWindows.length - 1]?.standing_p_day  ?? null;
+  const m1ElecStanding = elecWindows[elecWindows.length - 1]?.standing_p_day ?? null;
+  const regionalRow    = gsp_region ? (REGIONAL_STANDING_CHARGES[gsp_region] ?? null) : null;
+  const standing_charge = {
+    gas:  m1GasStanding  ?? (regionalRow?.gas  ?? NATIONAL_GAS_STANDING_DEFAULT),
+    elec: m1ElecStanding ?? (regionalRow?.elec ?? NATIONAL_ELEC_STANDING_DEFAULT),
+  };
+
+  // null_wholesale_fraction and coverage warnings
+  const totalSlots = n;
+  const nullSlots  = wholesale_array.filter(w => w === null).length;
+  const null_wholesale_fraction = totalSlots > 0 ? nullSlots / totalSlots : 1.0;
+  const non_null_wholesale_count = totalSlots - nullSlots;
+
+  const coverage_warnings = [];
+  if (null_wholesale_fraction > 0.25) {
+    coverage_warnings.push(
+      `Half-hourly price data was missing for ${(null_wholesale_fraction * 100).toFixed(0)}% of your data period — half-hourly tariff results may be unreliable.`
+    );
+  } else if (null_wholesale_fraction > 0.05) {
+    coverage_warnings.push(
+      `Wholesale price data was missing for ${(null_wholesale_fraction * 100).toFixed(0)}% of your data period. Half-hourly tariff scenarios use a typical-rate estimate for those periods.`
+    );
+  }
+
+  return { hh_rate, gas_rate, flat_rate, standing_charge, null_wholesale_fraction, coverage_warnings, non_null_wholesale_count };
+}
+
+
+// ===== Step 8: Alignment (weather-only; wholesale is M2-internal) =====
+
+export function alignExternalData(consumption, weatherMap) {
+  return consumption.map(({ timestamp }) => {
+    const tsCanonical = canonicaliseTs(timestamp);
+    const hourCanonical = DateTime.fromISO(tsCanonical, { zone: 'utc' })
+      .startOf('hour')
+      .toISO({ suppressMilliseconds: true });
+    const weather = weatherMap.get(hourCanonical);
+    return {
+      timestamp:  tsCanonical,
+      temp_c:     weather?.temperature_2m    ?? null,
+      solar_w_m2: weather?.shortwave_radiation ?? null,
+      // wholesale_p_kwh removed: M2-internal only (design §2.5.8)
+    };
+  });
+}
+
+
 // ===== Step 9: Metadata assembly =====
 
-export function buildExternalMetadata(latitude, longitude, elevation, weatherSource, priceSource, priceWarnings, agile_calibration) {
+export function buildExternalMetadata(latitude, longitude, elevation, weatherSource, priceSource, priceWarnings, coverage_warnings) {
   return {
     latitude,
     longitude,
@@ -460,7 +712,8 @@ export function buildExternalMetadata(latitude, longitude, elevation, weatherSou
     weather_source: weatherSource,
     price_source: priceSource,
     price_alignment_warnings: priceWarnings,
+    coverage_warnings: coverage_warnings ?? [],
     fetch_timestamp: new Date().toISOString(),
-    agile_calibration,
+    // agile_calibration is now a top-level field on the M2 result, not inside metadata
   };
 }

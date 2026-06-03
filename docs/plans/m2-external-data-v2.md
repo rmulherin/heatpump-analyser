@@ -843,7 +843,30 @@ audits this in app.js; confirm no other references exist (index.html, display fu
 
 ## Implementation Deviations
 
-[Populated after implementation.]
+**Date:** 2026-06-04
+
+**D1 — `package.json` created for Luxon Node.js test dependency.**
+Plan Step 16 specified `node test-m2-v2.mjs` but did not address that Luxon is not
+installed as a Node.js dependency (the tool is client-side only). A minimal
+`package.json` with `devDependencies: { luxon: "3.5.0" }` was created and `npm install`
+run. The test uses a dynamic import to set `globalThis.luxon` before importing
+`external-data.js`, satisfying the Step 16 Luxon-global requirement. `node_modules/` is
+not committed (add to `.gitignore` if not already excluded).
+
+**D2 — `PE_CONFIG` unused import removed from `app.js`.**
+Code review found `PE_CONFIG` was imported from `pricing-engine.js` in `app.js` but not
+used anywhere in the file (all uses of its former constants were already replaced by
+inline literals or removed with the plan changes). Removed as dead code — no functional
+impact.
+
+**D3 — Two new test cases added to `test-m8.mjs` (T11, T12).**
+The plan directed updating test-m8.mjs fixtures to use a synthetic `m2Result` object.
+During the rewrite, two new test cases were added: T11 verifies the `§14` gas rate
+override in `prepareRates` (uniform fill replaces m2Result.gas_rate); T12 verifies the
+SVT flat-rate override (uniform fill replaces m2Result.flat_rate without affecting
+hh_rate). Test count: 24 → 29 assertions. These test the §14 functionality that stayed
+in M8, which was previously incidentally covered by the old rate-building loop but not
+explicitly verified.
 
 ---
 
