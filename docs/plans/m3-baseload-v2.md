@@ -1,69 +1,48 @@
-# m3-baseload-v2 — Baseload Separation v2 (Step F.5 + Step H classification)
+# m3-baseload-v2 — M3 Baseload Separation v2 (the fork)
 
-**Date:** 2026-06-02
+**Date:** 2026-06-04
 **Status:** Awaiting review — Opus architect review pending.
+
+> **Supersedes** the 2026-06-02 m3 plan (commit 51c67a8, on-hold, never approved).
+> That plan covered only INV-9 + INV-16. This plan covers the full fork scope per
+> `design/m3-baseload-v2.md` (commit a714d60, Rhiannon-agreed 2026-06-04):
+> Steps I + J (electricity_baseload + per-HH attribution) + the updated fork outputs.
 
 ---
 
 ## Task description
 
-Implement the two focused v2 refinements to `js/baseload.js` defined in
-`m3-baseload-v2.md`:
+Upgrade `js/baseload.js` (Module 3) from v1 to v2 per `design/m3-baseload-v2.md`. This makes M3 the **fork**: it emits per-HH `elec_heating_kwh` + `nonheat_residual_kwh` (Step J — new), the scalar `electricity_baseload` 24/7 floor (Step I — new), and the 3-tier `electric_heating_classification_auto/effective` with `user_classification_override` passthrough (INV-16). Step F.5 (low-gas-warm correction, INV-9) is inserted between Steps F and G. The 2% winter-non-heat detection floor (INV-16) is applied to the raw OLS slope before the detection gate. The deprecated `electric_heating_is_primary` field is removed. `baseline_kwh_per_day` is retained internally but no longer crosses to m4.
 
-1. **Step F.5 — Low-gas-warm correction.** A new day-level pre-classifier
-   inserted between Step F (absence detection) and Step G (R² validation). Days
-   with gas use below `2.2 × baseload_median` AND mean outdoor temperature ≥ 17 °C
-   have their per-HH `heating_kwh` forced to 0 (`baseload_kwh = gas_kwh`). Fixes
-   the INV-9 phantom-heating failure mode on multi-modal summer baseload days.
-
-2. **Step H — 2% winter-non-heat correction + 3-tier classification output.**
-   After the OLS regression, subtract `2% × total_annual_energy_kwh` from the raw
-   electric-heating estimate before applying the 0.2 kWh/K·day detection gate.
-   Adds `electric_heating_classification_auto`, `electric_heating_classification_effective`,
-   and `electric_heating_fraction_of_total_energy` to the `supplementary_loads`
-   output. Accepts `user_classification_override` passthrough. Removes the
-   deprecated `electric_heating_is_primary` field. Updates `app.js` display
-   logic to consume the new classification field.
+Existing v1 mechanics (Methods A–E, `detectAbsences`, `validateSeparation`, the `computeMultiOls` / `tDistPValue` math) are deferred to the working code per the design doc's top-note guardrail. Only the §10 Changes-from-v1 deltas are mandates.
 
 ---
 
 ## Research findings
 
-**Existing code reviewed:**
+All computation is vanilla JS with the existing Luxon import. No external libraries needed.
 
-- `js/baseload.js` — full module. The orchestrator is `separateBaseload(consumption, external)`.
-  Pipeline order: Method A/B/C/D/E → 4c (baseload mean/median) → 4b `detectAbsences`
-  → 4d `validateSeparation` → `detectSupplementaryLoads`. Step F.5 inserts between
-  `detectAbsences` and `validateSeparation`.
+**`js/baseload.js` reviewed.** All v1 mechanics are implemented and deferred to:
+- Methods A–E, `detectAbsences` (Step F), `validateSeparation` (Step G): working, no changes.
+- `computeMultiOls` / `tDistPValue` / `betaCF` / `lgamma` / `incompleteBeta`: working, no changes.
+- `detectSupplementaryLoads` OLS body (design matrix [HDD, CDD, 1], coefficient extraction): working, no changes.
 
-- `BASELOAD_CONFIG` object holds Method A/B/C thresholds and absence constants.
-  `STEP_H_CONFIG` object holds Step H thresholds. Both are the correct home for
-  the three new constants.
+The following **divergences from v2** exist in the live code. Each is a mandate:
 
-- `detectSupplementaryLoads(consumption, external, heating, baseloadMethod)` —
-  builds `dailyData` rows of `{daily_elec_kwh, daily_hdd, daily_cdd}`. OLS runs
-  on `ys` (elec) and `xMatrix` ([HDD, CDD, 1]). Detection is currently on raw `a`
-  (HDD slope). In v2: add `daily_gas_kwh` to each `dailyData` entry, compute
-  `total_annual_energy_kwh`, apply 2% subtraction, then gate on the corrected
-  slope.
+- **Step H detection uses raw OLS slope `a`**, not the corrected slope. No `WINTER_NON_HEAT_FRACTION` correction is applied. Raw `a` drives detection gate, confidence tiers, and `electric_heating_kwh_per_dd` / `electric_heating_kwh_estimate`.
+- **`electric_heating_is_primary`** (boolean) present in both the `skipped()` closure and the main return. V2 mandates removal.
+- **Classification fields absent:** `electric_heating_classification_auto`, `electric_heating_classification_effective`, `electric_heating_fraction_of_total_energy`.
+- **`BASELOAD_CONFIG` missing** four v2 constants: `LOW_GAS_WARM_MAX_GAS_KWH_FRACTION`, `LOW_GAS_WARM_MIN_DAILY_MEAN_TEMP_C`, `WINTER_NON_HEAT_FRACTION`, `ELECTRICITY_BASELOAD_PERCENTILE`.
+- **Steps F.5, I, J absent.**
+- **`separateBaseload`** lacks `user_classification_override` parameter and the two new `heating` array fields.
 
-- `electric_heating_is_primary` is consumed by `app.js` lines 1082 and 1090
-  (display logic — which status message to show). It is NOT consumed by
-  `heat-loss.js` (which reads `electric_heating_detected`,
-  `electric_heating_confidence`, and `electric_heating_kwh_per_dd`). The app.js
-  usage is a clean two-line migration to `electric_heating_classification_effective`.
+**`js/scenario-consumption.js` checked.** No `elec_heating_kwh`, no Step 1d. Step J is entirely new — no code to defer to.
 
-- `heat-loss.js` reads `supplementaryLoads.electric_heating_kwh_per_dd` for its
-  Check 4D HTC correction. In v2 this field becomes the corrected slope (lower
-  than raw). This is intentional and correct — the corrected slope is a better
-  estimate of real electric-heating signal. No compatibility concern.
+**`app.js` (read during 2026-06-02 plan cycle):** `electric_heating_is_primary` is consumed at lines ~1082 and ~1090 in `displayBaseloadResults` (two conditional branches on which status message to show). `heat-loss.js` reads `supplementaryLoads.electric_heating_kwh_per_dd` for its Check 4D HTC correction — the field name is unchanged, but the value becomes the corrected slope in v2 (correct and intentional: a better estimate of real electric-heating signal).
 
-- `test-m3-step-f.mjs` exports `detectAbsences` for unit testing and uses a
-  minimal Luxon stub (`global.luxon = { DateTime: FakeDateTime }`). The new
-  `test-m3-v2.mjs` follows the same pattern.
+**Test file structure:** `test-m3.mjs` has 18 passing v1 tests (CLAUDE.md reports M3 18/18). A separate `test-m3-step-f.mjs` tests Step F unit-level. V2 tests go in a new `test-m3-v2.mjs` following the same pattern.
 
-**No external libraries needed.** All changes are pure vanilla JS within the
-existing module pattern.
+**v1 test count note:** Design doc §5 references 22 v1 test criteria in `baseload-separation.md`; only 18 are in `test-m3.mjs`. The 4-test gap may be un-implemented v1 criteria. At implementation, read `test-m3.mjs` to confirm count and confirm all 18 still pass — do not add the missing 4 v1 tests (out of this plan's scope).
 
 ---
 
@@ -71,206 +50,161 @@ existing module pattern.
 
 | Action | File | Purpose |
 |--------|------|---------|
-| MODIFY | `js/baseload.js` | Add Step F.5 function; update Step H; update outputs; update signatures |
-| MODIFY | `js/app.js` | Replace `electric_heating_is_primary` with `electric_heating_classification_effective` at lines ~1082 and ~1090 |
-| CREATE | `test-m3-v2.mjs` | 13 v2-specific test cases (Step F.5 + Step H) |
+| MODIFY | `js/baseload.js` | Add v2 constants; add `applyLowGasWarmCorrection` (F.5), `computeElectricityBaseload` (I), `applyElectricHeatingAttribution` (J); update `detectSupplementaryLoads` for 2% correction + classification; update `separateBaseload` orchestrator |
+| CREATE | `test-m3-v2.mjs` | 16 v2-specific test cases covering all §5 v2 criteria |
+| MODIFY | `app.js` | Replace `electric_heating_is_primary` with `classification_effective` at lines ~1082, ~1090; update `separateBaseload` call signature; confirm `baseline_kwh_per_day` not wired to m4 |
 
 ---
 
 ## Implementation steps
 
-### Step 1 — Add new constants
+### Step 1 — Add v2 constants to `BASELOAD_CONFIG` (`js/baseload.js`)
 
-In `BASELOAD_CONFIG`, add after `EXCESSIVE_ABSENCE_DAYS`:
+All four new constants live in `BASELOAD_CONFIG` (per design doc §2.5.4, §2.5.6, §2.5.8 — calibratable for future profile-robustness work):
 
-```javascript
+```js
 LOW_GAS_WARM_MAX_GAS_KWH_FRACTION: 2.2,
 LOW_GAS_WARM_MIN_DAILY_MEAN_TEMP_C: 17,
-```
-
-In `STEP_H_CONFIG`, add:
-
-```javascript
 WINTER_NON_HEAT_FRACTION: 0.02,
+ELECTRICITY_BASELOAD_PERCENTILE: 5,
 ```
 
-### Step 2 — Implement `applyLowGasWarmCorrection` and export it
+### Step 2 — Add `percentile` helper (`js/baseload.js`)
 
-Add a new exported function immediately before `separateBaseload`:
+Add alongside `median()`. Linear interpolation on the sorted array:
 
-```javascript
+```js
+function percentile(arr, p) {
+  const vals = arr.filter(v => v !== null && v !== undefined && !isNaN(v));
+  if (vals.length === 0) return null;
+  vals.sort((a, b) => a - b);
+  const idx = (p / 100) * (vals.length - 1);
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  return lo === hi ? vals[lo] : vals[lo] + (idx - lo) * (vals[hi] - vals[lo]);
+}
+```
+
+### Step 3 — Implement `applyLowGasWarmCorrection` (Step F.5) (`js/baseload.js`)
+
+New exported function. Called from `separateBaseload` **after** `detectAbsences` (Step F) and **before** `validateSeparation` (Step G). Does NOT run in the no-gas branch.
+
+```js
 export function applyLowGasWarmCorrection(consumption, external, heating, baseloadMedianKwhPerDay) {
-  const gasThreshold = BASELOAD_CONFIG.LOW_GAS_WARM_MAX_GAS_KWH_FRACTION * baseloadMedianKwhPerDay;
-  const tempFloor    = BASELOAD_CONFIG.LOW_GAS_WARM_MIN_DAILY_MEAN_TEMP_C;
-  const dayIndexMap  = buildDayIndexMap(consumption);
+  const gasCeiling = BASELOAD_CONFIG.LOW_GAS_WARM_MAX_GAS_KWH_FRACTION * baseloadMedianKwhPerDay;
+  const minTemp    = BASELOAD_CONFIG.LOW_GAS_WARM_MIN_DAILY_MEAN_TEMP_C;
+  const dayIndexMap = buildDayIndexMap(consumption);
   let count = 0;
 
   for (const [, indices] of dayIndexMap) {
     if (indices.length !== 48) continue;
-    if (indices.some(i => consumption[i].gas_kwh === null || consumption[i].gas_kwh === undefined)) continue;
-    if (indices.some(i => heating[i].is_absence)) continue;
-
-    const dailyGas = indices.reduce((s, i) => s + consumption[i].gas_kwh, 0);
-    if (dailyGas >= gasThreshold) continue;                          // strict <
-
-    const tempVals = indices.map(i => external?.[i]?.temp_c).filter(v => v !== null && v !== undefined);
-    if (tempVals.length < 48) continue;
-    const dailyMeanTemp = tempVals.reduce((s, v) => s + v, 0) / tempVals.length;
-    if (dailyMeanTemp < tempFloor) continue;                         // inclusive >=
-
+    if (indices.some(i => consumption[i].gas_kwh === null)) continue;
+    if (indices.some(i => heating[i].is_absence)) continue;            // NOT absence
+    const daily_gas_kwh = indices.reduce((s, i) => s + consumption[i].gas_kwh, 0);
+    if (daily_gas_kwh >= gasCeiling) continue;                         // strict <
+    const tempVals = indices.map(i => external?.[i]?.temp_c);
+    if (tempVals.some(v => v === null || v === undefined)) continue;   // skip if temp unavailable
+    const daily_mean_temp_c = tempVals.reduce((s, v) => s + v, 0) / 48;
+    if (daily_mean_temp_c < minTemp) continue;                         // inclusive >=
     for (const i of indices) {
-      heating[i].heating_kwh   = 0;
-      heating[i].baseload_kwh  = consumption[i].gas_kwh;
+      heating[i].heating_kwh  = 0;
+      heating[i].baseload_kwh = consumption[i].gas_kwh;               // is_absence unchanged (stays false)
     }
     count++;
   }
-
   return count;
 }
 ```
 
-Boundary semantics match the design doc exactly: strict `<` on gas (exclusive
-upper bound protects genuine cold-but-low-gas heating days); inclusive `>=` on
-temp (catches the 31-Aug exact-17.0 °C post-absence refill case).
+Boundary semantics: strict `<` on gas (exclusive — protects heating-day boundaries); inclusive `>=` on temp (catches the exact-17.0 °C post-absence tank-refill case). Invariant preserved: `heating_kwh = 0`, `baseload_kwh = gas_kwh` → `sum = gas_kwh`.
 
-### Step 3 — Wire Step F.5 into `separateBaseload`
+### Step 4 — Implement `computeElectricityBaseload` (Step I) (`js/baseload.js`)
 
-Update `separateBaseload` signature to accept `userClassificationOverride = null`
-(passed through to `detectSupplementaryLoads` in Step 5).
+New exported function. Called from `separateBaseload` after `detectSupplementaryLoads`. Requires Step F to have run (uses `heating[i].is_absence`).
 
-In the gas path, after the `detectAbsences` call and before `validateSeparation`:
+```js
+export function computeElectricityBaseload(consumption, external, heating) {
+  const dayIndexMap = buildDayIndexMap(consumption);
+  const perHhValues = [];
+  let daysUsed = 0;
 
-```javascript
-const lowGasWarmDaysTotal = applyLowGasWarmCorrection(
-  consumption, external, heating, baseload_median_kwh_per_day
-);
+  for (const [, indices] of dayIndexMap) {
+    if (indices.length !== 48) continue;
+    if (indices.some(i => consumption[i].elec_kwh === null || consumption[i].elec_kwh === undefined)) continue;
+    if (indices.some(i => heating[i].is_absence)) continue;
+    daysUsed++;
+    for (const i of indices) perHhValues.push(consumption[i].elec_kwh);
+  }
 
-if (lowGasWarmDaysTotal > 30) {
-  warnings.push(
-    `Detected ${lowGasWarmDaysTotal} summer days where your gas use was below the ` +
-    `heating-day threshold. These have been re-classified as non-heating to avoid ` +
-    `mis-attributing your summer hot-water use as heating.`
-  );
+  if (daysUsed < STEP_H_CONFIG.MIN_DAYS) return null;
+  return percentile(perHhValues, BASELOAD_CONFIG.ELECTRICITY_BASELOAD_PERCENTILE);
 }
 ```
 
-Add `low_gas_warm_days_total: lowGasWarmDaysTotal` to `baseload_metadata`.
+Returns null when < 30 qualifying days; m7 falls back to its trace-gains default.
 
-The no-gas case short-circuits before this point and is unaffected.
+### Step 5 — Implement `applyElectricHeatingAttribution` (Step J) (`js/baseload.js`)
 
-### Step 4 — Update `detectSupplementaryLoads` signature
+New internal function (not exported — attribution tests go through `separateBaseload`). Called from `separateBaseload` after Steps H and I. Mutates `heating` array in-place.
 
-Change signature from:
+`canAttribute` is day-level: true only for whole-elec days (all 48 HH non-null) where `classification_effective !== 'none'` and `corrected_kwh_per_dd` is available. All other days use per-HH fallback.
 
-```javascript
-export function detectSupplementaryLoads(consumption, external, heating, baseloadMethod)
-```
+```js
+function applyElectricHeatingAttribution(consumption, external, heating, electricityBaseload, supplementary_loads) {
+  const classEff       = supplementary_loads.electric_heating_classification_effective;
+  const correctedPerDd = supplementary_loads.electric_heating_kwh_per_dd;
+  const floor          = electricityBaseload ?? 0;   // null → 0 (conservative: no floor protection)
+  const dayIndexMap    = buildDayIndexMap(consumption);
 
-to:
+  for (const [, indices] of dayIndexMap) {
+    const allElecPresent = indices.length === 48
+      && indices.every(i => consumption[i].elec_kwh !== null && consumption[i].elec_kwh !== undefined);
+    const canAttribute = allElecPresent && classEff !== 'none' && correctedPerDd !== null;
 
-```javascript
-export function detectSupplementaryLoads(consumption, external, heating, baseloadMethod, userClassificationOverride = null)
-```
-
-### Step 5 — Add `daily_gas_kwh` to `dailyData` entries
-
-In the `dailyData` build loop, compute and store `daily_gas_kwh` alongside
-`daily_elec_kwh`. In the no-gas case, gas is null so treat as 0:
-
-```javascript
-const daily_gas_kwh = noGasCase
-  ? 0
-  : indices.reduce((s, i) => s + consumption[i].gas_kwh, 0);
-
-dailyData.push({
-  daily_elec_kwh: indices.reduce((s, i) => s + consumption[i].elec_kwh, 0),
-  daily_hdd: Math.max(0, HDD_BASE_TEMP - daily_mean_temp_c),
-  daily_cdd: Math.max(0, daily_mean_temp_c - CDD_BASE_TEMP),
-  daily_gas_kwh,
-});
-```
-
-Note: the existing guard `if (!noGasCase && indices.some(i => consumption[i].gas_kwh === null ...)) continue;`
-ensures gas is non-null before this accumulation in the non-no-gas path.
-
-### Step 6 — Compute 2% correction after OLS
-
-After the OLS block that sets `a`, `b`, `c`, `p_a`, `p_b`, `sum_hdd`, `sum_cdd`:
-
-```javascript
-const raw_estimate             = a * sum_hdd;
-const total_annual_energy_kwh  = dailyData.reduce((s, d) => s + d.daily_elec_kwh + d.daily_gas_kwh, 0);
-const corrected_estimate       = Math.max(0, raw_estimate - STEP_H_CONFIG.WINTER_NON_HEAT_FRACTION * total_annual_energy_kwh);
-const corrected_kwh_per_dd     = sum_hdd > 0 ? corrected_estimate / sum_hdd : null;
-const fraction_of_total_energy = total_annual_energy_kwh > 0 ? raw_estimate / total_annual_energy_kwh : 0;
-```
-
-`raw_estimate` uses the uncorrected slope for `fraction_of_total_energy` (per design
-§4.4 — the raw fraction is the UI tickbox-default signal). `corrected_estimate` and
-`corrected_kwh_per_dd` gate detection.
-
-### Step 7 — Update detection rule to use corrected slope
-
-Replace the current line:
-
-```javascript
-const electric_heating_detected = a > STEP_H_CONFIG.ELECTRIC_HEATING_COEFF_THRESHOLD && p_a < STEP_H_CONFIG.P_VALUE_DETECT;
-```
-
-with:
-
-```javascript
-const electric_heating_detected =
-  corrected_kwh_per_dd !== null &&
-  corrected_kwh_per_dd > STEP_H_CONFIG.ELECTRIC_HEATING_COEFF_THRESHOLD &&
-  p_a < STEP_H_CONFIG.P_VALUE_DETECT &&
-  sum_hdd > 0;
-```
-
-### Step 8 — Update confidence tiers to use corrected slope
-
-Replace the current confidence logic (which gates on raw `a`) with corrected
-slope gates. The thresholds are unchanged (0.5 / 0.1; 0.01 / 0.20) — applied
-to `corrected_kwh_per_dd`:
-
-```javascript
-let electric_heating_confidence;
-if (electric_heating_detected) {
-  electric_heating_confidence =
-    (corrected_kwh_per_dd >= STEP_H_CONFIG.COEFF_HIGH && p_a < STEP_H_CONFIG.P_VALUE_HIGH)
-      ? 'high' : 'moderate';
-} else {
-  electric_heating_confidence =
-    (corrected_kwh_per_dd !== null &&
-     corrected_kwh_per_dd > STEP_H_CONFIG.COEFF_LOW &&
-     p_a >= STEP_H_CONFIG.P_VALUE_DETECT &&
-     p_a < STEP_H_CONFIG.P_VALUE_LOW_UPPER)
-      ? 'low' : 'none';
+    if (canAttribute) {
+      const tempVals = indices.map(i => external?.[i]?.temp_c);
+      const allTemps = tempVals.every(v => v !== null && v !== undefined);
+      const meanTemp = allTemps ? tempVals.reduce((s, v) => s + v, 0) / 48 : null;
+      const hdd      = meanTemp !== null ? Math.max(0, HDD_BASE_TEMP - meanTemp) : 0;
+      const E_d      = Math.max(0, correctedPerDd * hdd);
+      const excess   = indices.map(i => Math.max(0, consumption[i].elec_kwh - floor));
+      const S        = excess.reduce((sum, e) => sum + e, 0);
+      const r_d      = S > 0 ? Math.min(1, E_d / S) : 0;
+      for (let k = 0; k < indices.length; k++) {
+        const i = indices[k];
+        heating[i].elec_heating_kwh     = r_d * excess[k];
+        heating[i].nonheat_residual_kwh = consumption[i].elec_kwh - heating[i].elec_heating_kwh;
+      }
+    } else {
+      for (const i of indices) {
+        const elec = consumption[i].elec_kwh;
+        if (elec === null || elec === undefined) {
+          heating[i].elec_heating_kwh     = null;
+          heating[i].nonheat_residual_kwh = null;
+        } else {
+          heating[i].elec_heating_kwh     = 0;
+          heating[i].nonheat_residual_kwh = elec;
+        }
+      }
+    }
+  }
 }
 ```
 
-### Step 9 — Add classification logic
+Three design-doc rules enforced:
+- **Baseload protected:** `excess = max(0, elec − floor)` → heating never draws from the floor.
+- **`total ≤ floor` → `excess = 0` → `elec_heating = 0`** regardless of regression estimate.
+- **`E_d > S` → `r_d = 1`** → 100% of excess attributed to heating; regression excess above metered is discarded.
 
-After the confidence block, add:
+Partial-elec days (`canAttribute` false, fallback path): null HH → null/null; non-null HH → 0/total. Conservative — no heating attributed to partial-elec days (design doc specifies whole-day behaviour only).
 
-```javascript
-let classification_auto;
-if (noGasCase && electric_heating_detected) {
-  classification_auto = 'all_electric';
-} else if (electric_heating_detected) {
-  classification_auto = 'some';
-} else {
-  classification_auto = 'none';
-}
-const classification_effective = userClassificationOverride ?? classification_auto;
-```
+### Step 6 — Update `detectSupplementaryLoads` for v2 mandates (`js/baseload.js`)
 
-### Step 10 — Update `skipped()` helper
+**6a — Signature:** Add `userClassificationOverride = null` as last parameter.
 
-The `skipped()` inner function currently returns `electric_heating_is_primary: false`.
-Replace it with the new fields and omit the deprecated field:
+**6b — Update `skipped()` closure** (captures `userClassificationOverride` via closure scope). Remove `electric_heating_is_primary`. Add classification + fraction fields:
 
-```javascript
+```js
 function skipped(method, days_used_in_fit) {
   return {
     method, days_used_in_fit,
@@ -285,6 +219,7 @@ function skipped(method, days_used_in_fit) {
     electric_heating_classification_auto: 'none',
     electric_heating_classification_effective: userClassificationOverride ?? 'none',
     electric_heating_fraction_of_total_energy: 0,
+    electricity_baseload: null,          // placeholder — overwritten by separateBaseload after Step I
     air_conditioning_detected: false, air_conditioning_kwh_per_dd: null,
     air_conditioning_kwh_estimate: null, air_conditioning_confidence: 'none',
     ac_detection_note: null,
@@ -293,200 +228,197 @@ function skipped(method, days_used_in_fit) {
 }
 ```
 
-### Step 11 — Update the main return value of `detectSupplementaryLoads`
+**6c — Add `daily_gas_kwh` to the `dailyData` build loop:**
+```js
+const daily_gas_kwh = noGasCase ? 0 : indices.reduce((s, i) => s + consumption[i].gas_kwh, 0);
+dailyData.push({ daily_elec_kwh: ..., daily_hdd: ..., daily_cdd: ..., daily_gas_kwh });
+```
+The existing `!noGasCase && gas_null` guard already ensures gas is non-null in the gas path.
 
-Replace the existing return object with the v2 shape:
+**6d — After the OLS call, apply 2% correction:**
+```js
+const raw_estimate            = a * sum_hdd;
+const total_annual_energy_kwh = dailyData.reduce((s, d) => s + d.daily_elec_kwh + d.daily_gas_kwh, 0);
+const corrected_estimate      = Math.max(0, raw_estimate - BASELOAD_CONFIG.WINTER_NON_HEAT_FRACTION * total_annual_energy_kwh);
+const corrected_kwh_per_dd    = sum_hdd > 0 ? corrected_estimate / sum_hdd : null;
+const fraction_of_total       = total_annual_energy_kwh > 0 ? raw_estimate / total_annual_energy_kwh : 0;
+```
+`fraction_of_total` uses the **raw** estimate (signal magnitude for UI tickbox-default — §2.5.7).
 
-```javascript
-return {
-  method: 'regression',
-  days_used_in_fit: dailyData.length,
-  baseline_kwh_per_day: c,
-  hdd_coefficient_kwh_per_dd: a,          // raw slope — diagnostic only
-  cdd_coefficient_kwh_per_dd: b,
-  hdd_p_value: p_a,
-  cdd_p_value: p_b,
-  sum_hdd_k_day: sum_hdd,
-  sum_cdd_k_day: sum_cdd,
-  electric_heating_detected,
-  electric_heating_kwh_per_dd: electric_heating_detected ? corrected_kwh_per_dd : null,  // corrected
-  electric_heating_kwh_estimate: electric_heating_detected ? corrected_estimate : null,   // corrected
-  electric_heating_confidence,
-  electric_heating_classification_auto: classification_auto,
-  electric_heating_classification_effective: classification_effective,
-  electric_heating_fraction_of_total_energy: fraction_of_total_energy,
-  air_conditioning_detected,
-  air_conditioning_kwh_per_dd,
-  air_conditioning_kwh_estimate,
-  air_conditioning_confidence,
-  ac_detection_note,
-  warnings: [],
-  limitations: STEP_H_LIMITATIONS,
-};
+**6e — Replace detection gate** (raw `a` → `corrected_kwh_per_dd`):
+```js
+const electric_heating_detected = corrected_kwh_per_dd !== null
+  && corrected_kwh_per_dd > STEP_H_CONFIG.ELECTRIC_HEATING_COEFF_THRESHOLD
+  && p_a < STEP_H_CONFIG.P_VALUE_DETECT
+  && sum_hdd > 0;
 ```
 
-Note: `electric_heating_is_primary` is **not** in this return — it is removed.
-`hdd_coefficient_kwh_per_dd` retains the raw slope (for diagnostic consumers
-that want the uncorrected OLS output).
+**6f — Replace confidence tiers** (raw `a` → `corrected_kwh_per_dd`; thresholds unchanged):
+```js
+let electric_heating_confidence;
+if (electric_heating_detected) {
+  electric_heating_confidence =
+    (corrected_kwh_per_dd >= STEP_H_CONFIG.COEFF_HIGH && p_a < STEP_H_CONFIG.P_VALUE_HIGH)
+      ? 'high' : 'moderate';
+} else {
+  electric_heating_confidence =
+    (corrected_kwh_per_dd !== null
+     && corrected_kwh_per_dd > STEP_H_CONFIG.COEFF_LOW
+     && p_a >= STEP_H_CONFIG.P_VALUE_DETECT
+     && p_a < STEP_H_CONFIG.P_VALUE_LOW_UPPER)
+      ? 'low' : 'none';
+}
+```
 
-### Step 12 — Update `separateBaseload` to pass override to `detectSupplementaryLoads`
+**6g — Compute 3-tier classification:**
+```js
+let classification_auto;
+if (noGasCase && electric_heating_detected) {
+  classification_auto = 'all_electric';
+} else if (electric_heating_detected) {
+  classification_auto = 'some';
+} else {
+  classification_auto = 'none';
+}
+const classification_effective = userClassificationOverride ?? classification_auto;
+```
 
-In `separateBaseload`, update both call sites of `detectSupplementaryLoads`:
+**6h — Updated return object.** Changed fields (all others unchanged):
+```js
+hdd_coefficient_kwh_per_dd: a,                                        // raw OLS — diagnostic
+electric_heating_kwh_per_dd: electric_heating_detected ? corrected_kwh_per_dd : null,  // CORRECTED
+electric_heating_kwh_estimate: electric_heating_detected ? corrected_estimate : null,   // CORRECTED
+electric_heating_classification_auto: classification_auto,             // NEW
+electric_heating_classification_effective: classification_effective,   // NEW
+electric_heating_fraction_of_total_energy: fraction_of_total,         // NEW
+electricity_baseload: null,   // placeholder — overwritten in separateBaseload
+// REMOVED: electric_heating_is_primary
+```
 
-```javascript
-// No-gas path:
+### Step 7 — Update `separateBaseload` orchestrator (`js/baseload.js`)
+
+**7a — Signature:**
+```js
+export function separateBaseload(consumption, external, userClassificationOverride = null)
+```
+
+**7b — Extend initial `heating` array** with the two new v2 fields:
+```js
+const heating = consumption.map(rec => ({
+  timestamp: rec.timestamp,
+  heating_kwh: rec.gas_kwh === null ? null : 0,
+  baseload_kwh: rec.gas_kwh === null ? null : 0,
+  is_absence: false,
+  elec_heating_kwh: null,       // populated by Step J
+  nonheat_residual_kwh: null,   // populated by Step J
+}));
+```
+
+**7c — No-gas branch.** After the existing `detectSupplementaryLoads` call:
+- Pass `userClassificationOverride` as 5th argument.
+- Add Steps I and J:
+```js
 const supplementary_loads = detectSupplementaryLoads(
   consumption, external, heating, baseload_metadata.method, userClassificationOverride
 );
+const electricity_baseload = computeElectricityBaseload(consumption, external, heating);
+supplementary_loads.electricity_baseload = electricity_baseload;
+applyElectricHeatingAttribution(consumption, external, heating, electricity_baseload, supplementary_loads);
+return { heating, baseload_metadata, supplementary_loads };
+```
+Add `low_gas_warm_days_total: 0` to the no-gas `baseload_metadata` (F.5 does not run for no-gas).
 
-// Gas path:
-const supplementary_loads = detectSupplementaryLoads(
-  consumption, external, heating, baseload_metadata.method, userClassificationOverride
+**7d — Gas case — insert Step F.5** after `detectAbsences` return, before `validateSeparation` call:
+```js
+const low_gas_warm_days_total = applyLowGasWarmCorrection(
+  consumption, external, heating, baseload_median_kwh_per_day
 );
+if (low_gas_warm_days_total > 30) {
+  warnings.push(
+    `Detected ${low_gas_warm_days_total} summer days where your gas use was below the ` +
+    `heating-day threshold. These have been re-classified as non-heating to avoid ` +
+    `mis-attributing your summer hot-water use as heating.`
+  );
+}
+```
+Add `low_gas_warm_days_total` to `baseload_metadata`.
+
+**7e — Gas case — update `detectSupplementaryLoads` call** with `userClassificationOverride` as 5th argument.
+
+**7f — Gas case — add Steps I and J** after `detectSupplementaryLoads`, same pattern as 7c.
+
+### Step 8 — Update `app.js` call sites
+
+**8a — `separateBaseload` call.** Locate the call (one in Octopus path, one in CSV path). Update to pass `userClassificationOverride` explicitly as `null` for now:
+```js
+separateBaseload(consumption, external, null)
+```
+The default is `null` so this is purely for explicitness; no behaviour change.
+
+**8b — `electric_heating_is_primary` references** (lines ~1082, ~1090 in `displayBaseloadResults`). Replace both:
+
+Line ~1082: `if (sl.electric_heating_detected && !sl.electric_heating_is_primary)` →
+```js
+if (sl.electric_heating_classification_effective === 'some')
 ```
 
-### Step 13 — Update `app.js` display logic
-
-At `displayBaseloadResults` (the function containing the affected lines), replace
-the two `electric_heating_is_primary` references:
-
-**Line ~1082:** Replace:
-```javascript
-if (sl.electric_heating_detected && !sl.electric_heating_is_primary) {
-```
-with:
-```javascript
-if (sl.electric_heating_classification_effective === 'some') {
-```
-
-**Line ~1090:** Replace:
-```javascript
-} else if (sl.electric_heating_is_primary) {
-```
-with:
-```javascript
+Line ~1090: `} else if (sl.electric_heating_is_primary) {` →
+```js
 } else if (sl.electric_heating_classification_effective === 'all_electric') {
 ```
 
-Note: the `electric_heating_detected` check in the original condition is now
-subsumed by `classification_effective === 'some'` (which requires detection).
+**8c — `baseline_kwh_per_day` → m4.** Grep for `baseline_kwh_per_day` in `app.js` and any m4 call. Confirm it is NOT passed to m4's inputs (§10 Deleted). If it is, remove that wiring. The field remains in `supplementary_loads` for internal use — do not remove from the object itself.
 
-### Step 14 — Write `test-m3-v2.mjs`
+**8d — No new downstream wiring required** for Steps I / J fields in this plan. Those fields are emitted and available; the full m4-v2 / m7-v2 wiring belongs to those plans.
 
-Create `test-m3-v2.mjs` at the repo root. Use the same Luxon stub pattern as
-`test-m3-step-f.mjs`. Import `applyLowGasWarmCorrection` and
-`detectSupplementaryLoads` from `./js/baseload.js`.
+### Step 9 — Write `test-m3-v2.mjs`
 
-Helper functions needed:
-- `makeDay(dateStr, gasKwhPerHh, elecKwhPerHh = 0.5)` — 48 HH records for one UTC day
-- `makeExternal(count, tempC)` — array of `{ temp_c: tempC }`, length `count`
-- `makeHeating(consumption, heatingFraction = 0.5)` — parallel array with
-  `{timestamp, heating_kwh, baseload_kwh, is_absence: false}`
-- `makeDailyDataForStepH(n, slope_hdd, intercept, gas_per_day, hdd_per_day)`
-  — builds `consumption`, `external`, `heating` arrays for `n` non-absence days
-  with the given parameters (for Step H unit tests)
+Create `test-m3-v2.mjs` at the repo root. Follow the same Luxon stub pattern as `test-m3-step-f.mjs` (`global.luxon = { DateTime: FakeDateTime }`). Import `applyLowGasWarmCorrection`, `computeElectricityBaseload`, and `separateBaseload` from `./js/baseload.js`.
 
-**TC-F5-1 — must-classify (warm summer day, gas below threshold):**
+**Test helper functions:**
+- `makeDay(dateStr, gasKwhPerHh, elecKwhPerHh)` — 48 UTC HH records for one day
+- `makeExternal(count, tempC)` — `[{ temp_c: tempC }]` × count
+- `makeHeating(consumption, heatingFraction)` — parallel array `{timestamp, heating_kwh, baseload_kwh, is_absence: false}`
+- `buildDataset(n, hddFn, elecFn, gasFn)` — n days of consumption + external + heating for Step H tests
 
-Build one day: gas = 10/48 kWh/HH (10 kWh/day, threshold = 2.2 × 6.18 = 13.596 kWh/day),
-mean temp = 19 °C. Heating pre-populated with non-zero values. Call
-`applyLowGasWarmCorrection(consumption, external, heating, 6.18)`.
-Assert: return value = 1; all `heating[i].heating_kwh === 0`; all
-`heating[i].baseload_kwh ≈ 10/48`; `heating[i].is_absence === false` for all.
+**TC-F5-1 — must-classify:** One day, gas = 10 kWh/day (below 2.2 × 6.18 = 13.596), temp = 19°C. Call `applyLowGasWarmCorrection(..., 6.18)`. Assert: return = 1; all `heating[i].heating_kwh === 0`; all `heating[i].baseload_kwh ≈ 10/48`; `is_absence === false`.
 
-**TC-F5-2 — must-NOT-classify (temp below 17 °C):**
+**TC-F5-2 — must-NOT-classify (temp below 17°C):** Gas = 10 kWh/day, temp = 13.3°C. Assert: return = 0; `heating_kwh` unchanged.
 
-Same gas (10 kWh/day) but mean temp = 13.3 °C. Assert return value = 0;
-`heating_kwh` unchanged from input.
+**TC-F5-3 — must-NOT-classify (gas above ceiling):** Gas = 14 kWh/day (above 13.596), temp = 19°C. Assert: return = 0.
 
-**TC-F5-3 — must-NOT-classify (gas above threshold):**
+**TC-F5-4 — must-NOT-classify (absence day):** Gas = 10 kWh/day, temp = 19°C, `heating[i].is_absence = true`. Assert: return = 0.
 
-Gas = 14/48 kWh/HH (14 kWh/day, above 13.596 threshold), temp = 19 °C.
-Assert return value = 0.
+**TC-F5-5 — boundary (exact ceiling):** Gas = 13.596 kWh/day, temp = 19°C → NOT classified (strict `<`). Gas = 13.595 kWh/day, temp = 17.0°C → classified. Gas = 13.595 kWh/day, temp = 16.9°C → NOT classified.
 
-**TC-F5-4 — must-NOT-classify (absence day):**
+**TC-F5-6 — heating+baseload invariant:** Classified day: `heating[i].heating_kwh + heating[i].baseload_kwh === consumption[i].gas_kwh` for all 48 HH (within 1e-10 tolerance).
 
-Gas = 10 kWh/day, temp = 19 °C, but `heating[i].is_absence = true` for all
-48 records. Assert return value = 0.
+**TC-F5-7 — is_absence not set:** All records on a classified day have `is_absence === false`.
 
-**TC-F5-5 — boundary (gas exactly at threshold):**
+**TC-H-1 — Rhiannon-like → `classification_auto = 'none'`:** Build ~200 days: `daily_elec ≈ 8 + 0.33 × HDD`, `daily_gas ≈ 50 + 2 × HDD`, `sum_hdd ≈ 1400`, `total_annual_energy ≈ 15000`. Expected: `raw ≈ 462`, `corrected = max(0, 462 − 300) = 162`, `corrected_per_dd ≈ 0.116` → fails 0.2 gate. Assert: `electric_heating_detected === false`; `classification_auto === 'none'`; `classification_effective === 'none'`. **Critical guard** — without 2% correction, raw 0.33 > 0.2 would fire.
 
-Gas = 13.60/48 kWh/HH (13.60 kWh/day = exact threshold), temp = 19 °C.
-Assert return value = 0 (strict `<` fails at exact equality).
+**TC-H-2 — clear-positive → `classification_auto = 'some'`:** 200 days: `daily_elec ≈ 8 + 0.6 × HDD`, `total ≈ 10000`, `sum_hdd ≈ 1200`. Raw ≈ 720, corrected ≈ 520, `corrected_per_dd ≈ 0.43`. Assert: `detected === true`; `classification_auto === 'some'`; `electric_heating_kwh_per_dd ≈ 0.43` (corrected); `hdd_coefficient_kwh_per_dd ≈ 0.6` (raw); `electric_heating_fraction_of_total_energy ≈ 0.072` (raw / total).
 
-Gas = 13.59/48 kWh/HH (13.59 kWh/day, just below threshold), temp = 17.0 °C
-(exactly at floor), temp = 16.9 °C (below floor). Assert:
-- 13.59 + 17.0 → classified (return = 1)
-- 13.59 + 16.9 → NOT classified (return = 0)
+**TC-H-3 — all-electric → `classification_auto = 'all_electric'`:** 200 all-electric days (gas = null): `daily_elec ≈ 12 + 1.5 × HDD`. Call with `baseloadMethod = 'no-gas'`. Assert: `detected === true`; `classification_auto === 'all_electric'`; `classification_effective === 'all_electric'`.
 
-**TC-F5-6 — heating+baseload invariant preserved:**
+**TC-H-4 — user override wins (three cases):** TC-H-2 data (auto = 'some'):
+- Override `'none'` → `effective === 'none'`
+- Override `'all_electric'` → `effective === 'all_electric'`
+- Override `null` → `effective === 'some'`
 
-Classified day: assert `heating[i].heating_kwh + heating[i].baseload_kwh`
-equals `consumption[i].gas_kwh` (within floating-point tolerance 1e-10) for
-every HH record.
+**TC-H-5 — deprecated field absent:** Any valid call: assert `!('electric_heating_is_primary' in result)`.
 
-**TC-F5-7 — is_absence not set by F.5:**
+**TC-I-1 — 5th-pct floor:** Synthetic per-HH elec: flat 0.1 kWh/HH overnight + variable daytime 0.1–1.0 kWh/HH, 60 non-absence days. Call `computeElectricityBaseload`. Assert: `electricity_baseload ≈ 0.1` (within 0.02 — the quiet floor, not the mean ~0.4).
 
-Assert `heating[i].is_absence === false` for all records on a classified day
-(Step F.5 must not flip absence — the day should still enter Step G regression).
+**TC-I-2 — EV does not inflate baseload:** Same base as TC-I-1; inject 7 kWh overnight EV on ~30% of nights (one HH slot). Assert: `electricity_baseload` unchanged within 0.01 kWh/HH vs without EV.
 
-**TC-H-1 — Rhiannon-like case → classification_auto = 'none':**
+**TC-J-1 — proportional shape + invariant:** Via `separateBaseload` on a synthetic dataset (detection = 'some', known `corrected_kwh_per_dd`). For a day with known `E_d` and varied per-HH excess: assert `elec_heating_kwh[hh] = r_d × excess[hh]`; `Σ elec_heating ≈ E_d` (when `r_d < 1`); for every HH: `elec_heating_kwh + nonheat_residual_kwh === elec_kwh` (exact); `0 ≤ elec_heating_kwh ≤ elec_kwh`.
 
-Build `dailyData`-equivalent consumption/external/heating for ~200 days with:
-`daily_elec = 8 + 0.33 × HDD + small_noise`, `daily_gas = 50 + 2 × HDD`,
-such that `sum_hdd ≈ 1400`, `total_annual_energy_kwh ≈ 15000`, raw_estimate
-≈ 462 kWh, corrected_estimate = max(0, 462 − 300) = 162 kWh,
-corrected_kwh_per_dd ≈ 0.116 → fails 0.2 gate.
+**TC-J-2 — baseload protected:** HH where `total_elec ≤ electricity_baseload` → `elec_heating_kwh === 0`.
 
-Call `detectSupplementaryLoads(consumption, external, heating, 'summer-hh-profile-weekday-split')`.
-Assert: `electric_heating_detected === false`;
-`electric_heating_classification_auto === 'none'`;
-`electric_heating_classification_effective === 'none'` (no override).
+**TC-J-3 — excess-capped (r_d = 1):** Cold day where `E_d > Σ excess` → `r_d === 1`; each HH: `elec_heating_kwh = excess[hh]`; `nonheat_residual_kwh = min(total_elec, floor)`.
 
-**TC-H-2 — clear-positive synthetic → classification_auto = 'some':**
-
-Build 200 days with `daily_elec = 8 + 0.6 × HDD + noise`, `daily_gas` non-zero,
-`total_annual_energy_kwh ≈ 10000`, `sum_hdd ≈ 1200`.
-Expected: raw_estimate ≈ 720, corrected_estimate = max(0, 720 − 200) = 520,
-corrected_kwh_per_dd ≈ 0.43 → passes 0.2 gate.
-Assert: `electric_heating_detected === true`;
-`electric_heating_classification_auto === 'some'`;
-`electric_heating_kwh_per_dd ≈ 0.43` (corrected, not raw 0.6);
-`electric_heating_kwh_estimate ≈ 520` (corrected).
-
-**TC-H-3 — fraction_of_total_energy uses raw estimate:**
-
-Using TC-H-2 data: assert `electric_heating_fraction_of_total_energy ≈ 720 / 10000 = 0.072`
-(within 0.005). Fraction uses raw (uncorrected) estimate.
-
-**TC-H-4 — all_electric on no-gas household:**
-
-Build 200 all-electric days (all `gas_kwh = null`): `daily_elec = 12 + 1.5 × HDD + noise`.
-Call `detectSupplementaryLoads(consumption, external, heating, 'no-gas')`.
-Assert: `electric_heating_detected === true`;
-`electric_heating_classification_auto === 'all_electric'`;
-`electric_heating_classification_effective === 'all_electric'`.
-
-**TC-H-5 — user override wins:**
-
-Using TC-H-2 setup (auto = 'some'), call with three override values:
-- `userClassificationOverride = 'none'` → assert `classification_effective === 'none'`
-- `userClassificationOverride = 'all_electric'` → assert `classification_effective === 'all_electric'`
-- `userClassificationOverride = null` → assert `classification_effective === 'some'`
-
-**TC-H-6 — confidence tier = 'high' for corrected slope ≥ 0.5:**
-
-Build data so corrected_kwh_per_dd ≈ 0.55, p_a < 0.01.
-Assert `electric_heating_confidence === 'high'`.
-
-**TC-H-7 — confidence tier = 'moderate' for corrected slope 0.2–0.5:**
-
-Build data so corrected_kwh_per_dd ≈ 0.35, p_a < 0.05.
-Assert `electric_heating_confidence === 'moderate'`.
-
-**TC-H-8 — deprecated field absent:**
-
-Using any valid call, assert `'electric_heating_is_primary' in result === false`.
+**TC-J-4 — classification 'none':** `classification_effective = 'none'` (via user override). All HH: `elec_heating_kwh === 0`; `nonheat_residual_kwh === elec_kwh`.
 
 ---
 
@@ -494,30 +426,35 @@ Using any valid call, assert `'electric_heating_is_primary' in result === false`
 
 | Risk | Mitigation |
 |------|-----------|
-| `heat-loss.js` Check 4D reads `electric_heating_kwh_per_dd` — value changes from raw to corrected slope | Intentional: corrected slope is a better estimate. In Rhiannon's data `electric_heating_detected` becomes `false` so Check 4D won't run at all. For genuine electric heating, corrected slope is still correct. No behavioural regression. |
-| Removing `electric_heating_is_primary` breaks `app.js` display | Mitigated by Step 13: update both references to `classification_effective` in the same plan. |
-| `buildDayIndexMap` is not exported — unit tests call `applyLowGasWarmCorrection` which uses it internally | No issue: `applyLowGasWarmCorrection` is defined in the same module file as `buildDayIndexMap`. The export makes the function callable from tests; the internal helper is resolved at import time. |
-| Synthetic Step H test data producing exact OLS coefficients requires careful construction | Accepted complexity: use high-count (200 days), deterministic data without randomness (noise = 0 or very small fixed delta per day); p-values will be near zero for clear signals. If OLS produces boundary p-values, adjust slope magnitude. |
-| `separateBaseload` new parameter `userClassificationOverride` is a breaking change for current callers in `app.js` | Mitigated: parameter defaults to `null` — existing `app.js` calls `separateBaseload(consumption, external)` without a third argument and get the existing auto-detect behaviour unchanged. |
+| v1 Step H tests may assert detection with raw slope; corrected slope changes gate outcomes | At Step 9 start, read `test-m3.mjs` — confirm no v1 test uses a near-threshold (0.2 kWh/K·day) electric heating signal. The 2% correction only changes detection when `corrected_per_dd` crosses 0.2; strong signals (0.6+) remain detected. If any v1 test fails, update assertion to corrected value and document as deviation. |
+| `applyElectricHeatingAttribution` runs after Step F; `is_absence` must be set first | Enforced by orchestrator order: F → F.5 → G → H → I → J. `canAttribute` guard prevents attribution when classification is unavailable. |
+| `electricity_baseload = null` when < 30 qualifying days; Step J uses `floor ?? 0` | `floor = 0` means excess = full elec_kwh — conservative over-attribution. Acceptable: the 30-day guard matches Step H's, and null is the signal for m7 to fall back on its own default. |
+| `app.js` line numbers may have shifted since 2026-06-02 | Step 8b greps for `electric_heating_is_primary` before editing; exact line numbers are not relied upon. |
+| `heat-loss.js` Check 4D reads `electric_heating_kwh_per_dd` — value changes (raw → corrected) | Intentional and correct: corrected slope is a better estimate. In Rhiannon's gas-primary data, detection becomes `false` so Check 4D does not run at all. |
+| Partial-elec days get fallback (0/total) not per-day attribution | Acceptable: design doc specifies whole-day behaviour; partial days are a meter gap, not a new calculation path. |
+| `separateBaseload` new parameter is a breaking change for `app.js` callers | Mitigated: parameter defaults to `null` — existing calls with two arguments are unchanged. Step 8a makes the null explicit for clarity. |
 
 ---
 
 ## Success criteria
 
-- [ ] `node test-m3-v2.mjs` exits 0 with all 13 tests passing
-- [ ] `node test-m3-step-f.mjs` still exits 0 — v1 Step F tests unaffected
-- [ ] `node test-m6.mjs` still exits 0 — no regressions in other modules
-- [ ] For a dataset matching Rhiannon's calibrated values: `electric_heating_classification_auto === 'none'` and `electric_heating_detected === false` (TC-H-1 confirmation)
-- [ ] `baseload_metadata.low_gas_warm_days_total` is present and ≥ 0 in all return paths
-- [ ] `electric_heating_is_primary` field is absent from `detectSupplementaryLoads` return value
-- [ ] `electric_heating_classification_auto`, `electric_heating_classification_effective`, and `electric_heating_fraction_of_total_energy` present on all return paths (including `skipped()` branches)
-- [ ] `separateBaseload` accepts `userClassificationOverride = null` and passes it through; existing callers with no third argument are unaffected
+- [ ] `node test-m3.mjs` exits 0 — all 18 v1 tests still pass (no regressions)
+- [ ] `node test-m3-v2.mjs` exits 0 — all 16 v2 tests pass
+- [ ] `node test-m3-step-f.mjs` exits 0 — unaffected
+- [ ] TC-H-1: `electric_heating_detected === false` on Rhiannon-like data (critical INV-16 guard)
+- [ ] TC-H-5: `electric_heating_is_primary` absent from all return paths
+- [ ] Gas invariant: `heating_kwh + baseload_kwh === gas_kwh` for all non-null gas records, including F.5-corrected days
+- [ ] Elec invariant: `elec_heating_kwh + nonheat_residual_kwh === elec_kwh` for all non-null elec records
+- [ ] `electricity_baseload` non-null in `supplementary_loads` when ≥ 30 qualifying elec days available
+- [ ] `electric_heating_classification_auto`, `_effective`, `electric_heating_fraction_of_total_energy` present on all return paths (gas, no-gas, skipped branches)
+- [ ] `app.js`: `separateBaseload` call updated; no `electric_heating_is_primary` references in codebase; `baseline_kwh_per_day` not passed to m4
+- [ ] Other test suites unaffected: M5 39/39, M5b 29/29, M6 24/24, M7 39/39, M8 24/24, M9 24/24
 
 ---
 
 ## Implementation Deviations
 
-None. (Populate after implementation.)
+None (plan phase).
 
 <!--
 The Design Review section is appended by the Opus reviewer when the plan is
