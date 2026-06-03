@@ -1,7 +1,7 @@
 # m3-baseload-v2 — M3 Baseload Separation v2 (the fork)
 
 **Date:** 2026-06-04
-**Status:** Awaiting review — Opus architect review pending.
+**Status:** ✅ Approved — 2026-06-04. Implementation may begin.
 
 > **Supersedes** the 2026-06-02 m3 plan (commit 51c67a8, on-hold, never approved).
 > That plan covered only INV-9 + INV-16. This plan covers the full fork scope per
@@ -38,7 +38,7 @@ The following **divergences from v2** exist in the live code. Each is a mandate:
 
 **`js/scenario-consumption.js` checked.** No `elec_heating_kwh`, no Step 1d. Step J is entirely new — no code to defer to.
 
-**`app.js` (read during 2026-06-02 plan cycle):** `electric_heating_is_primary` is consumed at lines ~1082 and ~1090 in `displayBaseloadResults` (two conditional branches on which status message to show). `heat-loss.js` reads `supplementaryLoads.electric_heating_kwh_per_dd` for its Check 4D HTC correction — the field name is unchanged, but the value becomes the corrected slope in v2 (correct and intentional: a better estimate of real electric-heating signal).
+**`app.js` (read during 2026-06-02 plan cycle):** `electric_heating_is_primary` is consumed at lines 1074 and 1082 in `displayBaseloadResults` (two conditional branches on which status message to show). `heat-loss.js` reads `supplementaryLoads.electric_heating_kwh_per_dd` for its Check 4D HTC correction — the field name is unchanged, but the value becomes the corrected slope in v2 (correct and intentional: a better estimate of real electric-heating signal).
 
 **Test file structure:** There is no committed M3 v1 suite beyond `test-m3-step-f.mjs` (which tests Step F unit-level). The CLAUDE.md "M3 18/18" entry pre-dates the current repo state and does not correspond to a file on disk. Regression coverage for the changed paths (Step H detection, classification, `separateBaseload` orchestrator) comes from the new `test-m3-v2.mjs`. The deferred-to v1 mechanics (Methods A–E, Step G, the OLS body, AC detection) are **unchanged** — no new tests are needed for them under this plan.
 
@@ -455,6 +455,93 @@ Create `test-m3-v2.mjs` at the repo root. Follow the same Luxon stub pattern as 
 ## Implementation Deviations
 
 None (plan phase).
+
+---
+
+## Design Review
+
+**Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Date:** 2026-06-04
+**Review type:** Plan review (pre-implementation)
+**Authoritative design:** `design/m3-baseload-v2.md` (praxis-hub, commit `a714d60`, Rhiannon-agreed)
+
+### Context
+
+Re-review of the targeted re-cut (`5215a97`) of the original plan (`668224c`). The plan was sound
+on the fork scope from the first cut — the Steps I/J attribution math, the 2% winter-non-heat
+correction, the 3-tier classification, and the no-gas branch were all verified correct, and the
+plan's codebase claims were confirmed via a read-only Explore sub-agent (`separateBaseload` /
+`detectSupplementaryLoads` signatures; the v1 helper set; the four absent v2 constants; raw-slope
+detection; the two `electric_heating_is_primary` refs; `baseline_kwh_per_day` already not wired to
+m4; `heat-loss.js` Check 4D reading `electric_heating_kwh_per_dd`). Five issues were raised; all
+are resolved in the re-cut.
+
+### Required changes for implementation
+
+**1. Phantom `test-m3.mjs`.** Success criterion #1, the research findings, and a risk row referenced
+a `test-m3.mjs` 18-test v1 suite that does not exist (only `test-m3-step-f.mjs` is committed; the M3
+v1 suite was never committed). The plan trusted CLAUDE.md's "M3 18/18" line, not the file.
+
+**2. Null `electricity_baseload` over-attribution (MEDIUM).** Step J used `floor = baseload ?? 0`;
+with floor 0, `excess = full elec`, so heating was drawn from the always-on baseload — the opposite
+of "baseload protected."
+
+**3. Missing all-electric per-HH test (MEDIUM).** Design §5 test 16 (no-gas per-HH `elec_heating`
+series) was not transcribed into the plan's TCs.
+
+**4. Test count.** The plan enumerated 18 v2 TCs but claimed "16."
+
+**5. Hygiene.** Unused `external` param in `computeElectricityBaseload`; stale
+`electric_heating_is_primary` line refs.
+
+### Resolution of review changes
+
+1. **Phantom `test-m3.mjs`** — removed from success criterion #1, research, and the risk row;
+   verification re-stated on `test-m3-step-f.mjs` (stays green) + the new `test-m3-v2.mjs`. The absent
+   M3 v1 suite is noted as a pre-existing repo gap, out of scope.
+2. **Null-baseload** — `canAttribute` now requires `electricityBaseload !== null`; when the floor is
+   unknown, attribution is skipped (fallback 0 / total). `floor = electricityBaseload` (no `?? 0`).
+3. **All-electric test** — TC-J-5 added (full-year no-gas; `elec_heating > 0` on cold days, `= 0` in
+   summer where HDD≈0 → E_d=0; invariant holds).
+4. **Count** — reconciled to 19 (F5×7 + H×5 + I×2 + J×5) in the Files table and success criteria.
+5. **Hygiene** — `computeElectricityBaseload(consumption, heating)` (unused `external` dropped, call
+   sites updated); Step 8b line refs corrected to 1074/1082. (One stale "~1082/~1090" in the research
+   narrative corrected at approval.)
+
+### Items noted but not edited
+
+- **NOTE — interim Check 4D behaviour.** Between m3-v2 and m4-v2 landing, `heat-loss.js` Check 4D reads
+  the *corrected* (not raw) `electric_heating_kwh_per_dd`, and null when undetected. More-correct and
+  acknowledged; Check 4D's disposition is m4-v2's concern, not this plan's.
+- **LOW — `ELECTRICITY_BASELOAD_PERCENTILE = 5`** is a calibration target (FINDING §8.8), to be pinned
+  jointly with m7's 0.9 intermittent-gains fraction when the trace is built. A design open item, not a
+  plan blocker.
+
+## Review Summary
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| CRITICAL | 0     | ✓ pass |
+| HIGH     | 0     | ✓ pass |
+| MEDIUM   | 2     | ✅ resolved |
+| LOW      | 3     | ✅ resolved |
+
+Verdict: ✅ APPROVED — full fork scope, faithful to the design; all review findings resolved in the re-cut.
+
+---
+
+## Approval
+
+**Status:** ✅ Approved — 2026-06-04
+**Approved by:** Rhiannon (via Opus review)
+**Clarifications confirmed:**
+- Null `electricity_baseload` (< 30 qualifying elec days) → Step J **skips attribution** (`elec_heating
+  = 0`, `residual = total`); the floor is never assumed at 0.
+- The per-HH electric-heating attribution (Step J) is **new methodology agreed 2026-06-03** — not a
+  transcription of m7's old "Step 1d"; it is a mandate (the reproduce-from-code guardrail does not apply
+  to it).
+- M3 v1 has **no committed test suite beyond Step F** — a pre-existing repo gap, out of scope here;
+  regression coverage for the changed paths comes from the new `test-m3-v2.mjs`.
 
 <!--
 The Design Review section is appended by the Opus reviewer when the plan is
