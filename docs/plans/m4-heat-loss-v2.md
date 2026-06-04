@@ -1,59 +1,120 @@
-# m4-heat-loss-v2 — Combined-fuel Siviour fit, net_flow back-calc, boiler dropdown
+# M4 Heat Loss — v2 implementation
 
-**Date:** 2026-06-02
+**Date:** 2026-06-04
 **Status:** Awaiting review — Opus architect review pending.
 
 ---
 
 ## Task description
 
-Implement the M4 v2 delta as specified in `design/m4-heat-loss-v2.md`. Three focused
-changes to `js/heat-loss.js`: (1) replace the v1 gas-only Siviour fit with a combined-fuel
-fit that handles all four UK household heating profiles (gas-only, mixed-fuel,
-all-electric, existing-HP) in one code path — removing the no-gas early return and the
-post-fit Check 4D additive correction (INV-15); (2) add a `net_flow_w` back-calculation
-using the user-stated winter setpoint and M3-v2's `baseline_kwh_per_day` as the
-internal-gains term (INV-3); (3) replace the free-form numeric `boiler_efficiency` input
-with a 4-tier dropdown anchored on UK SAP seasonal-average efficiencies, and remove the
-`floor_area_m2` input and `hlp_w_per_m2_k` output (INV-12, §7 7b). Downstream: `app.js`
-call-site and display function update; `index.html` HTML control changes; new
-`test-m4-v2.mjs` covering the 13 v2-specific test criteria from the design doc.
+Re-implement `js/heat-loss.js` (Module 4) from v1 to v2 per `m4-heat-loss-v2.md` (commit bb098ec,
+2026-06-04). The load-bearing changes are: (1) combined-fuel Siviour LHS (`gas×η + elec×1.0` — one
+source-blind fit for all household types, replacing v1's gas-only / no-gas-early-return / Check-4D
+branches); (2) the η-move (η leaves HTC recovery, enters LHS — gas-only HTC provably unchanged);
+(3) mint per-HH `thermal_heat_delivered_kwh` (m5/m7 consume; full series including absence periods);
+(4) ±20%-bounded HTC rescale → `htc_used` (m7 feedback edge, dormant first pass: `htc_used = htc`);
+(5) removal of Check 4D, no-gas short-circuit, net_flow/internal_gains, floor_area/HLP outputs;
+(6) boiler efficiency converted from a free-form number input to the INV-12 4-tier dropdown (0.92 /
+0.85 default / 0.70 / 0.60). Create `test-m4-v2.mjs` from scratch (no prior M4 committed test
+suite). Update `index.html` and `js/app.js` to match the new signature and output contract.
+
+**Prerequisite gate:** m3-v2 must be implemented and verified (plan Status `Implemented`) before
+integrating m4-v2 into `app.js`. m4 consumes m3's per-HH `elec_heating_kwh` series from
+`baseloadResult.heating[i].elec_heating_kwh`. The `test-m4-v2.mjs` test suite uses synthetic data
+and can run independently at any time.
 
 ---
 
 ## Research findings
 
-**Existing code reviewed:**
+### `js/heat-loss.js` (v1, 388 lines) — fully read
 
-- `js/heat-loss.js` — 388-line module. `estimateHeatLoss(heating, external,
-  baseloadMetadata, supplementaryLoads, boilerEfficiency, floorAreaM2)` is the single
-  public export. Private helpers: `aggregateToDays` (per-HH → per-day), `filterForRegression`
-  (absence/DD/threshold exclusions), `runOLSTwoPredictor` (2-predictor through-origin OLS),
-  `runOLSOnePredictor` (1-predictor Check 4A fallback), `buildRating` / `buildSolarRating` /
-  `buildCoolingConsideration`. HTC recovery: `htc = alpha * 1000 * boilerEfficiency / 24`
-  (v1 bakes η into the coefficient; v2 bakes η into the LHS instead).
-- `js/app.js:1218–1231` — reads `boilerEfficiencyInput.value` (free text, fallback 0.90),
-  `floorAreaInput.value`, calls `estimateHeatLoss` with 6 args, then `setHeatLossResult` +
-  `displayHeatLossResults`. `displayHeatLossResults` at line 1133 uses a DL table approach;
-  surfaces `htc_w_per_k_adjusted` (line 1184) and `hlp_w_per_m2_k` (line 1188) — both to
-  be removed. `validation_status === 'no_gas'` branch (line 1144) to be removed (v2 runs
-  all-electric through the fit; pathological no-gas + no-elec falls to `insufficient_data`).
-- `index.html` — `#boiler-efficiency` is a `<input type="number">`, `#floor-area` is a
-  `<input type="number">`. Both in the Heat Loss methodology card. A winter-setpoint input
-  (`#winter-setpoint`) does not exist yet and must be added.
-- No existing `test-m4*.mjs` file — test suite written from scratch.
-- Design doc `m4-heat-loss-v2.md` confirms no external libraries required; all maths are
-  pure JS float arithmetic matching the existing OLS helper pattern. Through-origin OLS is
-  already correctly implemented in `runOLSTwoPredictor` and `runOLSOnePredictor` — no change
-  to those functions' internal maths, only what `y` value the caller passes into them.
-- `design/m3-baseload-v2.md` output contract confirmed: `supplementary_loads` exposes
-  `electric_heating_classification_effective` ('none'|'some'|'all_electric'),
-  `electric_heating_kwh_per_dd` (corrected slope), and `baseline_kwh_per_day` (Step H
-  regression intercept). Deprecated `electric_heating_is_primary` is removed in m3-v2 — this
-  plan must not read it.
+Key reference points confirmed from the live code:
 
-**No third-party libraries needed.** All maths are vanilla JS. The OLS functions are reused
-as-is; only the caller assembles a different `y` column.
+- **`aggregateToDays(heating, external)`** — reads only `h.heating_kwh` (gas); marks
+  `missing_heating = true` if any HH gas value is null; day objects carry `daily_heating_kwh` as the
+  LHS variable for the fit. Solar (W/m² → kWh/m²) and temperature aggregation are correct and
+  survive v2 unchanged.
+- **`filterForRegression(days)`** — thresholds on `day.daily_heating_kwh < 2.0 kWh`. This changes
+  to `day.daily_heat_delivered` in v2.
+- **`runOLSTwoPredictor(filtered)`** and **`runOLSOnePredictor(filtered)`** — read `d.daily_heating_kwh`
+  as `y`. The normal-equations solver, through-origin constraint, standard errors, and R² computation
+  are correct and unchanged in v2 (only the field name changes to `d.daily_heat_delivered`).
+- **`estimateHeatLoss` signature**: `(heating, external, baseloadMetadata, supplementaryLoads,
+  boilerEfficiency, floorAreaM2)`. v2 drops three params and adds one.
+- **No-gas short-circuit** at the top of `estimateHeatLoss` (lines 209–224): DELETE.
+- **HTC recovery** (line 306): `alpha * 1000 * boilerEfficiency / 24`. In v2: `alpha * 1000 / 24`
+  (η is baked into `daily_heat_delivered`; do not double-apply).
+- **CI** (lines 307–310): same `boilerEfficiency` factor — remove in v2.
+- **Check 4D** (lines 329–346): DELETE entirely.
+- **Floor area warning** (lines 354–356): DELETE.
+- **Output field** `solar_aperture_m2` → renamed to `solar_aperture` in v2 contract (§2.6).
+- **`zeroExcluded`** (line 206): only used by the deleted no-gas early return — DELETE.
+- **`insufficientDataResult()` inline closure** (lines 229–244): update to v2 contract.
+
+### `js/constants.js`
+
+`HDD_BASE_TEMP = 15.5` exported from line 1. Import confirmed at `heat-loss.js:6`. No redeclaration
+needed — already correct.
+
+### Test scaffolding
+
+No `test-m4*.mjs` found in the repository root. **M4 has no committed test suite.** The m3 plan
+review (2026-06-04) confirmed M3 v1 similarly had no committed suite beyond Step F — M4 follows the
+same pattern. `test-m4-v2.mjs` is created from scratch, covering all 15 v2-specific tests (design
+doc §5) plus v1 carry-through tests (~10), totalling ~25 test cases.
+
+### `js/app.js` call site — read lines 43, 180–181, 1130–1235, 1300–1316, 1450–1474, 3200–3271
+
+Current call (lines 1216–1223):
+```js
+result = estimateHeatLoss(
+  baseloadResult.heating,
+  externalResult.external,
+  baseloadResult.baseload_metadata,    // REMOVE — no-gas gate gone
+  baseloadResult.supplementary_loads,  // REMOVE — Check 4D gone
+  boilerEfficiency,
+  floorAreaM2,                         // REMOVE — HLP gone
+);
+```
+
+v2 call:
+```js
+result = estimateHeatLoss(
+  baseloadResult.heating,   // now carries elec_heating_kwh per HH (m3-v2 contract)
+  externalResult.external,
+  boilerEfficiency,
+  null,                     // setpointRescalePayload — first pass; dormant until m7-v2 lands
+);
+```
+
+All field-level app.js changes confirmed by reading the relevant lines:
+
+| Location | Current | Change |
+|---|---|---|
+| Line 181 | `const floorAreaInput = document.getElementById('floor-area')` | DELETE |
+| Lines 1136–1143 | `if (result.validation_status === 'no_gas') { … }` display block | DELETE |
+| Lines 1176–1178 | `htc_w_per_k_adjusted` display row | DELETE |
+| Lines 1180–1182 | `hlp_w_per_m2_k` display row | DELETE |
+| Line 1183 | `result.solar_aperture_m2` | → `result.solar_aperture` |
+| Line 1184 | `result.solar_aperture_m2` | → `result.solar_aperture` |
+| Line 1210 | `parseFloat(…) || 0.90` | → `|| 0.85` |
+| Lines 1211–1212 | `floorAreaRaw` / `floorAreaM2` parse | DELETE |
+| Line 3206 | `hl?.htc_w_per_k ?? null` in diagnostic | → `hl?.htc_used ?? null` |
+| Line 3208 | `hl?.solar_aperture_m2 ?? null` | → `hl?.solar_aperture ?? null` |
+| Line 3265 | `htc_w_per_k: htc` in diagnostic return | → `htc_used: htc` |
+| Line 3266 | `solar_aperture_m2: solarR` in diagnostic return | → `solar_aperture: solarR` |
+
+**Harmlessly dead code — leave for downstream v2 plans:**
+- Line 1310: `no_gas` check in `displayThermalCharResults` (refers to m5 result object)
+- Line 1459: `no_gas` check in `displayHpModelResults` (refers to m6 result object)
+
+These branches never trigger once m4-v2 never emits `no_gas`. Clean up in m5-v2 / m6-v2 plans.
+
+### `index.html` inputs — read lines 231–237
+
+- Line 232: `<input type="number" id="boiler-efficiency" value="0.90" step="0.01" min="0.60" max="0.98">` → replace with `<select>` (INV-12 4-tier).
+- Lines 236–237: floor area `<label>` + `<input id="floor-area">` → DELETE both.
 
 ---
 
@@ -61,447 +122,479 @@ as-is; only the caller assembles a different `y` column.
 
 | Action | File | Purpose |
 |--------|------|---------|
-| MODIFY | `js/heat-loss.js` | Combined-fuel fit, net_flow, new outputs, API changes |
-| MODIFY | `js/app.js` | Updated call site, dropdown read, winter setpoint, display updates |
-| MODIFY | `index.html` | Boiler dropdown, remove floor area input, add winter setpoint input |
-| CREATE | `test-m4-v2.mjs` | 13 v2-specific tests per design doc §7 |
+| MODIFY | `js/heat-loss.js` | All v2 deltas: combined-fuel, η-move, mint, rescale, removals, field rename |
+| MODIFY | `index.html` | Boiler efficiency → 4-tier dropdown (INV-12); remove floor area input |
+| MODIFY | `js/app.js` | Call site update; remove/rename all affected field references |
+| CREATE | `test-m4-v2.mjs` | M4 v2 test suite — 15 v2-specific + ~10 v1 carry-through |
 
 ---
 
 ## Implementation steps
 
-### Step 1 — Update `estimateHeatLoss` signature; remove deprecated inputs
+**Prerequisite gate:** Before integrating into `app.js`, confirm `docs/plans/m3-baseload-v2.md`
+shows `Status: Implemented`. The test suite and `heat-loss.js` changes can proceed at any point.
 
-In `js/heat-loss.js`, change the function signature:
+---
 
-```js
-// v1:
-export function estimateHeatLoss(heating, external, baseloadMetadata, supplementaryLoads, boilerEfficiency, floorAreaM2)
+### Step 1 — New helper: `mintThermalHeatDelivered` (`js/heat-loss.js`)
 
-// v2:
-export function estimateHeatLoss(heating, external, baseloadMetadata, supplementaryLoads, boilerEfficiency, winterSetpointC)
-```
-
-`floorAreaM2` is removed. `winterSetpointC` is added as the final parameter (number, the
-user's stated indoor winter setpoint in °C).
-
-### Step 2 — Add combined-fuel pre-flight (replace no-gas early return)
-
-Remove the v1 no-gas early return block at the top of `estimateHeatLoss` (lines 208–224).
-
-In its place, derive `fuel_split` and `useElecHeating` from M3-v2's classification field:
+Add a new private function immediately before `aggregateToDays`:
 
 ```js
-const classificationEffective = supplementaryLoads?.electric_heating_classification_effective ?? 'none';
-let fuel_split, useElecHeating;
-if (classificationEffective === 'none') {
-  fuel_split = 'gas_only';
-  useElecHeating = false;
-} else if (classificationEffective === 'some') {
-  fuel_split = 'mixed_fuel';
-  useElecHeating = true;
-} else {
-  // 'all_electric'
-  fuel_split = 'all_electric';
-  useElecHeating = true;
-}
-const elecHeatingKwhPerDd = useElecHeating
-  ? (supplementaryLoads?.electric_heating_kwh_per_dd ?? 0)
-  : 0;
-```
-
-No early return for any classification. All paths enter the aggregation and fit below.
-
-### Step 3 — Extend `aggregateToDays` to add `daily_heat_delivered` and `daily_mean_temp_c`
-
-Change signature: `aggregateToDays(heating, external, boilerEfficiency, elecHeatingKwhPerDd)`.
-
-In the day-building loop, after computing `daily_heating_kwh` and `daily_degree_days`, add:
-
-```js
-const daily_elec_heating_kwh = elecHeatingKwhPerDd * daily_degree_days;
-const daily_heat_delivered   = daily_heating_kwh * boilerEfficiency
-                             + daily_elec_heating_kwh * 1.0;
-const daily_mean_temp_c      = missing_weather ? NaN : tempSum / 48;
-```
-
-Add `daily_elec_heating_kwh`, `daily_heat_delivered`, and `daily_mean_temp_c` to each day
-object in the returned `days` array. `daily_heating_kwh` (gas, raw) is still kept because
-it is referenced in the annual totals calculation in Step 11.
-
-### Step 4 — Update `filterForRegression` to use combined-fuel threshold
-
-Change the heating threshold check from:
-
-```js
-if (day.daily_heating_kwh < 2.0) { excluded.below_heating_threshold++; continue; }
-```
-
-to:
-
-```js
-if ((day.daily_heating_kwh + (day.daily_elec_heating_kwh ?? 0)) < 2.0) {
-  excluded.below_heating_threshold++;
-  continue;
+function mintThermalHeatDelivered(heating, eta) {
+  return heating.map(h => {
+    const gas  = h.heating_kwh      ?? null;
+    const elec = h.elec_heating_kwh ?? null;
+    if (gas === null && elec === null) return null;
+    return (gas ?? 0) * eta + (elec ?? 0);
+  });
 }
 ```
 
-All other filter criteria (absence, zero_degree_days, missing_heating, missing_weather) are
-unchanged.
+Contract: returns an array of the same length and order as `heating[]`; null only where BOTH
+`heating_kwh` AND `elec_heating_kwh` are null (no data for that HH); a single non-null component
+drives the value and the absent one contributes 0 (consistent with design doc §2.5.2).
 
-### Step 5 — Update OLS callers to pass `daily_heat_delivered` as `y`
+---
 
-In `runOLSTwoPredictor`, the loop currently reads `const y = d.daily_heating_kwh`. Change
-this to `const y = d.daily_heat_delivered`. The same change applies to `runOLSOnePredictor`.
-No other changes to either OLS function — the maths are identical; only the `y` column
-changes.
+### Step 2 — Update `aggregateToDays` (`js/heat-loss.js`)
 
-### Step 6 — Update HTC recovery formula (no η factor)
+Add `eta` parameter: `aggregateToDays(heating, external, eta)`.
 
-v1 recovery: `htc = alpha * 1000 * boilerEfficiency / 24`
-v2 recovery: `htc = alpha * 1000 / 24`
-
-The gas efficiency is already baked into the LHS (`daily_heat_delivered` includes
-`gas × η`), so recovering HTC from α must not apply η again. Update the CI calculation
-similarly: `ci.lower = (alpha − 1.96 × seAlpha) * 1000 / 24` etc.
-
-### Step 7 — Delete Check 4D
-
-Remove the entire Check 4D block (currently lines 328–345 in `heat-loss.js`) that reads
-`supplementaryLoads.electric_heating_detected` / `electric_heating_kwh_per_dd` and
-computes `htc_correction` / `htc_adjusted`. Remove the local variables `htc_correction`
-and `htc_adjusted`.
-
-### Step 8 — Extend Check 4B for all-electric dual-handed framing
-
-Declare `let htcLowPlausibilityCallout = null;` before Check 4B. Replace the existing
-Check 4B block with:
+Inside the day-building loop, replace the gas-only `daily_heating_kwh` accumulation with:
 
 ```js
-if (htc < 50) {
-  if (fuel_split === 'all_electric') {
-    htcLowPlausibilityCallout = 'all_electric_dual_handed';
-    // Note: warning copy surfaces on the thermal-character card (UI Phase 4),
-    // NOT in the Heat Loss card warnings[]. m4 sets the flag; UI routes it.
-  } else {
-    htcLowPlausibilityCallout = 'gas_only';
-    warnings.push(`The calculated heat transfer coefficient (${htc.toFixed(0)} W/K) is outside the plausible UK range (50–1500). This could indicate a wood burner, unusual fuel mix, or data issues. Treat results with caution.`);
-  }
-  validation_status = 'poor';
-} else if (htc > 1500) {
-  validation_status = 'poor';
-  warnings.push(`The calculated heat transfer coefficient (${htc.toFixed(0)} W/K) is outside the plausible UK range (50–1500). This could indicate a wood burner, unusual fuel mix, or data issues. Treat results with caution.`);
+let daily_gas_heating_kwh = 0;
+let daily_elec_heating_kwh = 0;
+let missing_thermal = false;
+for (const i of indices) {
+  const h = heating[i];
+  const gas  = h.heating_kwh      ?? null;
+  const elec = h.elec_heating_kwh ?? null;
+  if (gas === null && elec === null) { missing_thermal = true; break; }
+  daily_gas_heating_kwh  += (gas  ?? 0);
+  daily_elec_heating_kwh += (elec ?? 0);
+  if (h.is_absence) has_absence = true;
 }
+const daily_heat_delivered = missing_thermal
+  ? NaN
+  : daily_gas_heating_kwh * eta + daily_elec_heating_kwh;
 ```
 
-Note: the existing high-HTC branch (> 1500) warning copy is preserved unchanged.
-
-### Step 9 — Make `insufficientDataResult` classification-aware
-
-Replace the single `insufficientDataResult()` inner function with one that accepts
-`fuelSplit` and emits the appropriate copy per §4.7 of the design doc:
+Replace `daily_heating_kwh` with `daily_heat_delivered` throughout the day object:
 
 ```js
-function insufficientDataResult(fuelSplit) {
-  const warning = fuelSplit === 'all_electric'
-    ? "Not enough heating data to calculate your home's heat loss. We need at least 20 days when your electricity consumption clearly reflects heating use. Come back in winter or with more data."
-    : "Not enough heating data to calculate your home's heat loss. We need at least 20 days of heating (below 15.5°C outside). Come back in winter or with more data.";
+days.push({
+  dateStr,
+  daily_heat_delivered,      // replaces daily_heating_kwh
+  daily_solar_kwh_per_m2,
+  daily_degree_days,
+  has_absence,
+  missing_heating: missing_thermal,   // keep the field name for compatibility with filterForRegression
+  missing_weather,
+});
+```
+
+**Missing-thermal rule (v2):** A day is `missing_heating` only if any HH has BOTH fuel components
+null. A gas-only home (elec = 0 throughout from m3) with a null gas HH produces
+`daily_heat_delivered = 0`, which then filters as below-threshold — same net exclusion as v1, but
+counted in `below_heating_threshold` rather than `missing_heating`. This is the correct v2 behaviour
+per design doc §2.5.2.
+
+---
+
+### Step 3 — Update `filterForRegression` (`js/heat-loss.js`)
+
+Change the below-threshold check:
+
+```js
+// v1: if (day.daily_heating_kwh < 2.0)
+if (day.daily_heat_delivered < 2.0) { excluded.below_heating_threshold++; continue; }
+```
+
+No other change. The exclusion categories (`absence`, `zero_degree_days`, `missing_heating`,
+`missing_weather`, `below_heating_threshold`) are unchanged.
+
+---
+
+### Step 4 — Update OLS field references (`js/heat-loss.js`)
+
+In `runOLSTwoPredictor` and `runOLSOnePredictor`, change every `d.daily_heating_kwh` to
+`d.daily_heat_delivered` (the `y` variable in the inner accumulation loop). The OLS math — normal
+equations, through-origin constraint, SE computation, R² — is unchanged.
+
+---
+
+### Step 5 — Update `estimateHeatLoss` signature (`js/heat-loss.js`)
+
+Old: `estimateHeatLoss(heating, external, baseloadMetadata, supplementaryLoads, boilerEfficiency, floorAreaM2)`
+
+New: `estimateHeatLoss(heating, external, boilerEfficiency, setpointRescalePayload = null)`
+
+Remove `baseloadMetadata`, `supplementaryLoads`, `floorAreaM2` throughout the function body (they
+are unused after the subsequent deletions).
+
+---
+
+### Step 6 — Remove no-gas short-circuit + `zeroExcluded` (`js/heat-loss.js`)
+
+Delete:
+1. The `const zeroExcluded = { … }` declaration (line 206).
+2. The entire no-gas pre-flight block (lines 208–224):
+   ```js
+   // Pre-flight: no-gas case — skip silently …
+   if (baseloadMetadata.method === 'no-gas') { return { … }; }
+   ```
+
+---
+
+### Step 7 — Mint early in `estimateHeatLoss` and update `aggregateToDays` call (`js/heat-loss.js`)
+
+Immediately after the deleted no-gas block (i.e., at the top of the working function body), add:
+
+```js
+const thermal_heat_delivered_kwh = mintThermalHeatDelivered(heating, boilerEfficiency);
+```
+
+Then update the `aggregateToDays` call to thread `boilerEfficiency`:
+
+```js
+const days = aggregateToDays(heating, external, boilerEfficiency);
+```
+
+The mint is computed before any filtering, so it is always available for `insufficientDataResult()`.
+
+---
+
+### Step 8 — Update `insufficientDataResult` return object (`js/heat-loss.js`)
+
+The inline `insufficientDataResult()` closure closes over `excluded` (from `filterForRegression`) and
+`thermal_heat_delivered_kwh` (minted in Step 7). Update its return to the v2 contract:
+
+```js
+function insufficientDataResult() {
   return {
-    htc_w_per_k: null, htc_confidence_interval_95: null,
-    fit_inputs: { used_elec_heating: false, fuel_split: fuelSplit ?? 'gas_only', elec_heating_share_annual: 0 },
-    boiler_efficiency_used: boilerEfficiency, winter_setpoint_used_c: winterSetpointC,
-    rating: null,
-    solar_aperture_m2: null, solar_rating: null, solar_correction_applied: false,
-    cooling_consideration: null,
-    degree_day_base_c: HDD_BASE_TEMP,
-    regression_r2: null, days_used_in_fit: 0,
-    days_excluded: excluded ?? zeroExcluded,
-    internal_gains_w_used: null,
-    net_flow_w: null, net_flow_label: null, net_flow_warning: null,
-    htc_low_plausibility_callout: null,
-    validation_status: 'insufficient_data',
-    warnings: [warning],
+    htc_w_per_k:                null,
+    htc_used:                   null,
+    htc_confidence_interval_95: null,
+    boiler_efficiency_used:     boilerEfficiency,
+    thermal_heat_delivered_kwh,          // minted above — emitted even when fit fails
+    solar_aperture:             null,    // RENAMED from solar_aperture_m2
+    solar_correction_applied:   false,
+    rating:                     null,
+    solar_rating:               null,
+    cooling_consideration:      null,
+    htc_low_plausibility:       false,
+    htc_rescale_rejected:       false,
+    regression_r2:              null,
+    days_used_in_fit:           0,
+    days_excluded:              excluded,
+    degree_day_base_c:          HDD_BASE_TEMP,
+    validation_status:          'insufficient_data',
+    warnings: ["Not enough heating data to calculate your home's heat loss. "
+               + "We need at least 20 days of clear heating signal (cold days below 15.5 °C "
+               + "outside). Come back in winter or with more data."],
   };
 }
 ```
 
-All existing call sites that return `insufficientDataResult()` now pass `fuel_split`:
-`return insufficientDataResult(fuel_split);`. The early call before `fuel_split` is
-resolved (singular degenerate matrix case) passes `null` (falls back to `'gas_only'`
-copy — acceptable for a pathological data state).
+Note: the first call to `insufficientDataResult()` (after the singular-check logic) still closes
+over `excluded` correctly — `excluded` is defined from `filterForRegression` before both call sites.
 
-### Step 10 — Derive `t_outdoor_mean_full_year` from the full `days` array
+---
 
-After `aggregateToDays` returns, compute:
+### Step 9 — Update HTC recovery + CI — the η-move (`js/heat-loss.js`)
 
+**v1** (line 306): `const htc = alpha * 1000 * boilerEfficiency / 24;`
+**v2**: `const htc = alpha * 1000 / 24;`
+
+**v1 CI** (lines 307–310):
 ```js
-const validTempDays = days.filter(d => !d.missing_weather && !isNaN(d.daily_mean_temp_c));
-const tOutdoorMeanFullYear = validTempDays.length > 0
-  ? validTempDays.reduce((s, d) => s + d.daily_mean_temp_c, 0) / validTempDays.length
-  : null;
-```
-
-This uses all whole days (not just filtered regression days), consistent with §4.10's
-"across all whole days".
-
-### Step 11 — Add `deriveInternalGains()` helper
-
-Add a private function after the rating helpers:
-
-```js
-function deriveInternalGains(supplementaryLoads) {
-  if (
-    supplementaryLoads?.method === 'regression' &&
-    supplementaryLoads?.baseline_kwh_per_day != null
-  ) {
-    return { w: supplementaryLoads.baseline_kwh_per_day * 1000 / 24, usedFallback: false };
-  }
-  return { w: 300, usedFallback: true };
-}
-```
-
-Call after the fit succeeds (htc is non-null). If `usedFallback`, push to `warnings[]`:
-```js
-"Internal gains estimated using a generic UK fallback value (~300 W) because we couldn't fit your appliance/occupancy baseline from your data. Net_flow estimates may be biased."
-```
-
-### Step 12 — Add `computeNetFlow()` helper
-
-Add a private function:
-
-```js
-function computeNetFlow(htc, days, solarApertureM2, solarCorrectionApplied,
-                        winterSetpointC, tOutdoorMeanFullYear, internalGainsW,
-                        boilerEfficiency) {
-  if (htc === null || tOutdoorMeanFullYear === null) return { w: null };
-
-  const deltaT = winterSetpointC - tOutdoorMeanFullYear;
-  const annualLossKwh = htc * deltaT * 8760 / 1000;
-
-  let annualGasHeatKwh = 0, annualElecHeatKwh = 0, annualSolarKwh = 0;
-  for (const d of days) {
-    if (d.missing_heating || isNaN(d.daily_heating_kwh)) continue;
-    annualGasHeatKwh += d.daily_heating_kwh * boilerEfficiency;
-    annualElecHeatKwh += (d.daily_elec_heating_kwh ?? 0);
-    if (!d.missing_weather && !isNaN(d.daily_solar_kwh_per_m2) && solarCorrectionApplied && solarApertureM2 !== null) {
-      annualSolarKwh += solarApertureM2 * d.daily_solar_kwh_per_m2;
-    }
-  }
-  const annualDeliveredKwh = annualGasHeatKwh + annualElecHeatKwh;
-  const annualInternalKwh  = internalGainsW * 8760 / 1000;
-
-  const netFlowKwh = annualLossKwh - annualDeliveredKwh - annualSolarKwh - annualInternalKwh;
-  const netFlowW   = netFlowKwh * 1000 / 8760;
-  return { w: netFlowW };
-}
-```
-
-### Step 13 — Add `labelNetFlow()` helper
-
-```js
-function labelNetFlow(netFlowW) {
-  if (netFlowW === null) return { label: null, warning: null };
-  const abs = Math.abs(netFlowW);
-  let label, warning = null;
-  if (abs < 500) {
-    label = 'typical';
-  } else if (netFlowW >= 500 && abs <= 2000) {
-    label = 'sheltered';
-  } else if (netFlowW <= -500 && abs <= 2000) {
-    label = 'exposed';
-  } else {
-    label = netFlowW > 0 ? 'sheltered' : 'exposed';
-    warning = `Your home's passive heat flow is unusually large (${netFlowW >= 0 ? '+' : ''}${netFlowW.toFixed(0)} W). This often means the winter setpoint or HTC estimate needs review — double-check the setpoint you entered matches what you actually heat to in winter.`;
-  }
-  return { label, warning };
-}
-```
-
-### Step 14 — Add `fit_inputs` subsection and annual elec heating share
-
-After the fit completes and `htc` is computed, derive:
-
-```js
-const annualHeatTotal = days.reduce((s, d) => {
-  if (d.missing_heating || isNaN(d.daily_heating_kwh)) return s;
-  return s + d.daily_heating_kwh * boilerEfficiency + (d.daily_elec_heating_kwh ?? 0);
-}, 0);
-const elecHeatAnnual = days.reduce((s, d) => {
-  if (d.missing_heating || isNaN(d.daily_heating_kwh)) return s;
-  return s + (d.daily_elec_heating_kwh ?? 0);
-}, 0);
-const elecHeatShare = annualHeatTotal > 0 ? elecHeatAnnual / annualHeatTotal : 0;
-
-const fit_inputs = {
-  used_elec_heating: useElecHeating && elecHeatingKwhPerDd > 0,
-  fuel_split,
-  elec_heating_share_annual: elecHeatShare,
+const ci = {
+  lower: (alpha - 1.96 * seAlpha) * 1000 * boilerEfficiency / 24,
+  upper: (alpha + 1.96 * seAlpha) * 1000 * boilerEfficiency / 24,
 };
 ```
+**v2**: remove `* boilerEfficiency` from both bounds.
 
-### Step 15 — Remove deprecated floor area CI warning; update return object
+This is the η-move. η is baked into `daily_heat_delivered` on the LHS; the OLS slope α already
+encodes it; the recovery reverts to the physical units without applying η again.
+**Do not double-apply η** — Tests T11 and T15 catch this.
 
-Remove the floor area plausibility warning block (currently around lines 352–356 in
-`heat-loss.js`).
+---
 
-Update the return object of `estimateHeatLoss` to:
-- **Remove:** `htc_correction_w_per_k`, `htc_w_per_k_adjusted`, `hlp_w_per_m2_k`
-- **Add:** `fit_inputs`, `winter_setpoint_used_c`, `internal_gains_w_used`,
-  `net_flow_w`, `net_flow_label`, `net_flow_warning`, `htc_low_plausibility_callout`
+### Step 10 — Remove Check 4D and floor area warning (`js/heat-loss.js`)
 
-Full return object (success path):
+Delete:
+1. The entire Check 4D block (lines 329–346):
+   ```js
+   // Check 4D: supplementary electric heating correction
+   let htc_correction = null;
+   let htc_adjusted = null;
+   if (supplementaryLoads?.electric_heating_detected && …) { … }
+   ```
+2. The floor area plausibility warning block (lines 354–356):
+   ```js
+   if (floorAreaM2 !== null && (floorAreaM2 < 30 || floorAreaM2 > 500)) { … }
+   ```
+
+Remove all references to the now-deleted variables `htc_correction`, `htc_adjusted`, `floorAreaM2`.
+
+---
+
+### Step 11 — Add `htc_low_plausibility` flag (`js/heat-loss.js`)
+
+Before Check 4B, initialise: `let htc_low_plausibility = false;`
+
+Inside the Check 4B `if (htc < 50 || htc > 1500)` block, add:
+```js
+if (htc < 50) htc_low_plausibility = true;
+```
+
+The flag is source-blind — m4 does not read fuel classification. The UI routes the framing (heat-loss
+card for gas/mixed; dual-handed thermal-character copy for all-electric) via m3's
+`classification_effective`.
+
+---
+
+### Step 12 — New helper `applyHtcRescale` + Step 7 (`js/heat-loss.js`)
+
+Add a new private function after the rating helpers:
 
 ```js
+function applyHtcRescale(htc, payload) {
+  if (htc === null) return { htc_used: null, htc_rescale_rejected: false };
+  if (!payload)     return { htc_used: htc,  htc_rescale_rejected: false };
+  const { setpoint_delta_k: delta, operating_delta_t_k: dTOp } = payload;
+  const dTUser = dTOp + delta;
+  if (dTOp <= 0 || dTUser <= 0) return { htc_used: htc, htc_rescale_rejected: true };
+  const rescale = dTOp / dTUser;
+  if (rescale < 0.8 || rescale > 1.2) return { htc_used: htc, htc_rescale_rejected: true };
+  return { htc_used: htc * rescale, htc_rescale_rejected: false };
+}
+```
+
+Call it in `estimateHeatLoss` after the rating computation (Step 6 — ratings use bare `htc`, not
+`htc_used`):
+
+```js
+const { htc_used, htc_rescale_rejected } = applyHtcRescale(htc, setpointRescalePayload);
+```
+
+**Key properties:**
+- No payload (first pass / m7 not yet live): `htc_used = htc`, `htc_rescale_rejected = false`.
+- Degenerate payload (ΔT_op ≤ 0 or ΔT_user ≤ 0): reject + flag.
+- Out-of-band (|rescale − 1| > 0.20): `htc_used = htc` unrescaled, `htc_rescale_rejected = true`.
+  **Not saturated at the bound** — per design doc §2.5.8 and FINDING §7.4.
+- Always recomputed from bare `htc` — never from a prior `htc_used` (idempotent).
+
+---
+
+### Step 13 — Update all return objects (`js/heat-loss.js`)
+
+Apply to every `return { … }` in `estimateHeatLoss` (the negative-alpha branch and the main
+successful return). For each:
+
+**Remove:** `htc_correction_w_per_k`, `htc_w_per_k_adjusted`, `hlp_w_per_m2_k`
+
+**Add:** `htc_used`, `htc_low_plausibility`, `htc_rescale_rejected`, `thermal_heat_delivered_kwh`
+
+**Rename:** `solar_aperture_m2` → `solar_aperture`
+
+For the negative-alpha inverted-relationship return: set `htc_used: null`, `htc_low_plausibility:
+false`, `htc_rescale_rejected: false` (no fit was produced).
+
+Main successful return (after Step 12):
+```js
 return {
-  htc_w_per_k: htc,
+  htc_w_per_k:                htc,
+  htc_used,                            // from applyHtcRescale
   htc_confidence_interval_95: ci,
-  fit_inputs,
-  rating,
-  boiler_efficiency_used: boilerEfficiency,
-  winter_setpoint_used_c: winterSetpointC,
-  solar_aperture_m2,
-  solar_rating,
+  boiler_efficiency_used:     boilerEfficiency,
+  thermal_heat_delivered_kwh,          // per-HH mint — full series
+  solar_aperture,                      // RENAMED (was solar_aperture_m2)
   solar_correction_applied,
+  rating,
+  solar_rating,
   cooling_consideration,
-  degree_day_base_c: HDD_BASE_TEMP,
+  htc_low_plausibility,
+  htc_rescale_rejected,
   regression_r2: r2,
   days_used_in_fit: filtered.length,
   days_excluded: excluded,
-  internal_gains_w_used: internalGainsResult.w,
-  net_flow_w: netFlow.w,
-  net_flow_label: netFlowLabelled.label,
-  net_flow_warning: netFlowLabelled.warning,
-  htc_low_plausibility_callout: htcLowPlausibilityCallout,
+  degree_day_base_c: HDD_BASE_TEMP,
   validation_status,
   warnings,
 };
 ```
 
-All `insufficientDataResult` and early-exit paths must also include the new fields
-(null/default values) and omit the removed fields.
+Also update the internal variable name `solar_aperture_m2` → `solar_aperture` wherever it appears
+in the function body (the assignment from `-fit2.beta`, the `solar_aperture_m2 = R` line, the guard
+`solar_aperture_m2 !== null` in the ratings block, and the `buildCoolingConsideration` call argument).
 
-### Step 16 — Update `index.html`: boiler dropdown, remove floor area, add winter setpoint
+---
 
-Locate the Heat Loss methodology card in `index.html`. Make three changes:
+### Step 14 — Update `index.html`
 
-**a) Replace boiler efficiency input** — change `<input type="number" id="boiler-efficiency">` to:
+**1. Boiler efficiency → 4-tier dropdown (INV-12):**
 
+Replace the `<input type="number" id="boiler-efficiency">` element with:
 ```html
 <select id="boiler-efficiency">
-  <option value="0.92">Modern condensing (post-2010)</option>
-  <option value="0.85" selected>Older condensing (2005–2010)</option>
-  <option value="0.70">Non-condensing</option>
-  <option value="0.60">Very old / back boiler</option>
+  <option value="0.92">Modern condensing (post-2010) — 92%</option>
+  <option value="0.85" selected>Older condensing (2005–2010) — 85% (default)</option>
+  <option value="0.70">Non-condensing — 70%</option>
+  <option value="0.60">Very old / back boiler — 60%</option>
 </select>
 ```
 
-Default is `0.85` (Older condensing) per §5.1 of design doc.
+Keep the `<label for="boiler-efficiency">Boiler efficiency</label>` unchanged.
 
-**b) Remove floor area input** — remove the `<label>` + `<input id="floor-area">` block entirely.
+**2. Remove floor area input:**
 
-**c) Add winter setpoint input** — add `<label>` + `<input type="number" id="winter-setpoint" value="20" min="10" max="28" step="0.5">` with label "Indoor winter temperature (°C)". Position it near the boiler efficiency control.
-
-### Step 17 — Update `app.js`: call site and DOM references
-
-**DOM references** (near line 182): remove `floorAreaInput`. Add `winterSetpointInput` and
-update `boilerEfficiencyInput` reference (the DOM element is the same ID; no change
-needed to the reference since `select` and `input` both expose `.value`).
-
-**`runHeatLoss` function** (lines 1218–1231): replace the body:
-
-```js
-// v1:
-const boilerEfficiency = parseFloat(boilerEfficiencyInput.value) || 0.90;
-const floorAreaRaw = parseFloat(floorAreaInput.value);
-const floorAreaM2 = isNaN(floorAreaRaw) ? null : floorAreaRaw;
-
-// v2:
-const boilerEfficiency = parseFloat(boilerEfficiencyInput.value);
-  // dropdown always has a valid selection — no fallback needed
-const winterSetpointC = parseFloat(winterSetpointInput.value) || 20;
+Delete lines 236–237:
+```html
+<label for="floor-area">Floor area (m²) …</label>
+<input type="number" id="floor-area" …>
 ```
 
-Update the `estimateHeatLoss` call to pass `winterSetpointC` in place of `floorAreaM2`.
+---
 
-### Step 18 — Update `displayHeatLossResults` in `app.js`
+### Step 15 — Update `js/app.js`
 
-**Remove the `no_gas` validation_status branch** (lines 1144–1151) — v2 never returns
-this status.
+Apply all changes identified in Research Findings, in line-number order:
 
-**Remove deprecated display rows** in the `rows.push(...)` section:
-- `htc_w_per_k_adjusted` row (lines 1184–1186)
-- `hlp_w_per_m2_k` row (lines 1188–1190)
+1. **Line 181** — Delete `const floorAreaInput = document.getElementById('floor-area');`
 
-**Add new display rows** after the Confidence Range row:
-```js
-rows.push(['Indoor setpoint used', `${result.winter_setpoint_used_c} °C`]);
-if (result.net_flow_label !== null) {
-  const nfW = result.net_flow_w !== null ? ` (${result.net_flow_w >= 0 ? '+' : ''}${result.net_flow_w.toFixed(0)} W)` : '';
-  rows.push(['Building character', `${result.net_flow_label.charAt(0).toUpperCase() + result.net_flow_label.slice(1)}${nfW}`]);
-}
-if (result.net_flow_warning) {
-  warnings.push(result.net_flow_warning);
-}
-```
+2. **Line 1136–1143** — Delete the `no_gas` display block in `displayHeatLossResults`:
+   ```js
+   if (result.validation_status === 'no_gas') { … return; }
+   ```
 
-Push `net_flow_warning` to `warnings` before the `result.warnings` loop so it joins the
-existing warning rendering flow.
+3. **Lines 1176–1178** — Delete the `htc_w_per_k_adjusted` display row.
 
-Rename the display label "Summer cooling consideration" → "Summer cooling potential" (§7 7i
-of design doc).
+4. **Lines 1180–1182** — Delete the `hlp_w_per_m2_k` display row.
 
-### Step 19 — Write `test-m4-v2.mjs`
+5. **Line 1183** — `result.solar_aperture_m2` → `result.solar_aperture`
 
-Create `test-m4-v2.mjs` at repo root. Use the same `assert(condition, id, description)`
-+ `passed`/`failed` counter pattern as `test-m6.mjs`.
+6. **Line 1184** — `result.solar_aperture_m2` → `result.solar_aperture`
 
-Build a synthetic data helper that produces N whole days × 48 HH records with fixed
-`daily_heating_kwh`, `daily_degree_days`, and `daily_solar_kwh_per_m2` values — making
-the OLS recovery analytically predictable (see T1 below for the pattern).
+7. **Line 1210** — `|| 0.90` → `|| 0.85` (default matches the dropdown's selected option).
+   `parseFloat` on a `<select>` value still works correctly.
 
-Tests to implement (from design doc §7):
+8. **Lines 1211–1212** — Delete floor area parse:
+   ```js
+   const floorAreaRaw = parseFloat(floorAreaInput.value);
+   const floorAreaM2 = isNaN(floorAreaRaw) ? null : floorAreaRaw;
+   ```
 
-- **T1** — Gas-only baseline: set `classification = 'none'`, zero elec, supply data
-  where the true HTC = 200 W/K (α = 200 × 24 / 1000 = 4.8 kWh/K·day). Assert recovered
-  HTC ≈ 200 ±15%. Assert `fit_inputs.used_elec_heating = false`.
-- **T2** — Mixed-fuel: `classification = 'some'`, `elecKwhPerDd = 0.6`,
-  `boilerEfficiency = 0.85`, true HTC = 250 W/K. Assert recovered HTC ≈ 250 ±15%.
-  Assert `fit_inputs.fuel_split = 'mixed_fuel'`.
-- **T3** — All-electric: `classification = 'all_electric'`, gas heating = 0, elecKwhPerDd
-  = 0.8, true HTC = 220 W/K. Assert fit runs (no early return). Assert recovered HTC ≈ 220 ±15%.
-- **T4** — Check 4D deleted: assert result does NOT have own property
-  `htc_correction_w_per_k` or `htc_w_per_k_adjusted`.
-- **T5** — η scaling: identical synthetic data, run twice with `boilerEfficiency = 0.85`
-  then `0.70`. Assert `htc_0.70 / htc_0.85 ≈ 0.70 / 0.85` within 0.1%.
-- **T6** — Internal-gains Rhiannon example: `supplementaryLoads.method = 'regression'`,
-  `baseline_kwh_per_day = 10`. Assert `internal_gains_w_used ≈ 416.67` within 0.1 W.
-- **T7** — Internal-gains fallback: `method = 'skipped_insufficient_data'`, `baseline =
-  null`. Assert `internal_gains_w_used = 300`. Assert a warning is present.
-- **T8** — Net_flow worked example: construct synthetic result inputs matching the design
-  doc §4.10 example (HTC = 204, winterSetpointC = 21, t_outdoor_mean_full_year = 12.78°C,
-  annualDelivered ≈ 6,967 kWh, annualSolar ≈ 328 kWh, internalGains = 417 W). Assert
-  `net_flow_w ≈ 427` within 5 W. Assert `net_flow_label = 'typical'`. For this test,
-  call the helper functions directly (export them for testing) or reconstruct their logic
-  with a controlled call to `estimateHeatLoss` using matched synthetic day data.
-- **T9** — Label boundaries: call `labelNetFlow` (exported for testing) with inputs:
-  499, 500, 1999, 2000, 2001, −499, −500, −1999, −2000, −2001. Assert:
-  499→typical, 500→sheltered, 1999→sheltered, 2000→sheltered, 2001→sheltered+warning,
-  −499→typical, −500→exposed, −1999→exposed, −2000→exposed, −2001→exposed+warning.
-- **T10** — All-electric HTC<50: `classification = 'all_electric'`, synthetic data
-  producing HTC = 45. Assert `htc_low_plausibility_callout = 'all_electric_dual_handed'`.
-  Assert `validation_status = 'poor'`. Assert NO check-4B warning in `result.warnings[]`
-  (the callout is a flag, not a Heat Loss card warning for all-electric).
-- **T11** — Gas-only HTC<50: `classification = 'none'`, synthetic data producing HTC =
-  45. Assert `htc_low_plausibility_callout = 'gas_only'`. Assert a plausibility warning
-  in `result.warnings[]`.
-- **T12** — Removed fields: assert result does NOT have own property `hlp_w_per_m2_k`.
-  Assert `estimateHeatLoss` does not reference `floorAreaM2` (structural: just pass no
-  6th arg or `undefined` and confirm no field appears).
-- **T13** — Net_flow null on missing temps: supply `external` with all `temp_c = null`.
-  Assert `result.net_flow_w = null`. Assert `result.net_flow_label = null`.
+9. **Lines 1216–1223** — Update `estimateHeatLoss` call to 4-arg signature (see Research Findings).
 
-Note: export `labelNetFlow` and `deriveInternalGains` from `heat-loss.js` for direct
-testing in T9, T6, T7. These are pure helpers with no side effects.
+10. **Line 3206** — `hl?.htc_w_per_k ?? null` → `hl?.htc_used ?? null`
+    (diagnostic `__getScenarioDiagnostics`: use the consumer-facing value)
+
+11. **Line 3208** — `hl?.solar_aperture_m2 ?? null` → `hl?.solar_aperture ?? null`
+
+12. **Line 3265** — `htc_w_per_k: htc` → `htc_used: htc` in the diagnostic return object.
+
+13. **Line 3266** — `solar_aperture_m2: solarR` → `solar_aperture: solarR`
+
+**Do not remove** `no_gas` checks at lines 1310 and 1459 — these refer to m5/m6 result objects,
+are now dead code, and will be cleaned up in m5-v2/m6-v2 plans.
+
+---
+
+### Step 16 — Create `test-m4-v2.mjs`
+
+ES module, Node.js `assert` (strict), run with `node test-m4-v2.mjs`. Import `estimateHeatLoss`
+from `./js/heat-loss.js`.
+
+**Synthetic data helper:** Generate `heating[]` entries with `{ timestamp, heating_kwh,
+elec_heating_kwh, is_absence }` and `external[]` entries with `{ temp_c, solar_w_m2 }`. Build
+enough calendar-whole cold days (all 48 HH present, T_mean < 15.5 °C, heat > 2.0 kWh/day) to
+satisfy the 20-day minimum, plus a stock of warm days, absence days, and low-heating days for
+exclusion tests. Use a simple linear synthetic model: `daily_heat_delivered = HTC_true × DD +
+solar_noise` to ensure recoverable fits.
+
+**~25 test cases total:**
+
+#### v1 carry-through (T1–T10)
+
+T1. **Core HTC recovery** — gas-only synthetic data, HTC_true = 250, R_true = 3. Expect
+    `htc_w_per_k` ≈ 250 ±15%, `solar_aperture` > 0 (thermal-basis ≈ 0.85 × R_true).
+T2. **Absence exclusion** — one cold day with `is_absence = true`. Expect
+    `days_excluded.absence == 1`.
+T3. **Check 4A negative-R fallback** — synthetic data where solar correlates inversely with heat.
+    Expect `solar_correction_applied == false`, `solar_aperture == null`, `solar_rating == null`.
+T4. **Check 4B low-HTC flag** — contrive data to produce HTC ≈ 40. Expect
+    `htc_low_plausibility == true`, `validation_status == 'poor'`.
+T5. **Check 4B high-HTC** — contrive HTC ≈ 1600. Expect `htc_low_plausibility == false`,
+    `validation_status == 'poor'`.
+T6. **Check 4C poor R²** — high-noise data. Expect `validation_status == 'poor'` or
+    `'acceptable'` (not `'good'`).
+T7. **Rating boundaries** — HTC = 100 → `'excellent'`; 200 → `'good'`; 300 → `'average'`; 400 →
+    `'poor'`; 600 → `'very_poor'`.
+T8. **Solar rating boundaries** — R = 1 → `'minimal'`; 3 → `'moderate'`; 5 → `'good'`; 10 →
+    `'high'`; 15 → `'very_high'`.
+T9. **Cooling consideration** — (R ≥ 7, HTC < 250) → `'significant'`; (R = 4, HTC = 200) →
+    `'worth_noting'`; (R = 1, HTC = 400) → `'minimal'`.
+T10. **Degree-day base echo** — `result.degree_day_base_c === 15.5`.
+
+#### v2-specific (T11–T25, per design §5)
+
+T11. **Gas-only η-equivalence (§5 Test 5.1 — the η-move regression).** Same gas-only data, no
+     elec heating (`elec_heating_kwh = 0` throughout). Call at η = 0.85 to get `htc_v2`. Call at
+     η = 1.0 to get `htc_1`; then `htc_v1 = htc_1 × 0.85` (this replicates what v1's recovery
+     `α × 1000 × η / 24` would give, since `htc_1 = α × 1000/24` and v1 = `α × 1000 × 0.85/24`).
+     Assert `|htc_v2 − htc_v1| < 1e-9`. **Fails if η is double-applied or omitted.**
+T12. **Combined-fuel mixed (§5 Test 5.2).** HTC_true = 250, η = 0.85, elec contributing 0.6
+     kWh/(K·day). Expect `htc_w_per_k` ≈ 250 ±15%.
+T13. **All-electric, no short-circuit (§5 Test 5.3).** `heating_kwh = 0` throughout, `elec_heating_kwh`
+     generating a clear cold-weather signal, HTC_true = 220. No `baseloadMetadata` passed (param
+     removed). Expect fit runs, `validation_status ∈ {'good', 'acceptable'}` (NOT `'no_gas'`),
+     `htc_w_per_k` ≈ 220 ±15%.
+T14. **Solar-aperture basis shift (§5 Test 5.4).** Same gas-only data fitted at η = 0.85 and at
+     η = 1.0. `solar_aperture_v2` (η = 0.85) should ≈ 0.85 × `solar_aperture_v1` (η = 1.0) within
+     ±5%. Confirms thermal-basis shift is intended (not a regression).
+T15. **η scaling (§5 Test 5.5).** Fit same gas-only data at η = 0.85 and η = 0.70. Expect
+     `htc_at_0.70 / htc_at_0.85 ≈ 0.70 / 0.85` within ±1e-9.
+T16. **Per-HH thermal mint (§5 Test 5.6).** Check for each HH: `thermal[i] == gas[i] × η +
+     elec[i]`; null only where both null; `thermal_heat_delivered_kwh.length == heating.length`
+     (absence-period HH included in the array).
+T17. **Check 4D removed (§5 Test 5.7).** Assert `!('htc_correction_w_per_k' in result)` and
+     `!('htc_w_per_k_adjusted' in result)`.
+T18. **net_flow / internal_gains removed (§5 Test 5.8).** Assert none of `net_flow_w`,
+     `net_flow_label`, `net_flow_warning`, `internal_gains_w_used`, `winter_setpoint_used_c` in
+     result.
+T19. **HLP / floor_area removed (§5 Test 5.9).** Assert `!('hlp_w_per_m2_k' in result)`.
+T20. **Rescale first pass (§5 Test 5.10).** Call with `setpointRescalePayload = null`. Assert
+     `result.htc_used === result.htc_w_per_k` (exact equality), `result.htc_rescale_rejected === false`.
+T21. **Rescale within band (§5 Test 5.11).** Fixture: `htc_w_per_k ≈ 220`, payload
+     `{ setpoint_delta_k: 2, operating_delta_t_k: 12 }`. Expected: `rescale = 12/14`,
+     `htc_used ≈ 220 × (12/14) ≈ 188.6`. Assert `|htc_used − 188.6| < 0.1`,
+     `htc_rescale_rejected === false`. Note: since the test calls `estimateHeatLoss` (which generates
+     its own HTC), the fixture needs to engineer a dataset that recovers ≈ 220. Assert on the rescale
+     formula only when the base HTC is known precisely — or use a white-box helper that calls
+     `applyHtcRescale` directly (flag for Opus: expose `applyHtcRescale` as a named export if the
+     test requires white-box access; otherwise the test verifies the rescale formula on the output).
+T22. **Rescale out-of-band rejected (§5 Test 5.12).** Payload `{ setpoint_delta_k: 4,
+     operating_delta_t_k: 12 }`. `rescale = 12/16 = 0.75` (< 0.8). Assert
+     `result.htc_used === result.htc_w_per_k`, `result.htc_rescale_rejected === true`.
+T23. **Rescale idempotence (§5 Test 5.13).** Apply same within-band payload twice (two separate
+     calls with identical inputs). Assert `htc_used` identical both times (recomputed from bare
+     `htc`, not compounded).
+T24. **Low-HTC source-blind flag (§5 Test 5.14).** Contrive data to produce HTC ≈ 45. Assert
+     `htc_low_plausibility === true`, `validation_status === 'poor'`, `htc_w_per_k ≈ 45` (returned
+     as-is, no clamp). Assert `!('htc_low_plausibility_callout' in result)` (no fuel-routed string).
+T25. **Insufficient data — no fabrication (§5 Test 5.15).** 15 heating days (below 20-day
+     minimum). Assert `htc_w_per_k === null`, `htc_used === null`, `rating === null`,
+     `validation_status === 'insufficient_data'`, `thermal_heat_delivered_kwh.length == heating.length`
+     (mint still emitted), no invented HTC value anywhere in the result.
+
+**White-box note on T21–T23:** If `applyHtcRescale` remains private, tests T21–T23 must engineer a
+synthetic dataset that produces a known HTC exactly (or within tolerance), then pass the payload. An
+alternative: export `applyHtcRescale` as a named export for testability — this is acceptable since it
+is a pure function with no side effects. Flag for Opus.
 
 ---
 
@@ -509,35 +602,77 @@ testing in T9, T6, T7. These are pure helpers with no side effects.
 
 | Risk | Mitigation |
 |------|-----------|
-| v1 downstream code reads `htc_w_per_k_adjusted` or `hlp_w_per_m2_k` from the result | Step 18 removes all `displayHeatLossResults` usages. Search `app.js` for any other reads of these fields before commit. |
-| `runOLSTwoPredictor` / `runOLSOnePredictor` use `d.daily_heating_kwh` internally — risk of forgetting to update one | Step 5 changes both functions to `d.daily_heat_delivered`. The test T1 (gas-only reduces to v1 behaviour) catches a missed rename. |
-| Combined-fuel fit: if `elecHeatingKwhPerDd` is null or undefined (M3 failed Step H), `daily_heat_delivered` would be NaN | Step 2 guards: `elecHeatingKwhPerDd = supplementaryLoads?.electric_heating_kwh_per_dd ?? 0`. Zero is the correct fallback (no elec contribution if not fitted). |
-| `t_outdoor_mean_full_year` computed from `days` but `aggregateToDays` is called with different signature — caller mismatch | Step 3 explicitly documents the changed signature; Step 10 is sequential and uses the returned `days` array from Step 3's call. |
-| Net_flow sign convention: positive = sheltered, negative = exposed — easy to flip | T9 verifies all 10 boundary cases including sign. Work through manually with the §4.10 formula before coding. |
-| `no_gas` validation_status branch in `displayHeatLossResults` removed — if any other code path still emits it, display silently drops to no-op | v2 `heat-loss.js` emits only: `insufficient_data`, `poor`, `acceptable`, `good`. Grep `validation_status` after implementation to confirm no `no_gas` strings remain. |
-| Dropdown default `0.85` vs v1 fallback `0.90` — existing users get a lower default | Intentional per INV-12 design. Note in deviations if any divergence occurs. |
+| η double-applied (LHS *and* recovery) | T11 catches it exactly; T15 catches scaling errors. Both tests must pass before integration. |
+| `solar_aperture_m2` rename missed somewhere in `app.js` | Grep `solar_aperture_m2` across the entire repo before committing; any remaining hit is a bug. |
+| `htc_used` not propagated to m5/m6/m7 | m5/m6/m7 are still v1 and read `htc_w_per_k` from the cached result — safe on first pass (`htc_used == htc`). Their v2 plans bind to `htc_used`. Note in deviations if still applicable at implementation time. |
+| `thermal_heat_delivered_kwh` absent from `insufficientDataResult` | Mint is computed before the insufficient-data check; closure captures it. T25 verifies. |
+| `zeroExcluded` not cleaned up when no-gas block is deleted | Check that the `const zeroExcluded` declaration is deleted in the same edit as the no-gas block. |
+| m3-v2 not yet implemented when app.js integration runs | Prerequisite gate: check m3-v2 plan Status before touching `app.js`. Tests use synthetic data — unaffected. |
+| Degenerate rescale payload (ΔT_op ≤ 0) passes silently | `applyHtcRescale` explicitly guards `dTOp <= 0` and `dTUser <= 0` → reject + flag. |
+| T21–T23 rescale tests require known-HTC fixture | Either export `applyHtcRescale` as a named export, or engineer a precisely-controlled synthetic dataset. Resolve in implementation. |
+| `boilerEfficiencyInput` type change (`<input>` → `<select>`) breaks JS read | `parseFloat` on a `<select>` value is valid; `|| 0.85` default unchanged. No JS change beyond the default value. |
 
 ---
 
 ## Success criteria
 
-- [ ] `test-m4-v2.mjs` runs: T1–T13 all pass (`node test-m4-v2.mjs` exits 0 with 13 ✅)
-- [ ] No existing test suites broken: `test-m3-step-f.mjs` 18/18, `test-m5.mjs` 39/39,
-  `test-m5b.mjs` 29/29, `test-m6.mjs` 24/24, `test-m7.mjs` 39/39, `test-m8.mjs` 24/24,
-  `test-m9.mjs` 24/24 (none of these import `heat-loss.js` directly; passing confirms no
-  module-level breakage)
-- [ ] `result.htc_w_per_k_adjusted` and `result.hlp_w_per_m2_k` do not appear anywhere
-  in the result object (assert via T4 and T12)
-- [ ] T8 net_flow worked example: `net_flow_w ≈ 427 W`, `net_flow_label = 'typical'`
-  (the key regression showing internal-gains term corrects the v1 +676 W Sheltered misread)
-- [ ] All `insufficientDataResult` returns include `net_flow_w: null`, `net_flow_label: null`,
-  `htc_low_plausibility_callout: null` (no missing fields that would cause null-deref in app.js)
-- [ ] `index.html` validates: boiler efficiency is a `<select>` with 4 options; floor area
-  input is absent; winter setpoint input is present
-- [ ] `app.js` grep: no remaining reference to `floorAreaM2`, `floorAreaInput`, or
-  `htc_w_per_k_adjusted` post-edit
-- [ ] Integration-v2 invariant F7 preserved: `result.boiler_efficiency_used` is echoed
-  (equal to `boilerEfficiency` input); m5-v2 and m7-v2 will consume this field
+### `js/heat-loss.js`
+
+- [ ] `estimateHeatLoss` signature is `(heating, external, boilerEfficiency, setpointRescalePayload = null)`
+- [ ] Function runs without error on gas-only, mixed, and all-electric synthetic data (no early return)
+- [ ] `validation_status` values are `{good, acceptable, poor, insufficient_data}` — `no_gas` absent
+- [ ] Output contains `htc_used`, `htc_low_plausibility`, `htc_rescale_rejected`, `thermal_heat_delivered_kwh`
+- [ ] Output contains `solar_aperture` (not `solar_aperture_m2`)
+- [ ] Output contains **no** `htc_correction_w_per_k`, `htc_w_per_k_adjusted`, `hlp_w_per_m2_k`
+- [ ] Output contains **no** `net_flow_*`, `internal_gains_*`, `winter_setpoint_*`
+- [ ] HTC recovery: `alpha * 1000 / 24` (no η factor)
+
+### `test-m4-v2.mjs`
+
+- [ ] All 25 tests pass: `node test-m4-v2.mjs` exits 0 with 25/25 pass
+- [ ] T11: gas-only HTC identical to v1 formula within 1e-9 (η-move regression test)
+- [ ] T15: η scaling ratio exact within 1e-9
+- [ ] T20–T23: rescale pass/reject/idempotence all confirmed
+- [ ] T25: insufficient data — mint present, `htc = null`, `htc_used = null`
+
+### `index.html`
+
+- [ ] `#boiler-efficiency` is a `<select>` with 4 options; default `selected` is 0.85
+- [ ] No `<input id="floor-area">` or associated label present
+
+### `js/app.js`
+
+- [ ] `estimateHeatLoss` call uses 4-arg signature
+- [ ] No reference to `floorAreaInput`, `floorAreaM2`, `htc_w_per_k_adjusted`, `hlp_w_per_m2_k`
+- [ ] `solar_aperture_m2` does not appear anywhere in `app.js` (grep confirms)
+- [ ] Default boiler efficiency fallback is `0.85`
+- [ ] Diagnostic `__getScenarioDiagnostics` uses `htc_used` and `solar_aperture`
+
+---
+
+## Flags for Opus review
+
+1. **`solar_aperture` rename (not a regression):** The v2 output uses `solar_aperture` (design
+   doc §2.6), dropping the `_m2` suffix from v1. The thermal-basis shift (≈ η × v1's gas-basis R
+   for gas-only homes) is also intended by the η-move — not a regression against v1 R fixtures. See
+   design doc §2.5.4 and §7 Changed.
+
+2. **Missing-thermal rule change for gas-only homes:** In v1, a null gas HH marks the day
+   `missing_heating`. In v2, a null gas HH where `elec_heating_kwh = 0` (gas-only home) produces
+   `daily_heat_delivered = 0`, which filters as `below_heating_threshold`. Net effect: same day
+   excluded, different counter. For a gas-only home, m3-v2 emits `elec_heating_kwh = 0` (not null)
+   throughout, so the "both null" trigger is only pathological (simultaneous data gap in both meters).
+
+3. **`applyHtcRescale` export:** Tests T21–T23 may benefit from `applyHtcRescale` being a named
+   export. It is a pure function with no side effects. Recommend exporting it; flag for Opus decision.
+
+4. **Dead code — `no_gas` in m5/m6 display functions:** Lines 1310 and 1459 in `app.js` are now
+   dead code. Leaving them for m5-v2/m6-v2 plans (they refer to m5/m6 result objects, not m4).
+
+5. **Diagnostic `htc` field** (app.js line 3265): changed to `htc_used` in the diagnostic's return
+   object. If any downstream code reads `comfort_demand_inputs.htc_w_per_k`, it will get `undefined`.
+   Since this is investigation tooling (`__getScenarioDiagnostics`), the risk is low — but flag in
+   case any other diagnostic consumer references the old field name.
 
 ---
 
@@ -547,16 +682,3 @@ testing in T9, T6, T7. These are pure helpers with no side effects.
 **Commit:** [commit hash]
 
 None.
-
-<!--
-The Design Review section is appended by the Opus reviewer when the plan is
-amended. See `coding/agents/plan-reviewer.md` for the review record template
-and the post-review Status values.
-
-Status values (canonical, from plan-reviewer.md):
-- Awaiting review — Opus architect review pending.    (planner sets)
-- ✅ Approved — yyyy-mm-dd. Implementation may begin.  (reviewer sets)
-- ⚠ Approved with edits — yyyy-mm-dd. Implementation may begin [once <prereq>].
-- ⏸ Blocked — yyyy-mm-dd. See Design Review below; rewrite required.
-- Implemented — yyyy-mm-dd, commit <hash>.            (implementer sets)
--->
