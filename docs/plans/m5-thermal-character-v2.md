@@ -616,16 +616,23 @@ function computeMaxLoad(thermalDelivered, heating) {
 }
 ```
 
-**`collectAbsenceRecoveryEvents(heating, external, thermalDelivered, internalGains, htcUsed, operativeSetpoint)`:**
+**`collectAbsenceRecoveryEvents(heating, external, thermalDelivered, internalGains, htcUsed, operativeSetpoint, maxLoad)`:**
 
-Scans for `is_absence` gaps, then for each gap finds the subsequent recovery run and computes
-C_est from the energy balance with forced equilibrium (`T_start = T_eq`). Returns `[{t_soak_h, C_est}]`.
-C_est is intentionally biased (finite soak ≠ full equilibrium) — the bias ∝ exp(−t_soak/τ),
-which shrinks with duration. The asymptote fit in `fitTauMethodB` extrapolates to true C.
+Scans for `is_absence` gaps, then for each gap finds the subsequent at-ceiling recovery run and
+computes C_est from the energy balance with forced equilibrium (`T_start = T_eq`). Returns
+`[{t_soak_h, C_est}]`. C_est is intentionally biased (finite soak ≠ full equilibrium) — the bias
+∝ exp(−t_soak/τ), which shrinks with duration. The asymptote fit in `fitTauMethodB` extrapolates
+to true C.
+
+Recovery is bounded by the max-firing ceiling: the boiler fires flat-out to re-warm after an
+absence, and it ends when it drops off the ceiling (setpoint reached). `ceiling = CEILING_FACTOR ×
+maxLoad`. If `maxLoad` is null, no events can be collected (return empty).
 
 ```javascript
 function collectAbsenceRecoveryEvents(heating, external, thermalDelivered, internalGains,
-                                       htcUsed, operativeSetpoint) {
+                                       htcUsed, operativeSetpoint, maxLoad) {
+  if (maxLoad === null || maxLoad === undefined) return [];
+  const ceiling = TC_CONFIG.CEILING_FACTOR * maxLoad;
   const n = heating.length;
   const events = [];
   let i = 0;
@@ -655,23 +662,25 @@ function collectAbsenceRecoveryEvents(heating, external, thermalDelivered, inter
     const T_eq = T_out_late + G_late_w / htcUsed;       // W / (W/K) = K offset ✓
     if (T_eq >= operativeSetpoint) continue;             // already at setpoint — no recovery
 
-    // Recovery run: first sustained heat delivery beginning at or just after gapEnd
+    // Recovery = sustained at/near-ceiling run after gapEnd.
+    // The boiler fires flat-out to re-warm; run ends when it drops off the ceiling (setpoint reached).
+    // Allow up to 4 HH after gapEnd for heating to resume.
     let recStart = gapEnd;
     while (recStart < n && !heating[recStart].is_absence
            && (thermalDelivered[recStart] === null
-               || thermalDelivered[recStart] <= TC_CONFIG.METHOD_A_HEAT_THRESH_KWH)
+               || thermalDelivered[recStart] < ceiling)
            && recStart - gapEnd < 4) {
       recStart++;
     }
     if (recStart >= n || heating[recStart].is_absence) continue;
-    if (thermalDelivered[recStart] === null
-        || thermalDelivered[recStart] <= TC_CONFIG.METHOD_A_HEAT_THRESH_KWH) continue;
+    if (thermalDelivered[recStart] === null || thermalDelivered[recStart] < ceiling) continue;
 
+    // recEnd = first HH after recStart where delivery drops off the ceiling
     let recEnd = recStart;
     while (recEnd < n
            && !heating[recEnd].is_absence
            && thermalDelivered[recEnd] !== null
-           && thermalDelivered[recEnd] > TC_CONFIG.METHOD_A_HEAT_THRESH_KWH) {
+           && thermalDelivered[recEnd] >= ceiling) {
       recEnd++;
     }
     const t_rec_hh = recEnd - recStart;
@@ -994,7 +1003,7 @@ export function estimateThermalCharacter(
   const fitA = fitTauMethodA(morningEvents, htcUsed);
 
   const recovEvents = collectAbsenceRecoveryEvents(
-    heating, external, thermalDelivered, internal_gains_w, htcUsed, operativeSetpoint
+    heating, external, thermalDelivered, internal_gains_w, htcUsed, operativeSetpoint, maxLoad
   );
   const fitB = fitTauMethodB(recovEvents);
 
@@ -1116,6 +1125,8 @@ Assert: `|tau_with_offset − tau_no_offset| < 1.5 h`.
 
 Known: C_true = 12000 kJ/K, htcUsed = 200 W/K → τ_true = 16.67 h. Setpoint = 20°C. T_out = 5°C
 (constant). G_w = 0 during absence (absence zeroes occupancy; no elec/gas/solar in test fixture).
+Recovery ceiling: CEIL = 3.0 kWh/HH (a real boiler caps per-HH output and extends duration for
+a deeper cool — it does not deliver more per HH).
 
 Generate 6 absence soaks of varying duration: [4, 8, 16, 24, 36, 48] hours.
 
@@ -1124,15 +1135,20 @@ For each soak of duration t_soak_i:
 2. T_at_end_i = T_eq + (20 − T_eq) × exp(−t_soak_i / τ_true)  [RC free-cooling]
    = 5 + 15 × exp(−t_soak_i / 16.67)
 3. E_mass_i = C_true × (20 − T_at_end_i) / 3600  [kWh needed to reheat mass from T_at_end to 20]
-4. t_recovery = 3 HH (1.5 h); E_fabric = htcUsed × max(0, 20 − T_out) × 1.5 / 1000
-5. E_recovery_i = E_mass_i + E_fabric  [total kWh in recovery slots]
-6. Assign E_recovery_i / 3 to 3 consecutive recovery HH; `is_absence = true` for the soak HH.
+4. t_fabric per HH = htcUsed × max(0, 20 − T_out) / 1000  [kW × HH = kWh/HH at T_mean ≈ setpoint]
+5. Model recovery as a run of HH at fixed ceiling CEIL = 3.0 kWh/HH (variable length):
+   - `n_rec_i = Math.ceil(E_recovery_i / CEIL)` where `E_recovery_i` is computed iteratively:
+     n_rec_i_approx = Math.ceil((E_mass_i + htcUsed * 15 * (n_rec_approx * 0.5) / 1000) / CEIL)
+     (simpler: set t_recovery = n_rec_i × 0.5 h; E_fabric_i = htcUsed × max(0, 20 − T_out) × t_recovery / 1000;
+      E_recovery_i = E_mass_i + E_fabric_i; n_rec_i = Math.ceil(E_recovery_i / CEIL))
+   - First (n_rec_i − 1) HH get CEIL = 3.0 kWh/HH; last HH gets E_recovery_i − (n_rec_i − 1) × CEIL
+6. Assign to n_rec_i consecutive recovery HH; `is_absence = true` for the soak HH.
 
 Build full `heating[]` and `thermalDelivered[]`:
 - Absence slots: `is_absence = true`, `thermalDelivered = 0`
-- Recovery slots: `is_absence = false`, `thermalDelivered = E_recovery_i / 3` per HH
+- Recovery slots: `is_absence = false`, `thermalDelivered` per step 5 above
 - Non-absence non-recovery slots (between events): `is_absence = false`, `thermalDelivered = 0.1`
-  (maintenance heat — keeps the home nominally running between absences)
+  (maintenance heat — below 0.9 × CEIL = 2.7, so the ceiling-based recEnd terminates correctly)
 
 Set supplementaryLoads and baseloadMetadata to zero (minimal G — assembleGains produces near-zero
 gains for absence slots, consistent with the forward-simulation assumption G_absent = 0).
@@ -1144,9 +1160,9 @@ Assert:
 - `result.thermal_mass_fit_status === 'fired'`
 
 **TC4b construction (uniform-duration rejection):**
-Same home as TC4 (same C_true, τ_true, T_out, recovery logic), but all 6 absence soaks are the
-same duration: all = 8 h. Duration spread = 0 h, below METHOD_B_DURATION_SPREAD_H = 12 h. Method
-A has no events (continuous-heat home — no overnight setback). Assert:
+Same home as TC4 (same C_true, τ_true, T_out, CEIL = 3.0, recovery logic), but all 6 absence soaks
+are the same duration: all = 8 h. Duration spread = 0 h, below METHOD_B_DURATION_SPREAD_H = 12 h.
+Method A has no events (continuous-heat home — no overnight setback). Assert:
 - `result.thermal_mass_kj_per_k === null`
 - `result.thermal_mass_fit_status === 'rejected_low_confidence'`
 
