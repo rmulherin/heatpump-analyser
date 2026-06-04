@@ -346,7 +346,7 @@ function makeDayHH(dayCount, heatingFn, tempFn, absenceFn) {
   external[0] = { temp_c: T_out, solar_w_m2: 200 };
   const result = estimateThermalCharacter(heating, external,
     { htc_w_per_k: htc, boiler_efficiency_used: eta,
-      solar_correction_applied: true, solar_aperture_m2: 5 }, 'gas', null);
+      solar_correction_applied: true, solar_aperture: 5 }, 'gas', null);
   assert(result.modelled_heating_kwh_by_hh !== null &&
          Math.abs(result.modelled_heating_kwh_by_hh[0] - 1.25) < 0.001,
     'M5X2', `solar offset: modelled = 1.25 kWh (got ${result.modelled_heating_kwh_by_hh?.[0]?.toFixed(4)})`);
@@ -361,7 +361,7 @@ function makeDayHH(dayCount, heatingFn, tempFn, absenceFn) {
   external[0] = { temp_c: T_out, solar_w_m2: 1000 };
   const result = estimateThermalCharacter(heating, external,
     { htc_w_per_k: htc, boiler_efficiency_used: eta,
-      solar_correction_applied: true, solar_aperture_m2: 5 }, 'gas', null);
+      solar_correction_applied: true, solar_aperture: 5 }, 'gas', null);
   assert(result.modelled_heating_kwh_by_hh !== null &&
          result.modelled_heating_kwh_by_hh[0] === 0,
     'M5X3', `solar overshoot clamped to 0 (got ${result.modelled_heating_kwh_by_hh?.[0]})`);

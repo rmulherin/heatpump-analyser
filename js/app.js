@@ -178,7 +178,6 @@ const heatLossResults = document.getElementById('heat-loss-results');
 const heatLossSummary = document.getElementById('heat-loss-summary');
 const heatLossStatus = document.getElementById('heat-loss-status');
 const boilerEfficiencyInput = document.getElementById('boiler-efficiency');
-const floorAreaInput = document.getElementById('floor-area');
 const btnRecalculateHeatLoss = document.getElementById('btn-recalculate-heat-loss');
 
 // Thermal character DOM references
@@ -1133,15 +1132,6 @@ function displayHeatLossResults(result) {
     heatLossStatus.appendChild(div);
   }
 
-  if (result.validation_status === 'no_gas') {
-    const div = document.createElement('div');
-    div.className = 'status-msg info';
-    div.textContent = 'No gas supply detected — heat loss estimation requires gas consumption data.';
-    heatLossStatus.appendChild(div);
-    heatLossResults.classList.remove('hidden');
-    return;
-  }
-
   if (result.validation_status === 'insufficient_data') {
     heatLossResults.classList.remove('hidden');
     const noticeDiv = document.createElement('div');
@@ -1173,15 +1163,9 @@ function displayHeatLossResults(result) {
     const ci = result.htc_confidence_interval_95;
     rows.push(['Confidence range (95%)', `${fmt(ci.lower)} – ${fmt(ci.upper)} W/K`]);
   }
-  if (result.htc_w_per_k_adjusted !== null) {
-    rows.push(['Adjusted heat loss rate (includes electric heating)', `${fmt(result.htc_w_per_k_adjusted)} W/K`]);
-  }
   rows.push(['Insulation rating', HEAT_LOSS_RATING_DISPLAY[result.rating] ?? result.rating ?? '—']);
-  if (result.hlp_w_per_m2_k !== null) {
-    rows.push(['Heat loss per m² (HLP)', `${result.hlp_w_per_m2_k.toFixed(2)} W/m²K`]);
-  }
-  if (result.solar_correction_applied && result.solar_aperture_m2 !== null) {
-    rows.push(['Solar aperture (free heat from the sun)', `${fmt(result.solar_aperture_m2, 1)} m²`]);
+  if (result.solar_correction_applied && result.solar_aperture !== null) {
+    rows.push(['Solar aperture (free heat from the sun)', `${fmt(result.solar_aperture, 1)} m²`]);
     rows.push(['Solar gain rating', SOLAR_RATING_DISPLAY[result.solar_rating] ?? result.solar_rating ?? '—']);
     if (result.cooling_consideration) {
       const coolingLabel = result.cooling_consideration.replace(/_/g, ' ');
@@ -1207,19 +1191,15 @@ async function runHeatLoss(showProgressFn, showStatusFn) {
 
   showProgressFn('Estimating heat loss…');
 
-  const boilerEfficiency = parseFloat(boilerEfficiencyInput.value) || 0.90;
-  const floorAreaRaw = parseFloat(floorAreaInput.value);
-  const floorAreaM2 = isNaN(floorAreaRaw) ? null : floorAreaRaw;
+  const boilerEfficiency = parseFloat(boilerEfficiencyInput.value) || 0.85;
 
   let result;
   try {
     result = estimateHeatLoss(
       baseloadResult.heating,
       externalResult.external,
-      baseloadResult.baseload_metadata,
-      baseloadResult.supplementary_loads,
       boilerEfficiency,
-      floorAreaM2,
+      null,
     );
   } catch (err) {
     showStatusFn('Heat loss estimation failed: ' + err.message, 'error');
@@ -3204,8 +3184,9 @@ window.__getScenarioDiagnostics = () => {
   const gasArr    = sc.scenarios.current?.gas_kwh ?? [];
   const setpoint  = tc?.setpoint_c ?? null;
   const htc       = hl?.htc_w_per_k ?? null;
+  const htcUsed   = hl?.htc_used ?? null;
   const boilerEff = hl?.boiler_efficiency_used ?? 0.9;
-  const solarR      = hl?.solar_aperture_m2 ?? null;
+  const solarR      = hl?.solar_aperture ?? null;
   const externalArr = ext?.external ?? null;
 
   const validIndoor = indoorArr.filter(v => v !== null && v !== undefined);
@@ -3263,7 +3244,8 @@ window.__getScenarioDiagnostics = () => {
     comfort_demand_inputs: {
       setpoint_c:        setpoint,
       htc_w_per_k:       htc,
-      solar_aperture_m2: solarR,
+      htc_used:          htcUsed,
+      solar_aperture:    solarR,
       boiler_efficiency: boilerEff,
     },
     comfort_demand_kwh: tc?.annual_modelled_demand_kwh ?? null,

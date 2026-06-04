@@ -709,10 +709,25 @@ T26. **Whole-day presence-gating (§5 Test 5.16).** Two sub-cases:
 
 ## Implementation Deviations
 
-**Date:** yyyy-mm-dd
-**Commit:** [commit hash]
+**Date:** 2026-06-04
+**Commit:** [see git log]
 
-None.
+**D1 — Downstream `solar_aperture_m2` rename propagated to v1 consumers (unplanned scope).**
+`js/thermal-character.js` (line 94) and `js/scenario-consumption.js` (lines 183, 213) still
+referenced `solar_aperture_m2` from the m4 result. These are v1 modules (m5-v2 and m7-v2 plans
+will formally own the rename in their own steps), but the live code would silently read `undefined`
+from the new `solar_aperture` field — producing `aperture = 0` for solar-correction-enabled homes
+and degrading the RC trace. Fixed inline: renamed to `solar_aperture` in both files.
+Corresponding test fixtures in `test-m5.mjs` (M5X2, M5X3) and `test-m7.mjs` updated to match.
+All suites confirmed green: M3 44/44, M5 39/39, M5b 29/29, M6 24/24, M7 39/39, M8 29/29, M9 24/24.
+
+**D2 — Test synthetic data generators required two corrections.**
+(a) Unit bug: initial generator used `htcTrue × DD / eta` (missing `× 24/1000` W→kWh conversion);
+corrected to `htcTrue × DD × 24/1000`. (b) Constant temperature across all days made the
+two-predictor OLS singular when solar was non-zero; generators were redesigned to vary temperature
+linearly across days. Neither deviation touches production code; the plan's mathematical intent
+(the η-move equivalence, solar-aperture basis shift, OLS recovery) is verified correctly by the
+final T1–T26+T21-int suite.
 
 ---
 

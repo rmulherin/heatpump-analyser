@@ -91,8 +91,8 @@ function computeC(T_at_restart, E_warmup_kwh, warmup_hh_count, T_outdoor_warmup,
 
 function computeModelledHeatingByHh(heating, external, heatLoss, setpointC) {
   const htc = heatLoss?.htc_w_per_k;
-  const aperture = (heatLoss?.solar_correction_applied && heatLoss?.solar_aperture_m2 != null)
-    ? heatLoss.solar_aperture_m2 : 0;
+  const aperture = (heatLoss?.solar_correction_applied && heatLoss?.solar_aperture != null)
+    ? heatLoss.solar_aperture : 0;
 
   const out = new Array(heating.length).fill(null);
   if (htc == null || setpointC == null) return out;

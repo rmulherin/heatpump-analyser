@@ -63,7 +63,7 @@ function buildInputs({
       htc_w_per_k,
       boiler_efficiency_used: eta,
       solar_correction_applied: false,
-      solar_aperture_m2: 0,
+      solar_aperture: 0,
     },
     thermalCharacter,
     heatPumpModel: { cop_by_hh, hp_capacity_kw },

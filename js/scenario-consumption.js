@@ -180,8 +180,8 @@ function simulatePostHocTIndoor({
     return { indoor_temp_c: q_delivered_per_hh.map(() => null), T_init_next: T_init };
   }
 
-  const aperture = (heatLoss?.solar_correction_applied && heatLoss?.solar_aperture_m2 != null)
-    ? heatLoss.solar_aperture_m2 : 0;
+  const aperture = (heatLoss?.solar_correction_applied && heatLoss?.solar_aperture != null)
+    ? heatLoss.solar_aperture : 0;
 
   const out = new Array(q_delivered_per_hh.length);
   let T = T_init;
@@ -210,8 +210,8 @@ function simulateCurrentRcTrace({ heating, external, heatLoss, thermalChar }) {
   const sp  = thermalChar?.setpoint_c;
   if (htc == null || C == null || sp == null) return heating.map(() => null);
 
-  const R = (heatLoss?.solar_correction_applied && heatLoss?.solar_aperture_m2 != null)
-    ? heatLoss.solar_aperture_m2 : 0;
+  const R = (heatLoss?.solar_correction_applied && heatLoss?.solar_aperture != null)
+    ? heatLoss.solar_aperture : 0;
   const out = new Array(heating.length);
   let T = sp;
   for (let i = 0; i < heating.length; i++) {

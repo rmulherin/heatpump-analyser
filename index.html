@@ -229,13 +229,12 @@
           <div class="form-row">
             <div class="form-group">
               <label for="boiler-efficiency">Boiler efficiency</label>
-              <input type="number" id="boiler-efficiency" value="0.90" step="0.01" min="0.60" max="0.98">
-              <p class="form-hint">Typical condensing boiler: 0.85–0.92. Check your boiler manual.</p>
-            </div>
-            <div class="form-group">
-              <label for="floor-area">Floor area (m²) <span style="font-weight:normal;color:var(--colour-dark)">(optional)</span></label>
-              <input type="number" id="floor-area" placeholder="e.g. 85" step="1" min="0">
-              <p class="form-hint">Total heated floor area. Used to calculate heat loss per m².</p>
+              <select id="boiler-efficiency">
+                <option value="0.92">Modern condensing (post-2010) — 92%</option>
+                <option value="0.85" selected>Older condensing (2005–2010) — 85% (default)</option>
+                <option value="0.70">Non-condensing — 70%</option>
+                <option value="0.60">Very old / back boiler — 60%</option>
+              </select>
             </div>
           </div>
           <div class="form-group" style="margin-top: 0.5rem;">
