@@ -1,7 +1,7 @@
 # M5 Thermal Character — v2 implementation
 
 **Date:** 2026-06-04 (re-cut 2026-06-04)
-**Status:** Awaiting review — re-cut for Opus re-review per 2026-06-04 blocking findings.
+**Status:** ✅ Approved — 2026-06-04. Implementation may begin.
 
 > **Supersedes the 2026-06-02 draft** in this file, which was a partial alignment plan for
 > an older v2 design. The authoritative design is now `m5-thermal-character-v2.md`
@@ -1319,6 +1319,90 @@ m7-v2 implements the underheat diagnostic.
 ## Implementation Deviations
 
 _None at plan time. Record D1, D2, … during implementation._
+
+---
+
+## Design Review
+
+**Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Date:** 2026-06-04
+**Review type:** Plan review (pre-implementation) — second pass on the re-cut
+**Authoritative design:** `praxis-claude-hub/projects/tools/heatpump-analyser/design/m5-thermal-character-v2.md`
+
+### Context
+
+The first cut (`40ad6f7`) was ⏸ Blocked — its Path A estimator used a flawed equilibrium-pinned
+Method B (a fixed-4 h cool-down assuming equilibrium the house never reaches → biased `C`) plus
+smaller items (EV-cap window `i % 48`; Step 15 referencing non-existent UI inputs; self-validating
+tests). The design was revised (Method B → absence-recovery **duration-asymptote**; coverage-segmented
+A/B; reject-and-flag + `thermal_mass_fit_status`; fire-precedence) and the plan re-cut against it
+(`b229473`). The re-cut resolved every prior finding; the Method B asymptote maths was verified
+(`C_est = C·(1 − e^(−t_soak/τ))`, so the fitted asymptote *is* the true `C`). One blocking item
+remained — the recovery-run termination — corrected in `112388b`.
+
+### Required changes for implementation
+
+**1. Recovery-run termination must be ceiling-bounded (resolved in `112388b`).** The re-cut's
+`collectAbsenceRecoveryEvents` scanned the recovery run `while thermalDelivered > 0.05` — which never
+terminates for a continuously-heated home (Method B's target), so the run swallowed post-recovery
+steady-state heating and corrupted `C_est` (and broke TC4). Per design §2.5.3 the recovery is bounded
+by the max-firing ceiling and ends when delivery drops off it (= setpoint reached).
+
+### Resolution of review changes
+
+1. **Recovery-run termination** — ✅ resolved in `112388b`: `maxLoad` threaded into
+   `collectAbsenceRecoveryEvents`; `recStart` = first at-/near-ceiling HH within ~4 HH of `gapEnd`;
+   `recEnd` = first HH below `CEILING_FACTOR × maxLoad`. TC4/TC4b fixtures reworked to the physical model
+   (recovery = fixed per-HH `CEIL` over a *variable* number of HH; maintenance below `0.9 × CEIL`).
+   Verified correct.
+
+### Items noted but not edited
+
+- **LOW — recovery's final partial HH** can fall just below the ceiling and be excluded from `E_del`
+  (a sub-1-HH under-count). Negligible for the deep soaks anchoring the asymptote; well inside ±15%.
+  No edit.
+- **LOW — TC4 fabric-loss fidelity.** The fixture's recovery fabric loss uses `(setpoint − T_out)` while
+  the estimator uses the mean recovery temp `(T_eq + setpoint)/2` — a small constant offset (~2.7·HTC),
+  within tolerance. Optional future tidy.
+- **LOW — Method B loss term uses `T_eq` throughout** (forced-equilibrium approximation) — a
+  second-order curvature effect that vanishes at the asymptote where `C` is read. Acceptable.
+- **Confirmed constants (calibration targets, not blocking):** `F_GAS = 0.35`, `METHOD_A_MIN_EVENTS = 20`,
+  pre-dawn `03:00–07:00`, `METHOD_B_DURATION_SPREAD_H = 12`, `MIN_EVENTS_METHOD_B = 4`,
+  `FIRE_THRESHOLD_SE = 0.25`, `GOOD_SE_THRESHOLD = 0.12`. Pin against real data later.
+- **Interim regressions accepted (flagged for m7-v2):** the current-scenario trace keeps inline-solar
+  gains while the smart trace uses `internal_gains_w`; `underheat_ratio` removal makes "Heat to Comfort"
+  a no-op. Both bounded to pre-m7-v2.
+
+## Review Summary
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| CRITICAL | 0     | ✓ pass |
+| HIGH     | 1     | ✅ resolved (`112388b`) |
+| MEDIUM   | 0     | — |
+| LOW      | 3     | — note |
+
+Verdict: ✅ APPROVED — Method B redesigned and the recovery-run termination resolved; the estimator
+implements the agreed coverage-segmented duration-asymptote design.
+
+---
+
+## Approval
+
+**Status:** ✅ Approved — 2026-06-04
+**Approved by:** Rhiannon (via Opus review)
+**Clarifications confirmed:**
+- Method B is the **absence-recovery duration-asymptote** (force equilibrium per event → `C_est`,
+  regress against soak duration, extrapolate to the asymptote = `C`); recovery run is **ceiling-bounded**
+  (terminates when delivery drops off `CEILING_FACTOR × maxLoad` = setpoint reached).
+- **Fire-precedence:** if either estimator fires, headline `fit_status = 'fired'` — a rejected estimator
+  never flags when another fired. `'rejected_low_confidence'` only when no method fires but ≥1 had events;
+  `'no_data'` when none had events. Sole exception: both fire & disagree → flag.
+- UI inputs (operative setpoint, `household_size`) are **deferred to the Phase-4 UI plan** — m5 runs on
+  the D2 defaults (20 °C, 2) until then.
+- App.js integration (Step 15) stays gated on m4-v2 `Status: Implemented`.
+- Implementation begins in a **fresh Sonnet session** (the plan gate is the guard against jumping
+  straight to code).
 
 <!--
 Status values (canonical):
