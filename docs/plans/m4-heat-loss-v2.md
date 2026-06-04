@@ -61,8 +61,8 @@ needed — already correct.
 
 No `test-m4*.mjs` found in the repository root. **M4 has no committed test suite.** The m3 plan
 review (2026-06-04) confirmed M3 v1 similarly had no committed suite beyond Step F — M4 follows the
-same pattern. `test-m4-v2.mjs` is created from scratch, covering all 15 v2-specific tests (design
-doc §5) plus v1 carry-through tests (~10), totalling ~25 test cases.
+same pattern. `test-m4-v2.mjs` is created from scratch, covering all 16 v2-specific tests (design doc §5 tests
+1–15 + presence-gating test 16) plus v1 carry-through tests (~10), totalling ~27 test cases.
 
 ### `js/app.js` call site — read lines 43, 180–181, 1130–1235, 1300–1316, 1450–1474, 3200–3271
 
@@ -100,9 +100,9 @@ All field-level app.js changes confirmed by reading the relevant lines:
 | Line 1184 | `result.solar_aperture_m2` | → `result.solar_aperture` |
 | Line 1210 | `parseFloat(…) || 0.90` | → `|| 0.85` |
 | Lines 1211–1212 | `floorAreaRaw` / `floorAreaM2` parse | DELETE |
-| Line 3206 | `hl?.htc_w_per_k ?? null` in diagnostic | → `hl?.htc_used ?? null` |
-| Line 3208 | `hl?.solar_aperture_m2 ?? null` | → `hl?.solar_aperture ?? null` |
-| Line 3265 | `htc_w_per_k: htc` in diagnostic return | → `htc_used: htc` |
+| Line 3206 | `const htc = hl?.htc_w_per_k ?? null` in diagnostic | KEEP; also ADD `const htcUsed = hl?.htc_used ?? null` on the next line |
+| Line 3208 | `hl?.solar_aperture_m2 ?? null` | → `hl?.solar_aperture ?? null` (output field renamed) |
+| Line 3265 | `htc_w_per_k: htc` in diagnostic return | KEEP; also ADD `htc_used: htcUsed` as a new field |
 | Line 3266 | `solar_aperture_m2: solarR` in diagnostic return | → `solar_aperture: solarR` |
 
 **Harmlessly dead code — leave for downstream v2 plans:**
@@ -125,7 +125,7 @@ These branches never trigger once m4-v2 never emits `no_gas`. Clean up in m5-v2 
 | MODIFY | `js/heat-loss.js` | All v2 deltas: combined-fuel, η-move, mint, rescale, removals, field rename |
 | MODIFY | `index.html` | Boiler efficiency → 4-tier dropdown (INV-12); remove floor area input |
 | MODIFY | `js/app.js` | Call site update; remove/rename all affected field references |
-| CREATE | `test-m4-v2.mjs` | M4 v2 test suite — 15 v2-specific + ~10 v1 carry-through |
+| CREATE | `test-m4-v2.mjs` | M4 v2 test suite — 16 v2-specific + ~10 v1 carry-through (~27 total) |
 
 ---
 
@@ -161,25 +161,43 @@ drives the value and the absent one contributes 0 (consistent with design doc §
 
 Add `eta` parameter: `aggregateToDays(heating, external, eta)`.
 
+**Presence-gated whole-day rule (design doc §2.5.2).** The fit's whole-day rule must distinguish an
+**absent fuel** (the home has no meter for it — null for every HH across the dataset) from a **gap** (a
+present fuel with a missing reading on one or more HH in a day). A gap in a present fuel must exclude
+the whole day (as v1 did for gas); an absent fuel does not gate. This is data-presence detection, not
+fuel classification — m4 still combines both fuels regardless.
+
+At the top of `aggregateToDays`, before the day-building loop, compute two **home-level presence
+flags** once:
+
+```js
+const gas_present  = heating.some(h => h.heating_kwh      !== null);
+const elec_present = heating.some(h => h.elec_heating_kwh !== null);
+```
+
 Inside the day-building loop, replace the gas-only `daily_heating_kwh` accumulation with:
 
 ```js
-let daily_gas_heating_kwh = 0;
+let daily_gas_heating_kwh  = 0;
 let daily_elec_heating_kwh = 0;
 let missing_thermal = false;
 for (const i of indices) {
   const h = heating[i];
-  const gas  = h.heating_kwh      ?? null;
-  const elec = h.elec_heating_kwh ?? null;
-  if (gas === null && elec === null) { missing_thermal = true; break; }
-  daily_gas_heating_kwh  += (gas  ?? 0);
-  daily_elec_heating_kwh += (elec ?? 0);
+  // Presence-gated: a gap in a PRESENT fuel excludes the day.
+  // An absent fuel (gas_present = false / elec_present = false) does not gate.
+  if (gas_present  && (h.heating_kwh      == null)) { missing_thermal = true; break; }
+  if (elec_present && (h.elec_heating_kwh == null)) { missing_thermal = true; break; }
+  daily_gas_heating_kwh  += (h.heating_kwh      ?? 0);
+  daily_elec_heating_kwh += (h.elec_heating_kwh ?? 0);
   if (h.is_absence) has_absence = true;
 }
 const daily_heat_delivered = missing_thermal
   ? NaN
   : daily_gas_heating_kwh * eta + daily_elec_heating_kwh;
 ```
+
+The `?? 0` in the daily sums is now safe: because any gap in a present fuel already excluded the day,
+`?? 0` only ever coerces a genuinely **absent** fuel (legitimately 0 contribution). No silent undercount.
 
 Replace `daily_heating_kwh` with `daily_heat_delivered` throughout the day object:
 
@@ -190,16 +208,14 @@ days.push({
   daily_solar_kwh_per_m2,
   daily_degree_days,
   has_absence,
-  missing_heating: missing_thermal,   // keep the field name for compatibility with filterForRegression
+  missing_heating: missing_thermal,   // field name kept for filterForRegression compatibility
   missing_weather,
 });
 ```
 
-**Missing-thermal rule (v2):** A day is `missing_heating` only if any HH has BOTH fuel components
-null. A gas-only home (elec = 0 throughout from m3) with a null gas HH produces
-`daily_heat_delivered = 0`, which then filters as below-threshold — same net exclusion as v1, but
-counted in `below_heating_threshold` rather than `missing_heating`. This is the correct v2 behaviour
-per design doc §2.5.2.
+**Mint vs fit distinction:** The MINT (Step 1 / `mintThermalHeatDelivered`) retains the looser
+both-null rule — correct for m7's continuous trace (any present fuel drives a non-null output, full
+series emitted). Only the FIT aggregation uses the stricter presence-gated rule.
 
 ---
 
@@ -357,12 +373,13 @@ card for gas/mixed; dual-handed thermal-character copy for all-electric) via m3'
 
 ---
 
-### Step 12 — New helper `applyHtcRescale` + Step 7 (`js/heat-loss.js`)
+### Step 12 — New named export `applyHtcRescale` + Step 7 (`js/heat-loss.js`)
 
-Add a new private function after the rating helpers:
+Add a new **named export** after the rating helpers (pure function, no side effects — exported for
+direct unit-testing in `test-m4-v2.mjs`):
 
 ```js
-function applyHtcRescale(htc, payload) {
+export function applyHtcRescale(htc, payload) {
   if (htc === null) return { htc_used: null, htc_rescale_rejected: false };
   if (!payload)     return { htc_used: htc,  htc_rescale_rejected: false };
   const { setpoint_delta_k: delta, operating_delta_t_k: dTOp } = payload;
@@ -387,6 +404,7 @@ const { htc_used, htc_rescale_rejected } = applyHtcRescale(htc, setpointRescaleP
 - Out-of-band (|rescale − 1| > 0.20): `htc_used = htc` unrescaled, `htc_rescale_rejected = true`.
   **Not saturated at the bound** — per design doc §2.5.8 and FINDING §7.4.
 - Always recomputed from bare `htc` — never from a prior `htc_used` (idempotent).
+- Exported as a named export; tests T21–T23 unit-test `applyHtcRescale` directly with known inputs.
 
 ---
 
@@ -490,12 +508,16 @@ Apply all changes identified in Research Findings, in line-number order:
 
 9. **Lines 1216–1223** — Update `estimateHeatLoss` call to 4-arg signature (see Research Findings).
 
-10. **Line 3206** — `hl?.htc_w_per_k ?? null` → `hl?.htc_used ?? null`
-    (diagnostic `__getScenarioDiagnostics`: use the consumer-facing value)
+10. **Line 3206** — Keep `const htc = hl?.htc_w_per_k ?? null`. On the next line, **add**
+    `const htcUsed = hl?.htc_used ?? null`. The diagnostic exposes both the fitted and the
+    rescaled value so they can be compared. Do not rename the existing variable.
 
 11. **Line 3208** — `hl?.solar_aperture_m2 ?? null` → `hl?.solar_aperture ?? null`
+    (the m4 output field is renamed; the diagnostic reads from it).
 
-12. **Line 3265** — `htc_w_per_k: htc` → `htc_used: htc` in the diagnostic return object.
+12. **Line 3265** — Keep `htc_w_per_k: htc` in the `comfort_demand_inputs` return object.
+    **Add** `htc_used: htcUsed` as a new field alongside it (both present — the getter exists to
+    compare fitted vs used).
 
 13. **Line 3266** — `solar_aperture_m2: solarR` → `solar_aperture: solarR`
 
@@ -506,8 +528,8 @@ are now dead code, and will be cleaned up in m5-v2/m6-v2 plans.
 
 ### Step 16 — Create `test-m4-v2.mjs`
 
-ES module, Node.js `assert` (strict), run with `node test-m4-v2.mjs`. Import `estimateHeatLoss`
-from `./js/heat-loss.js`.
+ES module, Node.js `assert` (strict), run with `node test-m4-v2.mjs`. Import both
+`estimateHeatLoss` and `applyHtcRescale` from `./js/heat-loss.js`.
 
 **Synthetic data helper:** Generate `heating[]` entries with `{ timestamp, heating_kwh,
 elec_heating_kwh, is_absence }` and `external[]` entries with `{ temp_c, solar_w_m2 }`. Build
@@ -516,7 +538,7 @@ satisfy the 20-day minimum, plus a stock of warm days, absence days, and low-hea
 exclusion tests. Use a simple linear synthetic model: `daily_heat_delivered = HTC_true × DD +
 solar_noise` to ensure recoverable fits.
 
-**~25 test cases total:**
+**~27 test cases total:**
 
 #### v1 carry-through (T1–T10)
 
@@ -549,10 +571,12 @@ T11. **Gas-only η-equivalence (§5 Test 5.1 — the η-move regression).** Same
      Assert `|htc_v2 − htc_v1| < 1e-9`. **Fails if η is double-applied or omitted.**
 T12. **Combined-fuel mixed (§5 Test 5.2).** HTC_true = 250, η = 0.85, elec contributing 0.6
      kWh/(K·day). Expect `htc_w_per_k` ≈ 250 ±15%.
-T13. **All-electric, no short-circuit (§5 Test 5.3).** `heating_kwh = 0` throughout, `elec_heating_kwh`
-     generating a clear cold-weather signal, HTC_true = 220. No `baseloadMetadata` passed (param
-     removed). Expect fit runs, `validation_status ∈ {'good', 'acceptable'}` (NOT `'no_gas'`),
-     `htc_w_per_k` ≈ 220 ±15%.
+T13. **All-electric, no short-circuit (§5 Test 5.3).** `heating_kwh = null` throughout (m3 sets gas
+     null when there is no gas meter — not 0), `elec_heating_kwh` generating a clear cold-weather
+     signal, HTC_true = 220. `gas_present = false` so null gas does **not** exclude any day via the
+     presence-gated rule. Expect fit runs, `validation_status ∈ {'good', 'acceptable'}` (NOT
+     `'no_gas'`), `htc_w_per_k` ≈ 220 ±15%. **Fails if the whole-day rule excludes days for null
+     gas on an all-electric home.**
 T14. **Solar-aperture basis shift (§5 Test 5.4).** Same gas-only data fitted at η = 0.85 and at
      η = 1.0. `solar_aperture_v2` (η = 0.85) should ≈ 0.85 × `solar_aperture_v1` (η = 1.0) within
      ±5%. Confirms thermal-basis shift is intended (not a regression).
@@ -569,20 +593,18 @@ T18. **net_flow / internal_gains removed (§5 Test 5.8).** Assert none of `net_f
 T19. **HLP / floor_area removed (§5 Test 5.9).** Assert `!('hlp_w_per_m2_k' in result)`.
 T20. **Rescale first pass (§5 Test 5.10).** Call with `setpointRescalePayload = null`. Assert
      `result.htc_used === result.htc_w_per_k` (exact equality), `result.htc_rescale_rejected === false`.
-T21. **Rescale within band (§5 Test 5.11).** Fixture: `htc_w_per_k ≈ 220`, payload
-     `{ setpoint_delta_k: 2, operating_delta_t_k: 12 }`. Expected: `rescale = 12/14`,
-     `htc_used ≈ 220 × (12/14) ≈ 188.6`. Assert `|htc_used − 188.6| < 0.1`,
-     `htc_rescale_rejected === false`. Note: since the test calls `estimateHeatLoss` (which generates
-     its own HTC), the fixture needs to engineer a dataset that recovers ≈ 220. Assert on the rescale
-     formula only when the base HTC is known precisely — or use a white-box helper that calls
-     `applyHtcRescale` directly (flag for Opus: expose `applyHtcRescale` as a named export if the
-     test requires white-box access; otherwise the test verifies the rescale formula on the output).
-T22. **Rescale out-of-band rejected (§5 Test 5.12).** Payload `{ setpoint_delta_k: 4,
-     operating_delta_t_k: 12 }`. `rescale = 12/16 = 0.75` (< 0.8). Assert
-     `result.htc_used === result.htc_w_per_k`, `result.htc_rescale_rejected === true`.
-T23. **Rescale idempotence (§5 Test 5.13).** Apply same within-band payload twice (two separate
-     calls with identical inputs). Assert `htc_used` identical both times (recomputed from bare
-     `htc`, not compounded).
+T21. **Rescale within band — unit (§5 Test 5.11).** Call `applyHtcRescale` directly with
+     `htc = 220`, `payload = { setpoint_delta_k: 2, operating_delta_t_k: 12 }`. Expected:
+     `rescale = 12/14`, `htc_used = 220 × (12/14)` exactly (to `1e-9`), `htc_rescale_rejected ===
+     false`. δ > 0 ⇒ HTC lowered — correct direction.
+T21-int. **Rescale integration check.** Call `estimateHeatLoss` with a synthetic heating dataset
+     and a within-band `setpointRescalePayload`. Assert `result.htc_used !== result.htc_w_per_k`
+     (payload was applied) and `result.htc_rescale_rejected === false`.
+T22. **Rescale out-of-band rejected — unit (§5 Test 5.12).** `applyHtcRescale(220, { setpoint_delta_k: 4,
+     operating_delta_t_k: 12 })`. `rescale = 12/16 = 0.75` (< 0.8). Assert `htc_used === 220`
+     (unrescaled, exact), `htc_rescale_rejected === true`.
+T23. **Rescale idempotence — unit (§5 Test 5.13).** Call `applyHtcRescale` twice with identical
+     inputs. Assert results are identical (pure function, no state).
 T24. **Low-HTC source-blind flag (§5 Test 5.14).** Contrive data to produce HTC ≈ 45. Assert
      `htc_low_plausibility === true`, `validation_status === 'poor'`, `htc_w_per_k ≈ 45` (returned
      as-is, no clamp). Assert `!('htc_low_plausibility_callout' in result)` (no fuel-routed string).
@@ -590,11 +612,16 @@ T25. **Insufficient data — no fabrication (§5 Test 5.15).** 15 heating days (
      minimum). Assert `htc_w_per_k === null`, `htc_used === null`, `rating === null`,
      `validation_status === 'insufficient_data'`, `thermal_heat_delivered_kwh.length == heating.length`
      (mint still emitted), no invented HTC value anywhere in the result.
-
-**White-box note on T21–T23:** If `applyHtcRescale` remains private, tests T21–T23 must engineer a
-synthetic dataset that produces a known HTC exactly (or within tolerance), then pass the payload. An
-alternative: export `applyHtcRescale` as a named export for testability — this is acceptable since it
-is a pure function with no side effects. Flag for Opus.
+T26. **Whole-day presence-gating (§5 Test 5.16).** Two sub-cases:
+     (a) **Gas home, one HH gap:** Build a gas-only dataset (gas_present = true, elec = 0
+         throughout). On one otherwise-complete cold heating day, set one `heating_kwh = null`.
+         Assert that day is counted in `days_excluded.missing_heating` (excluded, not silently
+         included with ~98% of its heat). **Fails if both-null rule is used** (null gas + 0 elec is
+         NOT both-null → day would be included).
+     (b) **All-electric home, null gas throughout:** Build an all-electric dataset (`heating_kwh =
+         null` for all HH throughout, `elec_heating_kwh` set normally — gas_present = false). Assert
+         that days are NOT excluded for the null gas (presence-gated: absent fuel does not gate).
+         **Fails if the whole-day rule gates on null gas regardless of presence.**
 
 ---
 
@@ -609,7 +636,7 @@ is a pure function with no side effects. Flag for Opus.
 | `zeroExcluded` not cleaned up when no-gas block is deleted | Check that the `const zeroExcluded` declaration is deleted in the same edit as the no-gas block. |
 | m3-v2 not yet implemented when app.js integration runs | Prerequisite gate: check m3-v2 plan Status before touching `app.js`. Tests use synthetic data — unaffected. |
 | Degenerate rescale payload (ΔT_op ≤ 0) passes silently | `applyHtcRescale` explicitly guards `dTOp <= 0` and `dTUser <= 0` → reject + flag. |
-| T21–T23 rescale tests require known-HTC fixture | Either export `applyHtcRescale` as a named export, or engineer a precisely-controlled synthetic dataset. Resolve in implementation. |
+| T21–T23 rescale tests require exact htc input | `applyHtcRescale` is now a named export — unit tests call it directly with a known `htc` value; no synthetic-dataset engineering needed. |
 | `boilerEfficiencyInput` type change (`<input>` → `<select>`) breaks JS read | `parseFloat` on a `<select>` value is valid; `|| 0.85` default unchanged. No JS change beyond the default value. |
 
 ---
@@ -629,7 +656,7 @@ is a pure function with no side effects. Flag for Opus.
 
 ### `test-m4-v2.mjs`
 
-- [ ] All 25 tests pass: `node test-m4-v2.mjs` exits 0 with 25/25 pass
+- [ ] All ~27 tests pass: `node test-m4-v2.mjs` exits 0 (T1–T26 + T21-int)
 - [ ] T11: gas-only HTC identical to v1 formula within 1e-9 (η-move regression test)
 - [ ] T15: η scaling ratio exact within 1e-9
 - [ ] T20–T23: rescale pass/reject/idempotence all confirmed
@@ -646,7 +673,7 @@ is a pure function with no side effects. Flag for Opus.
 - [ ] No reference to `floorAreaInput`, `floorAreaM2`, `htc_w_per_k_adjusted`, `hlp_w_per_m2_k`
 - [ ] `solar_aperture_m2` does not appear anywhere in `app.js` (grep confirms)
 - [ ] Default boiler efficiency fallback is `0.85`
-- [ ] Diagnostic `__getScenarioDiagnostics` uses `htc_used` and `solar_aperture`
+- [ ] Diagnostic `__getScenarioDiagnostics` has BOTH `htc_w_per_k` (fitted) and `htc_used` (rescaled) in `comfort_demand_inputs`; `solar_aperture_m2` → `solar_aperture`
 
 ---
 
@@ -657,22 +684,26 @@ is a pure function with no side effects. Flag for Opus.
    for gas-only homes) is also intended by the η-move — not a regression against v1 R fixtures. See
    design doc §2.5.4 and §7 Changed.
 
-2. **Missing-thermal rule change for gas-only homes:** In v1, a null gas HH marks the day
-   `missing_heating`. In v2, a null gas HH where `elec_heating_kwh = 0` (gas-only home) produces
-   `daily_heat_delivered = 0`, which filters as `below_heating_threshold`. Net effect: same day
-   excluded, different counter. For a gas-only home, m3-v2 emits `elec_heating_kwh = 0` (not null)
-   throughout, so the "both null" trigger is only pathological (simultaneous data gap in both meters).
+2. **Mint vs fit — two different null rules (design doc §2.5.2):** The MINT (Step 1) uses the
+   looser both-null rule: any present fuel drives a non-null output, absent fuel contributes 0. The
+   FIT aggregation (Step 2) uses the stricter presence-gated rule: a gap in a present fuel excludes
+   the whole day. These rules are deliberately different and must not be unified. The old "both-null"
+   rule for the fit was wrong: a null `heating_kwh` HH on a gas home where `elec_heating_kwh = 0`
+   is NOT both-null, so the day would have been silently included with ~98% of its heat, biasing HTC
+   low. Presence-gating corrects this. T26 verifies both the gap-exclusion and the absent-fuel
+   non-gating behaviours.
 
-3. **`applyHtcRescale` export:** Tests T21–T23 may benefit from `applyHtcRescale` being a named
-   export. It is a pure function with no side effects. Recommend exporting it; flag for Opus decision.
+3. **`applyHtcRescale` export — resolved:** `applyHtcRescale` is now a named export. Tests T21–T23
+   unit-test it directly with exact inputs; no synthetic dataset needed. One integration check
+   (T21-int) confirms the export is wired through `estimateHeatLoss` correctly.
 
 4. **Dead code — `no_gas` in m5/m6 display functions:** Lines 1310 and 1459 in `app.js` are now
    dead code. Leaving them for m5-v2/m6-v2 plans (they refer to m5/m6 result objects, not m4).
 
-5. **Diagnostic `htc` field** (app.js line 3265): changed to `htc_used` in the diagnostic's return
-   object. If any downstream code reads `comfort_demand_inputs.htc_w_per_k`, it will get `undefined`.
-   Since this is investigation tooling (`__getScenarioDiagnostics`), the risk is low — but flag in
-   case any other diagnostic consumer references the old field name.
+5. **Diagnostic `htc` fields — both retained:** `__getScenarioDiagnostics` now exposes BOTH
+   `htc_w_per_k` (fitted) and `htc_used` (rescaled) in `comfort_demand_inputs`. The existing
+   `htc_w_per_k` field is kept unchanged (no rename); `htc_used` is added alongside it. Any
+   existing diagnostic consumer reading `comfort_demand_inputs.htc_w_per_k` continues to work.
 
 ---
 
