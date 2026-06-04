@@ -1025,7 +1025,7 @@ async function runBaseloadSeparation(showProgressFn, showStatusFn) {
 
   let result;
   try {
-    result = separateBaseload(ingestion.consumption, externalResult.external);
+    result = separateBaseload(ingestion.consumption, externalResult.external, null);
   } catch (err) {
     showStatusFn('Baseload separation failed: ' + err.message, 'error');
     console.error('runBaseloadSeparation error:', err);
@@ -1071,7 +1071,7 @@ async function runBaseloadSeparation(showProgressFn, showStatusFn) {
 
   // Supplementary load messages
   const ehConf = sl.electric_heating_confidence;
-  if (sl.electric_heating_detected && !sl.electric_heating_is_primary) {
+  if (sl.electric_heating_classification_effective === 'some') {
     const confLabel = CONFIDENCE_LABELS[ehConf] ?? ehConf;
     const est = sl.electric_heating_kwh_estimate !== null ? sl.electric_heating_kwh_estimate.toFixed(0) : '—';
     const perDd = sl.electric_heating_kwh_per_dd !== null ? sl.electric_heating_kwh_per_dd.toFixed(2) : '—';
@@ -1079,7 +1079,7 @@ async function runBaseloadSeparation(showProgressFn, showStatusFn) {
       `Supplementary electric heating detected (${confLabel}). Estimated ${est} kWh over the data period (${perDd} kWh per degree-day). Your gas-derived heat loss may underestimate your home's true heating demand.`,
       'warning'
     );
-  } else if (sl.electric_heating_is_primary) {
+  } else if (sl.electric_heating_classification_effective === 'all_electric') {
     const confLabel = CONFIDENCE_LABELS[ehConf] ?? ehConf;
     const est = sl.electric_heating_kwh_estimate !== null ? sl.electric_heating_kwh_estimate.toFixed(0) : '—';
     showStatusFn(

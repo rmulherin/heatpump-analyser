@@ -24,6 +24,10 @@ const BASELOAD_CONFIG = {
   R2_ACCEPTABLE_THRESHOLD: 0.5,
   BALANCE_POINT_FLATNESS_FRACTION: 0.20,
   BALANCE_POINT_MIN_DAYS_PER_BIN: 3,
+  LOW_GAS_WARM_MAX_GAS_KWH_FRACTION: 2.2,
+  LOW_GAS_WARM_MIN_DAILY_MEAN_TEMP_C: 17,
+  WINTER_NON_HEAT_FRACTION: 0.02,
+  ELECTRICITY_BASELOAD_PERCENTILE: 5,
 };
 
 // ===== Step H configuration =====
@@ -61,6 +65,16 @@ function median(arr) {
   vals.sort((a, b) => a - b);
   const mid = Math.floor(vals.length / 2);
   return vals.length % 2 === 1 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2;
+}
+
+function percentile(arr, p) {
+  const vals = arr.filter(v => v !== null && v !== undefined && !isNaN(v));
+  if (vals.length === 0) return null;
+  vals.sort((a, b) => a - b);
+  const idx = (p / 100) * (vals.length - 1);
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  return lo === hi ? vals[lo] : vals[lo] + (idx - lo) * (vals[hi] - vals[lo]);
 }
 
 function hhOfDay(timestamp) {
@@ -417,6 +431,33 @@ export function methodE(consumption, warnings) {
   };
 }
 
+// ===== Step F.5: Low-gas warm-day correction =====
+
+export function applyLowGasWarmCorrection(consumption, external, heating, baseloadMedianKwhPerDay) {
+  const gasCeiling = BASELOAD_CONFIG.LOW_GAS_WARM_MAX_GAS_KWH_FRACTION * baseloadMedianKwhPerDay;
+  const minTemp    = BASELOAD_CONFIG.LOW_GAS_WARM_MIN_DAILY_MEAN_TEMP_C;
+  const dayIndexMap = buildDayIndexMap(consumption);
+  let count = 0;
+
+  for (const [, indices] of dayIndexMap) {
+    if (indices.length !== 48) continue;
+    if (indices.some(i => consumption[i].gas_kwh === null)) continue;
+    if (indices.some(i => heating[i].is_absence)) continue;
+    const daily_gas_kwh = indices.reduce((s, i) => s + consumption[i].gas_kwh, 0);
+    if (daily_gas_kwh >= gasCeiling) continue;
+    const tempVals = indices.map(i => external?.[i]?.temp_c);
+    if (tempVals.some(v => v === null || v === undefined)) continue;
+    const daily_mean_temp_c = tempVals.reduce((s, v) => s + v, 0) / 48;
+    if (daily_mean_temp_c < minTemp) continue;
+    for (const i of indices) {
+      heating[i].heating_kwh  = 0;
+      heating[i].baseload_kwh = consumption[i].gas_kwh;
+    }
+    count++;
+  }
+  return count;
+}
+
 // ===== Step F: Absence detection =====
 
 export function detectAbsences(consumption, heating, baseloadMedianKwhPerDay, warnings) {
@@ -520,9 +561,71 @@ export function validateSeparation(heating, external, warnings) {
   return { r2, validation_status };
 }
 
+// ===== Step I: Electricity baseload floor =====
+
+export function computeElectricityBaseload(consumption, heating) {
+  const dayIndexMap = buildDayIndexMap(consumption);
+  const perHhValues = [];
+  let daysUsed = 0;
+
+  for (const [, indices] of dayIndexMap) {
+    if (indices.length !== 48) continue;
+    if (indices.some(i => consumption[i].elec_kwh === null || consumption[i].elec_kwh === undefined)) continue;
+    if (indices.some(i => heating[i].is_absence)) continue;
+    daysUsed++;
+    for (const i of indices) perHhValues.push(consumption[i].elec_kwh);
+  }
+
+  if (daysUsed < STEP_H_CONFIG.MIN_DAYS) return null;
+  return percentile(perHhValues, BASELOAD_CONFIG.ELECTRICITY_BASELOAD_PERCENTILE);
+}
+
+// ===== Step J: Per-HH electric heating attribution =====
+
+function applyElectricHeatingAttribution(consumption, external, heating, electricityBaseload, supplementary_loads) {
+  const classEff       = supplementary_loads.electric_heating_classification_effective;
+  const correctedPerDd = supplementary_loads.electric_heating_kwh_per_dd;
+  const floor          = electricityBaseload;
+  const dayIndexMap    = buildDayIndexMap(consumption);
+
+  for (const [, indices] of dayIndexMap) {
+    const allElecPresent = indices.length === 48
+      && indices.every(i => consumption[i].elec_kwh !== null && consumption[i].elec_kwh !== undefined);
+    const canAttribute = allElecPresent && classEff !== 'none' && correctedPerDd !== null
+      && electricityBaseload !== null;
+
+    if (canAttribute) {
+      const tempVals = indices.map(i => external?.[i]?.temp_c);
+      const allTemps = tempVals.every(v => v !== null && v !== undefined);
+      const meanTemp = allTemps ? tempVals.reduce((s, v) => s + v, 0) / 48 : null;
+      const hdd      = meanTemp !== null ? Math.max(0, HDD_BASE_TEMP - meanTemp) : 0;
+      const E_d      = Math.max(0, correctedPerDd * hdd);
+      const excess   = indices.map(i => Math.max(0, consumption[i].elec_kwh - floor));
+      const S        = excess.reduce((sum, e) => sum + e, 0);
+      const r_d      = S > 0 ? Math.min(1, E_d / S) : 0;
+      for (let k = 0; k < indices.length; k++) {
+        const i = indices[k];
+        heating[i].elec_heating_kwh     = r_d * excess[k];
+        heating[i].nonheat_residual_kwh = consumption[i].elec_kwh - heating[i].elec_heating_kwh;
+      }
+    } else {
+      for (const i of indices) {
+        const elec = consumption[i].elec_kwh;
+        if (elec === null || elec === undefined) {
+          heating[i].elec_heating_kwh     = null;
+          heating[i].nonheat_residual_kwh = null;
+        } else {
+          heating[i].elec_heating_kwh     = 0;
+          heating[i].nonheat_residual_kwh = elec;
+        }
+      }
+    }
+  }
+}
+
 // ===== Step H: Supplementary electric load detection =====
 
-export function detectSupplementaryLoads(consumption, external, heating, baseloadMethod) {
+export function detectSupplementaryLoads(consumption, external, heating, baseloadMethod, userClassificationOverride = null) {
   const noGasCase = baseloadMethod === 'no-gas';
 
   function skipped(method, days_used_in_fit) {
@@ -532,9 +635,14 @@ export function detectSupplementaryLoads(consumption, external, heating, baseloa
       hdd_coefficient_kwh_per_dd: null, cdd_coefficient_kwh_per_dd: null,
       hdd_p_value: null, cdd_p_value: null,
       sum_hdd_k_day: null, sum_cdd_k_day: null,
-      electric_heating_detected: false, electric_heating_kwh_per_dd: null,
-      electric_heating_kwh_estimate: null, electric_heating_confidence: 'none',
-      electric_heating_is_primary: false,
+      electric_heating_detected: false,
+      electric_heating_kwh_per_dd: null,
+      electric_heating_kwh_estimate: null,
+      electric_heating_confidence: 'none',
+      electric_heating_classification_auto: 'none',
+      electric_heating_classification_effective: userClassificationOverride ?? 'none',
+      electric_heating_fraction_of_total_energy: 0,
+      electricity_baseload: null,
       air_conditioning_detected: false, air_conditioning_kwh_per_dd: null,
       air_conditioning_kwh_estimate: null, air_conditioning_confidence: 'none',
       ac_detection_note: null,
@@ -561,10 +669,12 @@ export function detectSupplementaryLoads(consumption, external, heating, baseloa
     if (!noGasCase && indices.some(i => consumption[i].gas_kwh === null || consumption[i].gas_kwh === undefined)) continue;
 
     const daily_mean_temp_c = tempVals.reduce((s, v) => s + v, 0) / 48;
+    const daily_gas_kwh = noGasCase ? 0 : indices.reduce((s, i) => s + consumption[i].gas_kwh, 0);
     dailyData.push({
       daily_elec_kwh: indices.reduce((s, i) => s + consumption[i].elec_kwh, 0),
       daily_hdd: Math.max(0, HDD_BASE_TEMP - daily_mean_temp_c),
       daily_cdd: Math.max(0, daily_mean_temp_c - CDD_BASE_TEMP),
+      daily_gas_kwh,
     });
   }
 
@@ -578,7 +688,7 @@ export function detectSupplementaryLoads(consumption, external, heating, baseloa
   const olsResult = computeMultiOls(ys, xMatrix);
   if (!olsResult) return skipped('skipped_insufficient_data', dailyData.length);
 
-  const a = olsResult.coefficients[0]; // HDD slope
+  const a = olsResult.coefficients[0]; // HDD slope (raw — diagnostic)
   const b = olsResult.coefficients[1]; // CDD slope
   const c = olsResult.coefficients[2]; // intercept — baseline
   const p_a = olsResult.pValues[0];
@@ -586,16 +696,44 @@ export function detectSupplementaryLoads(consumption, external, heating, baseloa
   const sum_hdd = dailyData.reduce((s, d) => s + d.daily_hdd, 0);
   const sum_cdd = dailyData.reduce((s, d) => s + d.daily_cdd, 0);
 
-  // H2 — Electric heating detection
-  const electric_heating_detected = a > STEP_H_CONFIG.ELECTRIC_HEATING_COEFF_THRESHOLD && p_a < STEP_H_CONFIG.P_VALUE_DETECT;
+  // H2 — 2% winter-non-heat correction then detection
+  const raw_estimate            = a * sum_hdd;
+  const total_annual_energy_kwh = dailyData.reduce((s, d) => s + d.daily_elec_kwh + d.daily_gas_kwh, 0);
+  const corrected_estimate      = Math.max(0, raw_estimate - BASELOAD_CONFIG.WINTER_NON_HEAT_FRACTION * total_annual_energy_kwh);
+  const corrected_kwh_per_dd    = sum_hdd > 0 ? corrected_estimate / sum_hdd : null;
+  const fraction_of_total       = total_annual_energy_kwh > 0 ? raw_estimate / total_annual_energy_kwh : 0;
+
+  const electric_heating_detected = corrected_kwh_per_dd !== null
+    && corrected_kwh_per_dd > STEP_H_CONFIG.ELECTRIC_HEATING_COEFF_THRESHOLD
+    && p_a < STEP_H_CONFIG.P_VALUE_DETECT
+    && sum_hdd > 0;
+
   let electric_heating_confidence;
   if (electric_heating_detected) {
-    electric_heating_confidence = (a >= STEP_H_CONFIG.COEFF_HIGH && p_a < STEP_H_CONFIG.P_VALUE_HIGH) ? 'high' : 'moderate';
+    electric_heating_confidence =
+      (corrected_kwh_per_dd >= STEP_H_CONFIG.COEFF_HIGH && p_a < STEP_H_CONFIG.P_VALUE_HIGH)
+        ? 'high' : 'moderate';
   } else {
-    electric_heating_confidence = (a > STEP_H_CONFIG.COEFF_LOW && p_a >= STEP_H_CONFIG.P_VALUE_DETECT && p_a < STEP_H_CONFIG.P_VALUE_LOW_UPPER) ? 'low' : 'none';
+    electric_heating_confidence =
+      (corrected_kwh_per_dd !== null
+       && corrected_kwh_per_dd > STEP_H_CONFIG.COEFF_LOW
+       && p_a >= STEP_H_CONFIG.P_VALUE_DETECT
+       && p_a < STEP_H_CONFIG.P_VALUE_LOW_UPPER)
+        ? 'low' : 'none';
   }
 
-  // H3 — AC detection
+  // H3 — 3-tier classification
+  let classification_auto;
+  if (noGasCase && electric_heating_detected) {
+    classification_auto = 'all_electric';
+  } else if (electric_heating_detected) {
+    classification_auto = 'some';
+  } else {
+    classification_auto = 'none';
+  }
+  const classification_effective = userClassificationOverride ?? classification_auto;
+
+  // H4 — AC detection
   let air_conditioning_detected = false;
   let air_conditioning_confidence = 'none';
   let air_conditioning_kwh_per_dd = null;
@@ -615,9 +753,6 @@ export function detectSupplementaryLoads(consumption, external, heating, baseloa
     }
   }
 
-  // H4 — No-gas framing
-  const electric_heating_is_primary = noGasCase && electric_heating_detected;
-
   return {
     method: 'regression',
     days_used_in_fit: dailyData.length,
@@ -629,10 +764,13 @@ export function detectSupplementaryLoads(consumption, external, heating, baseloa
     sum_hdd_k_day: sum_hdd,
     sum_cdd_k_day: sum_cdd,
     electric_heating_detected,
-    electric_heating_kwh_per_dd: electric_heating_detected ? a : null,
-    electric_heating_kwh_estimate: electric_heating_detected ? a * sum_hdd : null,
+    electric_heating_kwh_per_dd: electric_heating_detected ? corrected_kwh_per_dd : null,
+    electric_heating_kwh_estimate: electric_heating_detected ? corrected_estimate : null,
     electric_heating_confidence,
-    electric_heating_is_primary,
+    electric_heating_classification_auto: classification_auto,
+    electric_heating_classification_effective: classification_effective,
+    electric_heating_fraction_of_total_energy: fraction_of_total,
+    electricity_baseload: null,
     air_conditioning_detected,
     air_conditioning_kwh_per_dd,
     air_conditioning_kwh_estimate,
@@ -645,7 +783,7 @@ export function detectSupplementaryLoads(consumption, external, heating, baseloa
 
 // ===== Main orchestrator (gas-separation stub — extended by step-h plan) =====
 
-export function separateBaseload(consumption, external) {
+export function separateBaseload(consumption, external, userClassificationOverride = null) {
   const warnings = [];
 
   const heating = consumption.map(rec => ({
@@ -653,6 +791,8 @@ export function separateBaseload(consumption, external) {
     heating_kwh: rec.gas_kwh === null ? null : 0,
     baseload_kwh: rec.gas_kwh === null ? null : 0,
     is_absence: false,
+    elec_heating_kwh: null,
+    nonheat_residual_kwh: null,
   }));
 
   // No-gas case
@@ -666,11 +806,15 @@ export function separateBaseload(consumption, external) {
       baseload_median_kwh_per_day: 0,
       absence_periods: [],
       absence_days_total: 0,
+      low_gas_warm_days_total: 0,
       heating_vs_degree_days_r2: null,
       validation_status: 'no_gas',
       warnings,
     };
-    const supplementary_loads = detectSupplementaryLoads(consumption, external, heating, baseload_metadata.method);
+    const supplementary_loads = detectSupplementaryLoads(consumption, external, heating, baseload_metadata.method, userClassificationOverride);
+    const electricity_baseload = computeElectricityBaseload(consumption, heating);
+    supplementary_loads.electricity_baseload = electricity_baseload;
+    applyElectricHeatingAttribution(consumption, external, heating, electricity_baseload, supplementary_loads);
     return { heating, baseload_metadata, supplementary_loads };
   }
 
@@ -706,11 +850,23 @@ export function separateBaseload(consumption, external) {
     consumption, heating, baseload_median_kwh_per_day, warnings
   );
 
+  // F.5: Low-gas warm-day correction (after absence detection, before validation)
+  const low_gas_warm_days_total = applyLowGasWarmCorrection(
+    consumption, external, heating, baseload_median_kwh_per_day
+  );
+  if (low_gas_warm_days_total > 30) {
+    warnings.push(
+      `Detected ${low_gas_warm_days_total} summer days where your gas use was below the ` +
+      `heating-day threshold. These have been re-classified as non-heating to avoid ` +
+      `mis-attributing your summer hot-water use as heating.`
+    );
+  }
+
   // Method E sets insufficient_data; excessive absences also force it
   let forced_status = methodResult.validation_status ?? null;
   if (absence_days_total > BASELOAD_CONFIG.EXCESSIVE_ABSENCE_DAYS) forced_status = 'insufficient_data';
 
-  // 4d: Validate separation against degree-days
+  // G: Validate separation against degree-days
   const { r2, validation_status: step_g_status } = validateSeparation(heating, external, warnings);
   const validation_status = forced_status === 'insufficient_data' ? 'insufficient_data' : step_g_status;
 
@@ -722,11 +878,15 @@ export function separateBaseload(consumption, external) {
     baseload_median_kwh_per_day,
     absence_periods,
     absence_days_total,
+    low_gas_warm_days_total,
     heating_vs_degree_days_r2: r2,
     validation_status,
     warnings,
   };
 
-  const supplementary_loads = detectSupplementaryLoads(consumption, external, heating, baseload_metadata.method);
+  const supplementary_loads = detectSupplementaryLoads(consumption, external, heating, baseload_metadata.method, userClassificationOverride);
+  const electricity_baseload = computeElectricityBaseload(consumption, heating);
+  supplementary_loads.electricity_baseload = electricity_baseload;
+  applyElectricHeatingAttribution(consumption, external, heating, electricity_baseload, supplementary_loads);
   return { heating, baseload_metadata, supplementary_loads };
 }

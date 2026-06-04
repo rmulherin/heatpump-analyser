@@ -454,7 +454,11 @@ Create `test-m3-v2.mjs` at the repo root. Follow the same Luxon stub pattern as 
 
 ## Implementation Deviations
 
-None (plan phase).
+**D1 — One `separateBaseload` call, not two.** The plan's Step 8a says "one in Octopus path, one in CSV path". Only one call exists at line 1028 (the two paths converge before `runBaseloadSeparation`). The explicit `null` was added to that single call. No behaviour change; plan intent satisfied.
+
+**D2 — Test count: 44 assertions across 19 test cases.** The plan states "19 v2 tests". `test-m3-v2.mjs` contains 19 named test cases (F5-1 through J-5) per the plan spec; each case uses multiple `assert()` calls for sub-criteria, yielding 44 assertions total. All pass.
+
+**D3 — `buildDataset` uses seasonal temperature, not the plan's HDD-direct helper.** The plan's TC descriptions imply a simple `daily_elec ≈ 8 + slope × HDD` pattern but did not specify how to generate the synthetic temperatures. The plan's originally-described helper set all CDD = 0 (since `tempC = 15.5 - HDD`), which made the 3-variable OLS design matrix (HDD, CDD, 1) singular — `computeMultiOls` returned null, skipping detection. Fixed by using a proper UK seasonal curve (`13 - 11·cos(2π·d/365)`) that produces realistic CDD variation in summer. Test outcome and intent match the plan exactly.
 
 ---
 
@@ -532,7 +536,7 @@ Verdict: ✅ APPROVED — full fork scope, faithful to the design; all review fi
 
 ## Approval
 
-**Status:** ✅ Approved — 2026-06-04
+**Status:** Implemented — 2026-06-04, commit <pending>.
 **Approved by:** Rhiannon (via Opus review)
 **Clarifications confirmed:**
 - Null `electricity_baseload` (< 30 qualifying elec days) → Step J **skips attribution** (`elec_heating
