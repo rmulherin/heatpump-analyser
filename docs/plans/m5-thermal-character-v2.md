@@ -1,11 +1,17 @@
 # M5 Thermal Character — v2 implementation
 
-**Date:** 2026-06-04
-**Status:** Awaiting review — Opus architect review pending.
+**Date:** 2026-06-04 (re-cut 2026-06-04)
+**Status:** Awaiting review — re-cut for Opus re-review per 2026-06-04 blocking findings.
 
 > **Supersedes the 2026-06-02 draft** in this file, which was a partial alignment plan for
 > an older v2 design. The authoritative design is now `m5-thermal-character-v2.md`
 > (praxis-claude-hub, 2026-06-04), self-contained and agreed with Rhiannon.
+>
+> **Re-cut vs the 2026-06-04 first draft** (commit 40ad6f7): Method B is redesigned to the
+> absence-recovery duration-asymptote (design §2.5.3); EV-cap window fixed to use timestamp
+> hour-of-day; `thermal_mass_fit_status` added to contract; UI input deferral for setpoint
+> and household-size; TC2/TC4 rebuilt as first-principles forward RC simulations; TC4b added
+> (uniform-duration rejection test).
 
 ---
 
@@ -15,9 +21,9 @@ Re-implement `js/thermal-character.js` (Module 5) from v1 to v2 per `m5-thermal-
 (praxis-claude-hub, 2026-06-04). This is a redesign, not a transcription. Path A (the two-estimator
 τ-fit) and the gains assembly (Step 1b) are new code. Only the tau-bucket dropdown mapping, the
 time-constant derivation, the rating bands, and the heating-frequency readout are reproduced from v1.
-Create `test-m5-v2.mjs` covering all 13 §5 test criteria. Update `js/scenario-consumption.js` to
-remove the `setpoint_c` dependency and consume `internal_gains_w` from m5. Update `js/app.js` call
-site and display (gated on m4-v2 being implemented first).
+Create `test-m5-v2.mjs` covering all 14 §5 test criteria (including TC4b). Update
+`js/scenario-consumption.js` to remove the `setpoint_c` dependency and consume `internal_gains_w`
+from m5. Update `js/app.js` call site and display (gated on m4-v2 being implemented first).
 
 ---
 
@@ -88,9 +94,22 @@ m7 currently reads from `thermalChar`:
 - `thermalChar?.underheat_ratio` (~line 334) — used in `demandScale` for the "Heat to Comfort"
   slider. **Removed from m5-v2** (relocated to m7's trace). Will be null after this plan, making
   `demandScale = 1.0` always. Known interim regression; flagged for m7-v2.
-- Solar-gains computed inline in both RC traces using `heatLoss.solar_aperture_m2`. Step 14b
-  replaces `solar_aperture_m2` → `solar_aperture` (m4-v2 rename) and wires `internal_gains_w`
-  into the smart-scenario post-hoc trace.
+- Solar gains: `scenario-consumption.js` reads `heatLoss.solar_aperture` (**confirmed** — lines
+  183 and 213 both use `solar_aperture`, not `solar_aperture_m2`). **Step 14b's rename is a
+  no-op** — already correct. `heat-loss.js` (shipping) also outputs `solar_aperture` (not `_m2`).
+  No pre-existing `solar_aperture_m2` bug.
+
+### `js/app.js` — UI inputs (confirmed read)
+
+App.js confirms (lines 188–189):
+- `wallConstructionInput` — `document.getElementById('wall-construction')` ✓ (exists)
+- `tAtRestartInput` — `document.getElementById('t-at-restart')` ✓ (exists)
+- **`setpointInput`** — **does NOT exist** in app.js. No such variable or element reference.
+- **`householdSizeInput`** — **does NOT exist** in app.js.
+
+Step 15 must NOT reference `setpointInput?.value` or `householdSizeInput?.value` — they would be
+`undefined` variables (ReferenceError) or undefined DOM nodes returning empty string. Phase-4 UI
+scope; defer. Pass hard-coded defaults (`20` and `2`) at the call site; document the deferral.
 
 ### OLS patterns in the codebase
 
@@ -107,9 +126,11 @@ absorbs the gains/setpoint offset as designed.
 
 - **Method A τ-fit**: 1D profile-LS — minimize `Var(z_i(τ))` over a log-spaced grid, then
   golden-section refinement. SE(τ) from numerical Hessian of RSS at τ_hat. No external library.
+- **Method B asymptote fit**: profile-LS on A (the asymptote = C_true) — golden-section on A,
+  inner OLS on linearized B = 1/τ. Bootstrap (resample absence events) for SE on A. Duration-spread
+  gate before fitting. No external library.
 - **Mode estimator**: half-sample-mode (HSM) — `O(n log n)`, no external deps, robust for small
-  samples. Used by `max_load`, Method B C-mode, and bootstrap CI.
-- **Method B bootstrap**: 1000 resamples of C_events; SE from bootstrap std of τ estimates.
+  samples. Used by `computeMaxLoad` (heat_system_capacity_kw) only (no longer for C estimation).
 - **No new imports** — vanilla JS throughout, consistent with project standards.
 
 ---
@@ -125,15 +146,14 @@ or redirect before implementation begins.
 | `METHOD_A_MIN_EVENTS` | `20` | Method A fire gate | Min morning-reheat events for regression to be meaningful. **Flag.** |
 | `METHOD_A_PREDAWN_START_H` | `3` | Step 2a event collection | Start of pre-dawn window (03:00). **Flag.** |
 | `METHOD_A_PREDAWN_END_H` | `7` | Step 2a event collection | End of pre-dawn window exclusive (07:00). **Flag.** |
-| `METHOD_B_MIN_COOLDOWN_HH` | `8` | Step 2b recovery detection | Min preceding low-heat HH (4 h) before ceiling run. **Flag.** |
+| `METHOD_B_DURATION_SPREAD_H` | `12` | Step 2b spread gate | Min range of t_soak values (hours) needed to pin the asymptote curve. Uniform durations → under-determined. **Flag for Opus calibration.** |
 | `PCTILE_UPPER_TAIL` | `0.95` | Step 2b max_load | 95th percentile for upper tail. Confirmed §3. |
-| `CEILING_FACTOR` | `0.9` | Step 2b at-ceiling gate | 0.9 × max_load. Confirmed §3. |
-| `SUSTAINED_MIN_HH` | `3` | Step 2b at-ceiling run | Min HH at ceiling. Confirmed §3. |
-| `MIN_EVENTS_METHOD_B` | `5` | Step 2b fire gate | Min recovery events. Confirmed §3. |
-| `FIRE_THRESHOLD_SE` | `0.25` | Confidence selection | ±25% relative SE on τ. Confirmed §3. |
+| `CEILING_FACTOR` | `0.9` | Step 2b max_load | 0.9 × max_load. Confirmed §3. |
+| `MIN_EVENTS_METHOD_B` | `4` | Step 2b fire gate | Min absence-recovery events (≥ ~4 per design §3). Confirmed. |
+| `FIRE_THRESHOLD_SE` | `0.25` | Confidence selection | ±25% relative SE on τ to fire. Confirmed §3. |
 | `GOOD_SE_THRESHOLD` | `0.12` | Validation status | ~12% → 'good'. Confirmed §2.5.8. |
 | `EV_CAP_K` | `2` | Step 1b EV clip | k = 2 × electricity_baseload. Confirmed §2.5.2b. |
-| `BOOTSTRAP_ITER` | `1000` | Method B CI | Not specified in design; 1000 is standard. |
+| `BOOTSTRAP_ITER` | `1000` | Method B CI | 1000 resamples — standard. Confirmed. |
 | `WINTER_MAX_T_C` | `10` | Method A event filter | T_out < 10°C for winter. Same as v1. |
 
 ---
@@ -143,7 +163,7 @@ or redirect before implementation begins.
 | Action | File | Purpose |
 |--------|------|---------|
 | MODIFY (full rewrite) | `js/thermal-character.js` | Complete v2 redesign — Path A, gains assembly, new contract |
-| CREATE | `test-m5-v2.mjs` | 13 test cases covering all §5 criteria; synthetic data |
+| CREATE | `test-m5-v2.mjs` | 14 test cases covering all §5 criteria; synthetic data |
 | MODIFY | `js/scenario-consumption.js` | Add `operativeSetpoint` param; remove `setpoint_c` reads; wire `internal_gains_w` |
 | MODIFY | `js/app.js` | New m5 call site; display changes; **gated on m4-v2 Implemented** |
 
@@ -175,8 +195,8 @@ const TC_CONFIG = {
   EV_CAP_K:                    2,       // EV overnight cap multiplier on electricity_baseload
   F_GAS:                       0.35,    // Fraction of gas baseload → indoor heat  [OPUS DECISION]
   OCCUPANCY_W_PER_PERSON:      70,      // Body-heat per occupant (W)
-  EV_WINDOW_START_SLOT:        2,       // 01:00 (slot 2 in 0-indexed 30-min day)
-  EV_WINDOW_END_SLOT:          9,       // 04:30 (inclusive)
+  EV_WINDOW_START_H:           1,       // 01:00 — start of EV overnight cap window (hour-of-day)
+  EV_WINDOW_END_H:             5,       // 05:00 — end of EV cap window (exclusive)
 
   // Method A (§2.5.3)
   METHOD_A_PREDAWN_START_H:    3,       // Pre-dawn window start hour  [OPUS DECISION]
@@ -188,16 +208,20 @@ const TC_CONFIG = {
   METHOD_A_HEAT_THRESH_KWH:    0.05,    // Below this = "off" in the thermal series
 
   // Method B (§2.5.3)
+  METHOD_B_MIN_SOAK_HH:        4,       // Min absence soak duration (HH) to form an event
+  METHOD_B_LATE_SOAK_HH:       8,       // HH from gap end used to estimate T_eq
+  METHOD_B_MIN_RECOVERY_HH:    3,       // Min sustained heat-delivery HH after gap (§3)
+  METHOD_B_DURATION_SPREAD_H:  12,      // Min range of t_soak (hours) to fit asymptote  [OPUS DECISION]
+  MIN_EVENTS_METHOD_B:         4,       // Min absence-recovery events to fire (≥ ~4, §3)
+
+  // Shared (Method B heat_system_capacity_kw)
   PCTILE_UPPER_TAIL:           95,      // 95th percentile for upper tail (as %)
-  CEILING_FACTOR:              0.9,     // At/near ceiling threshold
-  SUSTAINED_MIN_HH:            3,       // Min consecutive at-ceiling HH
-  METHOD_B_MIN_COOLDOWN_HH:    8,       // Min preceding low-heat HH  [OPUS DECISION]
-  MIN_EVENTS_METHOD_B:         5,       // Min recovery events to fire
-  BOOTSTRAP_ITER:              1000,    // Bootstrap resamples for Method B CI
+  CEILING_FACTOR:              0.9,     // At/near ceiling threshold (for max_load)
 
   // Confidence selection + validation (§2.5.3 / §2.5.8)
   FIRE_THRESHOLD_SE:           0.25,    // Relative SE on τ to fire (±25%)
   GOOD_SE_THRESHOLD:           0.12,    // Relative SE → 'good' status (~12%)
+  BOOTSTRAP_ITER:              1000,    // Bootstrap resamples for Method B CI
 
   // Heating-frequency readout (v1 mechanic — §2.5.2)
   MIN_DAYS_HEATING_FREQ:       14,      // Min non-absence whole days
@@ -310,18 +334,19 @@ source-blind and does not gate on baseload method.
 ```javascript
 function nullResult(validation_status) {
   return {
-    internal_gains_w:        null,
-    thermal_mass_kj_per_k:   null,
-    time_constant_hours:     null,
-    thermal_mass_rating:     null,
-    heating_frequency_by_hh: null,
-    tau_bucket:              null,
-    tau_bucket_used:         null,
-    thermal_mass_source:     null,
-    thermal_mass_method:     null,
-    data_derived_tau_h:      null,
-    thermal_mass_fit:        null,
-    heat_system_capacity_kw: null,
+    internal_gains_w:         null,
+    thermal_mass_kj_per_k:    null,
+    time_constant_hours:      null,
+    thermal_mass_rating:      null,
+    heating_frequency_by_hh:  null,
+    tau_bucket:               null,
+    tau_bucket_used:          null,
+    thermal_mass_source:      null,
+    thermal_mass_method:      null,
+    thermal_mass_fit_status:  'no_data',
+    data_derived_tau_h:       null,
+    thermal_mass_fit:         null,
+    heat_system_capacity_kw:  null,
     validation_status,
     warnings: [],
   };
@@ -388,6 +413,10 @@ New function. Returns `internal_gains_w[]` in watts per HH. Inputs:
 - `solarAperture` (m²; null → 0)
 - `householdSize` (integer ≥ 0)
 
+**EV-cap window:** derive hour-of-day from `heating[i].timestamp` (ISO format HH:MM — use
+`.slice(11, 13)`), matching how `collectMorningEvents` does it. Do **not** use `i % 48` — CSV
+data is not midnight-aligned.
+
 ```javascript
 function assembleGains(heating, external, supplementaryLoads, baseloadMetadata,
                         solarAperture, householdSize) {
@@ -397,20 +426,19 @@ function assembleGains(heating, external, supplementaryLoads, baseloadMetadata,
   const gasBase_w    = ((baseloadMetadata?.baseload_median_kwh_per_day ?? 0) / 48)
                        * 2000 * TC_CONFIG.F_GAS;
   const R            = solarAperture ?? 0;
-  const nOcc         = householdSize ?? 0;
+  const nOcc         = householdSize ?? 2;
   const gains        = new Array(n);
 
   for (let i = 0; i < n; i++) {
     const h   = heating[i];
     const ext = external[i];
-    const absent    = !!h.is_absence;
-    const slotInDay = i % 48;
+    const absent = !!h.is_absence;
+    const hour   = parseInt(h.timestamp.slice(11, 13), 10);   // hour-of-day from timestamp
 
     // Intermittent appliances: (nonheat_residual − elec_baseload) × 0.9, EV-capped overnight
     const nonheat_kwh = h.nonheat_residual_kwh ?? 0;
     let intermittent_kwh = Math.max(0, nonheat_kwh - elecBase_kwh) * 0.9;
-    if (slotInDay >= TC_CONFIG.EV_WINDOW_START_SLOT
-        && slotInDay <= TC_CONFIG.EV_WINDOW_END_SLOT) {
+    if (hour >= TC_CONFIG.EV_WINDOW_START_H && hour < TC_CONFIG.EV_WINDOW_END_H) {
       intermittent_kwh = Math.min(intermittent_kwh, TC_CONFIG.EV_CAP_K * elecBase_kwh);
     }
     const intermittent_w = intermittent_kwh * 2000;
@@ -565,9 +593,19 @@ function fitTauMethodA(events, htcUsed) {
 
 ---
 
-### Step 7 — Step 2b: Method B — `computeMaxLoad`, `collectRecoveryEvents`, `fitTauMethodB` (`js/thermal-character.js`)
+### Step 7 — Step 2b: Method B — `computeMaxLoad`, `collectAbsenceRecoveryEvents`, `fitTauMethodB` (`js/thermal-character.js`)
 
-**`computeMaxLoad(thermalDelivered, heating)`:**
+**Why Method B changed from the first-draft plan:** The first-draft's `collectRecoveryEvents`
+detected sustained ceiling runs (thermalDelivered ≥ CEILING_FACTOR × max_load) preceded by a
+low-heat period. This is not absence-based detection — it fires on any sustained heat burst after
+a quieter period, independent of whether the home was vacant. The revised design §2.5.3 requires
+detecting **`is_absence` gaps** of varying soak duration, then computing C_est per event and
+regressing against soak duration to extrapolate the asymptote (C_true). The old fixed-cooldown
+equilibrium logic and the ceiling-run gate are replaced by absence-gap detection + profile-LS fit.
+
+**`computeMaxLoad(thermalDelivered, heating)`** — retained for the `heat_system_capacity_kw`
+byproduct (UI context); no longer used for recovery-run detection:
+
 ```javascript
 function computeMaxLoad(thermalDelivered, heating) {
   const all = thermalDelivered.filter((v, i) => v !== null && !heating[i].is_absence);
@@ -578,100 +616,200 @@ function computeMaxLoad(thermalDelivered, heating) {
 }
 ```
 
-**`collectRecoveryEvents(heating, external, thermalDelivered, internalGains, htcUsed, operativeSetpoint)`:**
+**`collectAbsenceRecoveryEvents(heating, external, thermalDelivered, internalGains, htcUsed, operativeSetpoint)`:**
 
-Scans for sustained ceiling runs preceded by a long cool-down, pins T_start at equilibrium, and
-computes C_event from the energy balance. Returns `{events: number[], heat_system_capacity_kw}`.
+Scans for `is_absence` gaps, then for each gap finds the subsequent recovery run and computes
+C_est from the energy balance with forced equilibrium (`T_start = T_eq`). Returns `[{t_soak_h, C_est}]`.
+C_est is intentionally biased (finite soak ≠ full equilibrium) — the bias ∝ exp(−t_soak/τ),
+which shrinks with duration. The asymptote fit in `fitTauMethodB` extrapolates to true C.
 
 ```javascript
-function collectRecoveryEvents(heating, external, thermalDelivered, internalGains,
-                                htcUsed, operativeSetpoint) {
-  const maxLoad = computeMaxLoad(thermalDelivered, heating);
-  if (maxLoad === null || maxLoad <= 0) return { events: [], heat_system_capacity_kw: null };
-  const ceiling               = TC_CONFIG.CEILING_FACTOR * maxLoad;
-  const heat_system_capacity_kw = maxLoad * 2;   // kWh/HH → kW
-
+function collectAbsenceRecoveryEvents(heating, external, thermalDelivered, internalGains,
+                                       htcUsed, operativeSetpoint) {
   const n = heating.length;
   const events = [];
   let i = 0;
 
   while (i < n) {
-    if (thermalDelivered[i] === null || thermalDelivered[i] < ceiling) { i++; continue; }
-    const ceilStart = i;
-    while (i < n && thermalDelivered[i] !== null && thermalDelivered[i] >= ceiling) i++;
-    const ceilEnd = i;
-    if (ceilEnd - ceilStart < TC_CONFIG.SUSTAINED_MIN_HH) continue;
+    if (!heating[i].is_absence) { i++; continue; }
 
-    // Preceding cool-down must be ≥ MIN_COOLDOWN_HH of low thermal
-    const coolStart = Math.max(0, ceilStart - TC_CONFIG.METHOD_B_MIN_COOLDOWN_HH);
-    if (ceilStart - coolStart < TC_CONFIG.METHOD_B_MIN_COOLDOWN_HH) continue;
-    const allLow = Array.from({ length: ceilStart - coolStart }, (_, k) => coolStart + k)
-      .every(j => thermalDelivered[j] === null
-                  || thermalDelivered[j] < ceiling * 0.5);
-    if (!allLow) continue;
+    // Find extent of absence gap
+    const gapStart = i;
+    while (i < n && heating[i].is_absence) i++;
+    const gapEnd = i;                         // first non-absence slot after gap
+    const t_soak_hh = gapEnd - gapStart;
+    if (t_soak_hh < TC_CONFIG.METHOD_B_MIN_SOAK_HH) continue;
 
-    // T_start: equilibrium from last 4 HH of cool-down
-    const anchorStart = Math.max(coolStart, ceilStart - 4);
-    let tSum = 0, tCount = 0, gSum = 0;
-    for (let j = anchorStart; j < ceilStart; j++) {
+    // T_eq forced from last METHOD_B_LATE_SOAK_HH slots of the gap (equilibrium assumption)
+    const anchorStart = Math.max(gapStart, gapEnd - TC_CONFIG.METHOD_B_LATE_SOAK_HH);
+    let tSum = 0, tCount = 0, gSum = 0, gCount = 0;
+    for (let j = anchorStart; j < gapEnd; j++) {
       const tc = external[j]?.temp_c;
       if (tc !== null && tc !== undefined) { tSum += tc; tCount++; }
-      gSum += (internalGains[j] ?? 0) * 0.5 / 1000;  // W × 0.5h / 1000 = kWh
+      const g = internalGains[j];   // zeroed on absence by assembleGains (no occupancy)
+      if (g !== null && g !== undefined) { gSum += g; gCount++; }
     }
     if (tCount === 0) continue;
-    const T_eq_out = tSum / tCount;
-    const G_mean_w = (gSum / Math.max(tCount, 1)) * 2000;  // kWh back to W (for T_start)
-    // T_start = T_out_eq + G_w / htc_w_per_k  (equilibrium: G = htc × (T_in - T_out))
-    const T_start = T_eq_out + G_mean_w / (htcUsed * 1000);   // htcUsed in W/K
-    // Note: htcUsed field is in W/K; divide by 1000 converts G_mean_w from W to match.
-    // More precisely: T_in_eq = T_out + G[W] / htc[W/K] — no extra factor needed.
-    // Corrected: T_start = T_eq_out + G_mean_w / htcUsed  (W / (W/K) = K)
-    const T_start_corrected = T_eq_out + G_mean_w / htcUsed;
+    const T_out_late = tSum / tCount;
+    const G_late_w = gCount > 0 ? gSum / gCount : 0;   // ≈ 0 on absence (occupancy zeroed)
+    const T_eq = T_out_late + G_late_w / htcUsed;       // W / (W/K) = K offset ✓
+    if (T_eq >= operativeSetpoint) continue;             // already at setpoint — no recovery
 
-    if (T_start_corrected >= operativeSetpoint) continue;
+    // Recovery run: first sustained heat delivery beginning at or just after gapEnd
+    let recStart = gapEnd;
+    while (recStart < n && !heating[recStart].is_absence
+           && (thermalDelivered[recStart] === null
+               || thermalDelivered[recStart] <= TC_CONFIG.METHOD_A_HEAT_THRESH_KWH)
+           && recStart - gapEnd < 4) {
+      recStart++;
+    }
+    if (recStart >= n || heating[recStart].is_absence) continue;
+    if (thermalDelivered[recStart] === null
+        || thermalDelivered[recStart] <= TC_CONFIG.METHOD_A_HEAT_THRESH_KWH) continue;
 
-    // Energy balance over ceiling run
+    let recEnd = recStart;
+    while (recEnd < n
+           && !heating[recEnd].is_absence
+           && thermalDelivered[recEnd] !== null
+           && thermalDelivered[recEnd] > TC_CONFIG.METHOD_A_HEAT_THRESH_KWH) {
+      recEnd++;
+    }
+    const t_rec_hh = recEnd - recStart;
+    if (t_rec_hh < TC_CONFIG.METHOD_B_MIN_RECOVERY_HH) { i = recEnd; continue; }
+
+    // Energy balance over recovery run
     let E_del = 0, E_gains = 0, tRunSum = 0, tRunCount = 0;
-    for (let j = ceilStart; j < ceilEnd; j++) {
-      E_del   += thermalDelivered[j] ?? 0;
-      E_gains += (internalGains[j] ?? 0) * 0.5 / 1000;
+    for (let j = recStart; j < recEnd; j++) {
+      E_del   += thermalDelivered[j] ?? 0;                          // kWh
+      E_gains += (internalGains[j] ?? 0) * 0.5 / 1000;             // W × 0.5 h / 1000 → kWh
       const tc = external[j]?.temp_c;
       if (tc !== null && tc !== undefined) { tRunSum += tc; tRunCount++; }
     }
-    const T_out_run = tRunCount > 0 ? tRunSum / tRunCount : T_eq_out;
-    const t_h = (ceilEnd - ceilStart) * 0.5;
-    const T_mean_during = (T_start_corrected + operativeSetpoint) / 2;
-    const E_loss = htcUsed * (T_mean_during - T_out_run) * t_h / 1000;
-    const deltaT = operativeSetpoint - T_start_corrected;
-    const C_event = ((E_del + E_gains - E_loss) * 3600) / deltaT;  // kWh × 3600 / K = kJ/K
-    if (C_event > 0) events.push(C_event);
+    const T_out_run = tRunCount > 0 ? tRunSum / tRunCount : T_out_late;
+    const t_h = t_rec_hh * 0.5;
+    const T_mean = (T_eq + operativeSetpoint) / 2;
+    const E_loss = htcUsed * (T_mean - T_out_run) * t_h / 1000;    // W/K × K × h / 1000 → kWh
+    const deltaT = operativeSetpoint - T_eq;
+    if (deltaT <= 0) { i = recEnd; continue; }
+    const C_est = ((E_del + E_gains - E_loss) * 3600) / deltaT;    // kWh × 3600 / K → kJ/K
+    if (C_est > 0) events.push({ t_soak_h: t_soak_hh * 0.5, C_est });
+
+    i = recEnd;
   }
-  return { events, heat_system_capacity_kw };
+  return events;
 }
 ```
 
-**`fitTauMethodB(events, htcUsed)`:**
+**`fitTauMethodB(events)`:**
+
+Profile-LS on the asymptote A (= C_true): outer golden-section on A, inner origin-forced OLS on
+linearised B = 1/τ. Bootstrap resamples events for SE on A. Returns:
+- `null` — events array is empty (no absence gaps with recoveries);
+- `{fired: false, reason: 'insufficient_events', n}` — events < MIN_EVENTS_METHOD_B;
+- `{fired: false, reason: 'insufficient_spread', n}` — soak durations too uniform;
+- `{fired: false, reason: 'wide_ci', tau, relative_se, n}` — CI too wide to fire;
+- `{fired: true, tau, C, relative_se, ci95, n}` — success.
+
 ```javascript
-function fitTauMethodB(events, htcUsed) {
-  if (events.length < TC_CONFIG.MIN_EVENTS_METHOD_B) return null;
-  const C_mode = halfSampleMode(events);
-  if (C_mode === null || C_mode <= 0) return null;
-  const tau_hat = C_mode / (3.6 * htcUsed);
-
-  // Bootstrap CI on τ (resample C_events, recompute mode, derive τ)
-  const bootTaus = [];
-  for (let b = 0; b < TC_CONFIG.BOOTSTRAP_ITER; b++) {
-    const sample = sampleWithReplacement(events);
-    const C_b = halfSampleMode(sample);
-    if (C_b !== null && C_b > 0) bootTaus.push(C_b / (3.6 * htcUsed));
+function fitTauMethodB(events) {
+  if (events.length === 0) return null;
+  if (events.length < TC_CONFIG.MIN_EVENTS_METHOD_B) {
+    return { fired: false, reason: 'insufficient_events', n: events.length };
   }
-  bootTaus.sort((a, b) => a - b);
-  const ci_lo = percentile(bootTaus, 2.5) ?? tau_hat * 0.5;
-  const ci_hi = percentile(bootTaus, 97.5) ?? tau_hat * 1.5;
-  const se_boot = (ci_hi - ci_lo) / (2 * 1.96);
-  const relative_se = se_boot > 0 ? se_boot / tau_hat : Infinity;
 
-  return { tau: tau_hat, relative_se, ci95: [ci_lo, ci_hi], n: events.length };
+  // Duration-spread gate
+  const soaks = events.map(e => e.t_soak_h);
+  const spread = Math.max(...soaks) - Math.min(...soaks);
+  if (spread < TC_CONFIG.METHOD_B_DURATION_SPREAD_H) {
+    return { fired: false, reason: 'insufficient_spread', n: events.length };
+  }
+
+  // Profile-LS: golden-section on A (asymptote), OLS on linearised B per candidate A
+  function profileRss(A) {
+    if (A <= 0) return Infinity;
+    for (const { C_est } of events) { if (C_est >= A) return Infinity; }
+    // Linearise: z = -log(1 - C_est/A) = B × t_soak; origin-forced OLS for B
+    let sumZT = 0, sumT2 = 0;
+    for (const { t_soak_h, C_est } of events) {
+      const z = -Math.log(1 - C_est / A);
+      sumZT += z * t_soak_h;
+      sumT2 += t_soak_h * t_soak_h;
+    }
+    if (sumT2 <= 0) return Infinity;
+    const B = sumZT / sumT2;
+    if (B <= 0) return Infinity;
+    let rss = 0;
+    for (const { t_soak_h, C_est } of events) {
+      rss += (C_est - A * (1 - Math.exp(-B * t_soak_h))) ** 2;
+    }
+    return rss;
+  }
+
+  const maxC = Math.max(...events.map(e => e.C_est));
+  const A_hat = goldenSectionMin(profileRss, maxC * 1.001, maxC * 20, maxC * 0.01);
+  if (!isFinite(A_hat) || profileRss(A_hat) === Infinity) {
+    return { fired: false, reason: 'degenerate_fit', n: events.length };
+  }
+
+  // Recover B_hat at A_hat
+  let sumZT = 0, sumT2 = 0;
+  for (const { t_soak_h, C_est } of events) {
+    const z = -Math.log(1 - C_est / A_hat);
+    sumZT += z * t_soak_h;
+    sumT2 += t_soak_h * t_soak_h;
+  }
+  const B_hat = sumT2 > 0 ? sumZT / sumT2 : null;
+  if (!B_hat || B_hat <= 0) return { fired: false, reason: 'degenerate_fit', n: events.length };
+  const tau_hat = 1 / B_hat;   // hours
+
+  // Bootstrap CI on A (= C_true): resample events, refit A, collect distribution
+  function fitA(sample) {
+    if (sample.length < 2) return null;
+    const mxC = Math.max(...sample.map(e => e.C_est));
+    const A_b = goldenSectionMin(
+      AA => {
+        if (AA <= 0) return Infinity;
+        for (const { C_est } of sample) { if (C_est >= AA) return Infinity; }
+        let sZT = 0, sT2 = 0;
+        for (const { t_soak_h, C_est } of sample) {
+          const z = -Math.log(1 - C_est / AA);
+          sZT += z * t_soak_h; sT2 += t_soak_h * t_soak_h;
+        }
+        if (sT2 <= 0) return Infinity;
+        const B = sZT / sT2;
+        if (B <= 0) return Infinity;
+        let rss = 0;
+        for (const { t_soak_h, C_est } of sample) {
+          rss += (C_est - AA * (1 - Math.exp(-B * t_soak_h))) ** 2;
+        }
+        return rss;
+      },
+      mxC * 1.001, mxC * 20, mxC * 0.01
+    );
+    return isFinite(A_b) ? A_b : null;
+  }
+
+  const bootAs = [];
+  for (let b = 0; b < TC_CONFIG.BOOTSTRAP_ITER; b++) {
+    const A_b = fitA(sampleWithReplacement(events));
+    if (A_b !== null && A_b > 0) bootAs.push(A_b);
+  }
+  bootAs.sort((a, b) => a - b);
+  const ci_lo_C = percentile(bootAs, 2.5)  ?? A_hat * 0.5;
+  const ci_hi_C = percentile(bootAs, 97.5) ?? A_hat * 1.5;
+  const se_A = (ci_hi_C - ci_lo_C) / (2 * 1.96);
+  const relative_se = se_A > 0 ? se_A / A_hat : Infinity;
+
+  if (!isFinite(relative_se) || relative_se > TC_CONFIG.FIRE_THRESHOLD_SE) {
+    return { fired: false, reason: 'wide_ci', tau: tau_hat, relative_se, n: events.length };
+  }
+
+  // CI on τ: same relative error as C (τ = C/(3.6×htcUsed), linear in C)
+  const ci95 = [
+    (ci_lo_C / A_hat) * tau_hat,
+    (ci_hi_C / A_hat) * tau_hat,
+  ];
+  return { fired: true, tau: tau_hat, C: A_hat, relative_se, ci95, n: events.length };
 }
 ```
 
@@ -680,20 +818,32 @@ function fitTauMethodB(events, htcUsed) {
 ### Step 8 — Step 2c: `selectTau` — confidence selection (`js/thermal-character.js`)
 
 Both estimators convert to relative SE on τ, then apply the three-way logic (§2.5.3 Selection).
+`fitA` is null when Method A had fewer than METHOD_A_MIN_EVENTS events; a non-null `fitA` always
+has a `relative_se` (which may exceed FIRE_THRESHOLD). `fitB` is null when no absence events
+were found at all; a non-null `fitB` has a `fired` flag. These distinctions drive `fit_status`.
 
 ```javascript
 function selectTau(fitA, fitB) {
   const fireA = fitA !== null && isFinite(fitA.relative_se)
              && fitA.relative_se <= TC_CONFIG.FIRE_THRESHOLD_SE;
-  const fireB = fitB !== null && isFinite(fitB.relative_se)
-             && fitB.relative_se <= TC_CONFIG.FIRE_THRESHOLD_SE;
+  const fireB = fitB !== null && fitB.fired === true;
+
+  // fit_status: 'fired' if any estimator fires; 'rejected_low_confidence' if events present but
+  // no fire (fitA non-null = had events; fitB non-null = had events); 'no_data' if neither had data.
+  let fit_status;
+  if (fireA || fireB) {
+    fit_status = 'fired';
+  } else if (fitA !== null || fitB !== null) {
+    fit_status = 'rejected_low_confidence';
+  } else {
+    fit_status = 'no_data';
+  }
 
   if (fireA && fireB) {
     const seA = fitA.tau * fitA.relative_se;
     const seB = fitB.tau * fitB.relative_se;
     const overlap = Math.abs(fitA.tau - fitB.tau) < 1.96 * (seA + seB);
     if (overlap) {
-      // Inverse-variance-weighted combine
       const wA = 1 / (seA * seA), wB = 1 / (seB * seB);
       const tau_c = (fitA.tau * wA + fitB.tau * wB) / (wA + wB);
       const se_c  = 1 / Math.sqrt(wA + wB);
@@ -701,15 +851,20 @@ function selectTau(fitA, fitB) {
       return {
         tau: tau_c, relative_se: rel_c,
         ci95: [Math.max(0.1, tau_c - 1.96 * se_c), tau_c + 1.96 * se_c],
-        method: 'combined', disagree: false,
+        method: 'combined', disagree: false, fit_status,
       };
     }
-    // Both fire but CIs don't overlap — fall to dropdown
-    return { tau: null, relative_se: null, ci95: null, method: null, disagree: true };
+    return { tau: null, relative_se: null, ci95: null, method: null, disagree: true, fit_status };
   }
-  if (fireA) return { tau: fitA.tau, relative_se: fitA.relative_se, ci95: fitA.ci95, method: 'reheat_regression', disagree: false };
-  if (fireB) return { tau: fitB.tau, relative_se: fitB.relative_se, ci95: fitB.ci95, method: 'recovery_events', disagree: false };
-  return { tau: null, relative_se: null, ci95: null, method: null, disagree: false };
+  if (fireA) return {
+    tau: fitA.tau, relative_se: fitA.relative_se, ci95: fitA.ci95,
+    method: 'reheat_regression', disagree: false, fit_status,
+  };
+  if (fireB) return {
+    tau: fitB.tau, relative_se: fitB.relative_se, ci95: fitB.ci95,
+    method: 'asymptote', disagree: false, fit_status,
+  };
+  return { tau: null, relative_se: null, ci95: null, method: null, disagree: false, fit_status };
 }
 ```
 
@@ -798,6 +953,8 @@ New signature replaces the v1 signature entirely.
 **Old:** `(heating, external, heatLoss, baseloadMethod, wallConstructionType, tAtRestartWinterC, tauBucket)`
 **New:** `(heating, external, heatLoss, supplementaryLoads, baseloadMetadata, operativeSetpoint, householdSize, tauBucket)`
 
+**`householdSize` default = `2`** (architecture-v2 registry: ~2–3 UK household; not `1`).
+
 ```javascript
 export function estimateThermalCharacter(
   heating,                    // m3 heating[] — is_absence, nonheat_residual_kwh per HH
@@ -806,7 +963,7 @@ export function estimateThermalCharacter(
   supplementaryLoads,         // m3 supplementary_loads — electricity_baseload (kWh/HH scalar)
   baseloadMetadata,           // m3 baseload_metadata — baseload_median_kwh_per_day
   operativeSetpoint = 20,     // UI — default 20°C (D2 bootstrap)
-  householdSize = 1,          // UI — integer
+  householdSize = 2,          // UI — integer (~2–3 per architecture-v2 registry)
   tauBucket = null,           // UI — §8b dropdown or null
 ) {
   const htcUsed = heatLoss?.htc_used ?? null;
@@ -826,16 +983,20 @@ export function estimateThermalCharacter(
     heating, external, supplementaryLoads, baseloadMetadata, solarAperture, householdSize
   );
 
+  // heat_system_capacity_kw — byproduct for UI context (max_load still computed)
+  const maxLoad = computeMaxLoad(thermalDelivered, heating);
+  const heat_system_capacity_kw = maxLoad !== null ? maxLoad * 2 : null;
+
   // Step 2 — Path A: two independent estimators of τ
   const morningEvents = collectMorningEvents(
     heating, external, thermalDelivered, htcUsed, operativeSetpoint
   );
   const fitA = fitTauMethodA(morningEvents, htcUsed);
 
-  const { events: recovEvents, heat_system_capacity_kw } = collectRecoveryEvents(
+  const recovEvents = collectAbsenceRecoveryEvents(
     heating, external, thermalDelivered, internal_gains_w, htcUsed, operativeSetpoint
   );
-  const fitB = fitTauMethodB(recovEvents, htcUsed);
+  const fitB = fitTauMethodB(recovEvents);
 
   const selected = selectTau(fitA, fitB);
 
@@ -861,8 +1022,8 @@ export function estimateThermalCharacter(
   if (thermal_mass_kj_per_k === null) {
     if (selected.disagree) {
       warnings.push('Two estimators of thermal mass gave conflicting results — using your warmth-retention description (if set) or awaiting your input.');
-    } else if (morningEvents.length >= TC_CONFIG.METHOD_A_MIN_EVENTS) {
-      warnings.push('Not enough deep cool-down events to read your home\'s thermal mass. Describe how your home holds warmth (below) to unlock smart pre-heating.');
+    } else if (selected.fit_status === 'rejected_low_confidence') {
+      warnings.push('Couldn\'t read your home\'s thermal mass reliably — describe how your home holds warmth (below) to unlock smart pre-heating.');
     } else {
       warnings.push('Your home holds heat too steadily overnight to read its thermal mass from the data. Describe how your home holds warmth (below) to unlock smart pre-heating.');
     }
@@ -881,6 +1042,7 @@ export function estimateThermalCharacter(
     tau_bucket_used,
     thermal_mass_source,
     thermal_mass_method,
+    thermal_mass_fit_status: selected.fit_status,
     data_derived_tau_h,
     thermal_mass_fit,
     heat_system_capacity_kw,
@@ -892,7 +1054,7 @@ export function estimateThermalCharacter(
 
 ---
 
-### Step 13 — `test-m5-v2.mjs` — 13 test cases
+### Step 13 — `test-m5-v2.mjs` — 14 test cases
 
 Create at repo root. Uses the same `assert`/pass/fail harness pattern as `test-m3-v2.mjs`.
 All tests use synthetic data; no m4/m3/m2 runtime dependency.
@@ -914,11 +1076,12 @@ Use ISO format: `'2024-01-15T03:00:00Z'` for slot within pre-dawn window.
 | TC | §5 | Description |
 |---|---|---|
 | TC1 | §5.1 | Output has no `setpoint_c`, `setpoint_days_used` keys; no `estimateSetpoint` in module |
-| TC2 | §5.2 | Method A τ-recovery: 40 synthetic morning-reheat events, known τ=16.67h; fitted τ within ±15% |
-| TC3 | §5.3 | Method A G-robust: same as TC2 but y_i shifted by constant G_offset; assert τ unchanged |
-| TC4 | §5.4 | Method B recovery: 8 deep cool-down events, known C=15000 kJ/K; C_mode within ±15% |
+| TC2 | §5.2 | Method A τ-recovery: forward RC simulation with known τ=16.67h; fitted τ within ±15% |
+| TC3 | §5.3 | Method A G-robust: same as TC2 but gains offset by constant; assert τ unchanged |
+| TC4 | §5.4 | Method B asymptote: forward RC simulation with known C=12000 kJ/K, varying absence soaks; asymptote within ±15%; `method='asymptote'` |
+| TC4b | §5.4 | Method B rejects on uniform-duration absences → `fit_status='rejected_low_confidence'`, `C=null` |
 | TC5 | §5.5 | Source-blind: `gas_heating_kwh=0`, recovery on elec thermal; C recovered, `validation_status ≠ 'no_gas'` |
-| TC6 | §5.6 | Continuous-heating → null: never cools, no tauBucket; `C=null`, `status='insufficient_data'` |
+| TC6 | §5.6 | Continuous-heating → null: never cools, no tauBucket; `C=null`, `status='insufficient_data'`, `fit_status='no_data'` |
 | TC7 | §5.7 | Confidence selection: Method A wins for regular-schedule; Method B wins for irregular; both-agree → 'combined'; both-disagree → null |
 | TC8 | §5.8 | Dropdown overrides: estimator fires AND user sets tauBucket; `source='user_tau'`; data τ in `tau_bucket`/`data_derived_tau_h` |
 | TC9 | §5.9 | `heating_frequency_by_hh`: 48-element array; null if <14 days; weekday-only → high weekday slots |
@@ -927,28 +1090,65 @@ Use ISO format: `'2024-01-15T03:00:00Z'` for slot within pre-dawn window.
 | TC12 | §5.12 | Wall-construction dropped: no wall-construction-mismatch warning; no `wall_construction` parameter |
 | TC13 | §5.13 | Underheat diagnostic relocated: output has no `underheat_status`, `underheat_narrative`, `annual_modelled_demand_kwh` |
 
-**TC2 construction (concrete):**
+**TC2 construction (concrete — first-principles forward RC simulation):**
 
-Build 40 synthetic morning-reheat events with known τ_true = 16.67 h (C=12000 kJ/K, htcUsed=200 W/K).
-For each event i:
-- `T_out_i` ~ uniform(-2, 8)°C
-- `t_off_i` = 8 h (fixed schedule → const t_off simplifies fit)
-- `T_start_i = T_out_i + (20 - T_out_i) × exp(-8 / 16.67)`
-- `E_reheat_i = (C × (20 - T_start_i) / 3600) + htcUsed × max(0, 20 - T_out_i) × t_reheat / 1000`
-  where `t_reheat = 1.5 h` (3 HH)
-- Build synthetic `thermalDelivered[i]` with `E_reheat / 3` per HH in the reheat slots
-- Timestamps: pre-dawn slots (hour=4), off period preceding (hour=21–03), winter T_out
+Known: C_true = 12000 kJ/K, htcUsed = 200 W/K → τ_true = 12000/(200×3.6) = 16.67 h.
+Operative setpoint = 20°C. G_w = 200 W (constant small gains).
 
-Assert: `|result.data_derived_tau_h - 16.67| / 16.67 < 0.15`.
+For each of 40 morning events, simulate free RC cooling over t_off = 8 h then reheat:
+1. T_eq_i = T_out_i + G_w / htcUsed = T_out_i + 1.0°C  (200 W / (200 W/K))
+2. T_start_i = T_eq_i + (20 - T_eq_i) × exp(−t_off / τ_true)  [RC free-cooling formula]
+3. E_mass_i = C_true × (20 − T_start_i) / 3600  [kWh — energy to reheat the mass]
+4. t_reheat = 1.5 h; E_fabric_i = htcUsed × max(0, 20 − T_out_i) × t_reheat / 1000  [kWh]
+5. E_reheat_i = E_mass_i + E_fabric_i  [total kWh in reheat slots]
+6. Assign E_reheat_i / 3 to 3 pre-dawn HH slots in `thermalDelivered`; off-period HH get 0.
+7. T_out_i drawn from `[−2, 8]°C` range (20 evenly-spaced values, repeated twice).
+
+This generates synthetic thermalDelivered from RC physics with known C_true — not by inverting
+the estimator formula. Assert: `|result.data_derived_tau_h − 16.67| / 16.67 < 0.15`.
 
 **TC3 construction:**
-Same as TC2, but add a constant offset to every `y_i` (shift by +100 W for the gains correction
-term). Assert: `|tau_with_offset - tau_without_offset| < 1.0 h`.
+Same as TC2, but add constant gain offset G_offset = 500 W to supplementaryLoads.electricity_baseload
+(i.e. elecBase_kwh = G_offset / 2000 kWh extra). Method A's intercept absorbs constant G shifts.
+Assert: `|tau_with_offset − tau_no_offset| < 1.5 h`.
 
-**TC4 construction:**
-8 events where house cools from 20°C to T_start (via absence overnight), then fires at max_load
-for ≥3 HH. Known C = 15000 kJ/K, htcUsed = 180 W/K. Vary T_out across events for realism.
-Assert: `|C_mode - 15000| / 15000 < 0.15`, `result.thermal_mass_method = 'recovery_events'`.
+**TC4 construction (concrete — first-principles forward RC simulation):**
+
+Known: C_true = 12000 kJ/K, htcUsed = 200 W/K → τ_true = 16.67 h. Setpoint = 20°C. T_out = 5°C
+(constant). G_w = 0 during absence (absence zeroes occupancy; no elec/gas/solar in test fixture).
+
+Generate 6 absence soaks of varying duration: [4, 8, 16, 24, 36, 48] hours.
+
+For each soak of duration t_soak_i:
+1. T_eq = T_out + G_absent_w / htcUsed = 5 + 0 = 5°C  (G absent = 0)
+2. T_at_end_i = T_eq + (20 − T_eq) × exp(−t_soak_i / τ_true)  [RC free-cooling]
+   = 5 + 15 × exp(−t_soak_i / 16.67)
+3. E_mass_i = C_true × (20 − T_at_end_i) / 3600  [kWh needed to reheat mass from T_at_end to 20]
+4. t_recovery = 3 HH (1.5 h); E_fabric = htcUsed × max(0, 20 − T_out) × 1.5 / 1000
+5. E_recovery_i = E_mass_i + E_fabric  [total kWh in recovery slots]
+6. Assign E_recovery_i / 3 to 3 consecutive recovery HH; `is_absence = true` for the soak HH.
+
+Build full `heating[]` and `thermalDelivered[]`:
+- Absence slots: `is_absence = true`, `thermalDelivered = 0`
+- Recovery slots: `is_absence = false`, `thermalDelivered = E_recovery_i / 3` per HH
+- Non-absence non-recovery slots (between events): `is_absence = false`, `thermalDelivered = 0.1`
+  (maintenance heat — keeps the home nominally running between absences)
+
+Set supplementaryLoads and baseloadMetadata to zero (minimal G — assembleGains produces near-zero
+gains for absence slots, consistent with the forward-simulation assumption G_absent = 0).
+
+Assert:
+- `result.data_derived_tau_h` is non-null
+- `|result.thermal_mass_kj_per_k − 12000| / 12000 < 0.15`  (asymptote within ±15%)
+- `result.thermal_mass_method === 'asymptote'`
+- `result.thermal_mass_fit_status === 'fired'`
+
+**TC4b construction (uniform-duration rejection):**
+Same home as TC4 (same C_true, τ_true, T_out, recovery logic), but all 6 absence soaks are the
+same duration: all = 8 h. Duration spread = 0 h, below METHOD_B_DURATION_SPREAD_H = 12 h. Method
+A has no events (continuous-heat home — no overnight setback). Assert:
+- `result.thermal_mass_kj_per_k === null`
+- `result.thermal_mass_fit_status === 'rejected_low_confidence'`
 
 ---
 
@@ -972,16 +1172,21 @@ Also update `simulateCurrentRcTrace`'s `sp == null` guard to remove it (always n
 **Flag — `underheat_ratio` / `demandScale`:** `thermalCharacter?.underheat_ratio` removed from m5.
 The existing `ratio != null` guard already makes `demandScale = 1.0` safe. No code change needed
 here — the "Heat to Comfort" slider becomes a no-op until m7-v2 adds the underheat diagnostic.
+*(M3 — accepted interim; flagged for m7-v2.)*
 
 **Step 14b — Wire `internal_gains_w` into the smart-scenario post-hoc RC trace:**
+
+**Rename note:** `scenario-consumption.js` already reads `heatLoss.solar_aperture` (lines 183,
+213 — confirmed). The m4-v2 rename `solar_aperture_m2 → solar_aperture` is **already done** in
+shipping `heat-loss.js` (line 387). **No rename needed in this step.** Drop the rename sub-step.
 
 In `simulatePostHocTIndoor`, replace the inline solar-aperture gain computation with consumption
 of `thermalChar.internal_gains_w[i]`:
 
 ```javascript
 // Old (inline solar only):
-const aperture = (heatLoss?.solar_correction_applied && heatLoss?.solar_aperture_m2 != null)
-  ? heatLoss.solar_aperture_m2 : 0;
+const aperture = (heatLoss?.solar_correction_applied && heatLoss?.solar_aperture != null)
+  ? heatLoss.solar_aperture : 0;
 // ...in loop:
 const solarGainKwh = aperture * sw * 0.5 / 1000;
 const dT = (q_delivered_per_hh[i] + solarGainKwh - lossKwh) * 3600 / C;
@@ -993,14 +1198,8 @@ const Q_gains_kwh = (thermalChar?.internal_gains_w?.[i] ?? 0) * 0.5 / 1000;
 const dT = (q_delivered_per_hh[i] + Q_gains_kwh - lossKwh) * 3600 / C;
 ```
 
-In `simulateCurrentRcTrace`, update `solar_aperture_m2` → `solar_aperture` (m4-v2 field rename):
-```javascript
-// Old: heatLoss.solar_aperture_m2
-// New: heatLoss.solar_aperture
-```
-
-**Flag — m7-v2 dependency:** `simulateCurrentRcTrace` (the boiler-scenario trace) retains its
-inline solar-gain computation until m7-v2 lands. The field rename above is the only change there.
+`simulateCurrentRcTrace` (the boiler-scenario trace) retains its inline solar computation
+unchanged — this inconsistency is the accepted M3 interim until m7-v2 lands.
 
 ---
 
@@ -1017,10 +1216,13 @@ const tAtRestartRaw    = tAtRestartInput.value.trim();
 let tAtRestart = null; if (tAtRestartRaw !== '') { ... }
 ```
 
-Add:
+**Do NOT add `setpointInput?.value` or `householdSizeInput?.value`** — these DOM elements do not
+exist in the current app.js (confirmed: only `wallConstructionInput` and `tAtRestartInput` are
+defined; Phase-4 UI scope). Pass defaults as literals:
+
 ```javascript
-const operativeSetpoint = parseFloat(setpointInput?.value) || 20;
-const householdSize     = parseInt(householdSizeInput?.value, 10) || 1;
+const operativeSetpoint = 20;    // D2 default — Phase-4 UI will replace with input
+const householdSize     = 2;     // architecture-v2 registry default ~2–3; Phase-4 UI will replace
 ```
 
 New call:
@@ -1063,31 +1265,35 @@ m7-v2 implements the underheat diagnostic.
 | Risk | Mitigation |
 |------|-----------|
 | m4-v2 not yet implemented; app.js integration blocked | Gate Step 15 on m4-v2 `Status: Implemented`. Steps 1–13 run with synthetic data. |
-| Method A produces no events for continuously-heated homes (Rhiannon's use case) | By design — degenerate → C = null → dropdown. TC6 covers this. |
+| Method A produces no events for continuously-heated homes (Rhiannon's use case) | By design — degenerate → fitA = null. TC6 covers this. |
 | Method A τ-fit degenerate: exp(-t_off/τ) ≈ 1 when t_off ≪ τ, so m_i ≈ 0 → RSS flat → SE = ∞ | `curvature < 1e-12` → `se_tau = Infinity` → `relative_se = Infinity` → `> FIRE_THRESHOLD` → estimator doesn't fire. Correct. |
+| Method B profile-LS: lower bound `maxC * 1.001` may be too tight if the true asymptote is only just above all C_est values | The duration-spread gate ensures varied soaks. Long soaks push C_est close to C_true so the bound is appropriate. If profileRss(A_hat) = Infinity → `degenerate_fit` returned. |
 | `gas_baseload_w` derived from `baseload_median_kwh_per_day` — not a named m3 edge | Flagged in comment. If m3-v2 later adds a named `gas_baseload` field, update the derivation. |
-| Bootstrap `Math.random()` non-deterministic — Method B CI bounds may vary run-to-run | TC4 asserts only the C_mode (within ±15%), not the CI bounds. Bootstrap noise is expected. |
+| Bootstrap `Math.random()` non-deterministic — Method B CI bounds may vary run-to-run | TC4 asserts only the C asymptote (within ±15%), not the CI bounds. Bootstrap noise is expected. |
 | `underheat_ratio` removed → `demandScale = 1.0` → "Heat to Comfort" slider is a no-op | Known interim regression; flagged for m7-v2. No action in this plan. |
-| `solar_aperture_m2` reference in `simulateCurrentRcTrace` after m4-v2 renames to `solar_aperture` | Step 14b updates this reference. |
-| T_start in Method B: `G_mean_w / htcUsed` units — `htcUsed` is W/K; G_mean_w is W → result in K | `W / (W/K) = K` ✓. The unit check is correct: gains in W, HTC in W/K, offset in K. |
-| v1 test suites (test-m5.mjs, test-m5b.mjs) will fail after the signature change | Superseded test files. The new `test-m5-v2.mjs` covers all 13 §5 criteria. Retain the old files for reference; they will fail until explicitly updated (separate task). |
+| EV-cap window uses `timestamp.slice(11, 13)` — assumes ISO HH:MM format in all heating timestamps | All heating[] timestamps come from CSV ingestion in m1 which normalises to ISO format. Verify during TC2 test construction that synthetic timestamps satisfy this. |
+| v1 test suites (test-m5.mjs, test-m5b.mjs) will fail after the signature change | Superseded test files. The new `test-m5-v2.mjs` covers all 14 §5 criteria. Retain the old files for reference; separate cleanup task (L4). |
+| `setpointInput` / `householdSizeInput` don't exist in app.js | Confirmed above — Step 15 passes literals (20, 2). Phase-4 UI replaces with inputs when the DOM elements land. |
 
 ---
 
 ## Success criteria
 
-- [ ] `node test-m5-v2.mjs` — all 13 test cases pass
-- [ ] TC2: `|data_derived_tau_h - 16.67| / 16.67 < 0.15` (Method A recovers τ)
-- [ ] TC3: τ with constant G offset ≈ τ without (within 1.0 h); intercept absorbs the offset
-- [ ] TC4: `|C_mode - 15000| / 15000 < 0.15` (Method B recovers C); `method = 'recovery_events'`
-- [ ] TC6: `C = null`, `validation_status = 'insufficient_data'` for continuously-heated home
+- [ ] `node test-m5-v2.mjs` — all 14 test cases pass
+- [ ] TC2: `|data_derived_tau_h - 16.67| / 16.67 < 0.15` (Method A recovers τ from RC-simulated data)
+- [ ] TC3: τ with constant G offset ≈ τ without (within 1.5 h); intercept absorbs the offset
+- [ ] TC4: `|thermal_mass_kj_per_k - 12000| / 12000 < 0.15` (Method B asymptote recovers C); `method = 'asymptote'`
+- [ ] TC4b: `thermal_mass_kj_per_k = null`, `thermal_mass_fit_status = 'rejected_low_confidence'` (uniform-duration rejection)
+- [ ] TC6: `C = null`, `validation_status = 'insufficient_data'`, `thermal_mass_fit_status = 'no_data'` for continuously-heated home
 - [ ] TC8: `source = 'user_tau'` when dropdown set; data τ in `tau_bucket` / `data_derived_tau_h`
 - [ ] Output contract has no `setpoint_c`, `setpoint_days_used`, `occupancy_weights`,
   `underheat_status`, `underheat_narrative`, `annual_modelled_demand_kwh`, `wall_construction` (TC1, TC12, TC13)
+- [ ] `thermal_mass_fit_status` is always one of `'fired' | 'rejected_low_confidence' | 'no_data'` (never absent)
 - [ ] `heating_frequency_by_hh` is a 48-element array; null < 14 non-absence days (TC9)
 - [ ] `validation_status` never equals `'no_gas'` for any input (TC10)
 - [ ] No `\.setpoint_c` references remaining in `scenario-consumption.js` (grep check)
 - [ ] `internal_gains_w` is a non-null numeric array for all non-htcUsed-null inputs
+- [ ] EV cap applied using hour-of-day from timestamp (not `i % 48`) — verify via TC2 or unit test
 - [ ] Existing passing test suites (M3 v2, M6, M7, M8, M9) still pass after Steps 14–15
 - [ ] No remaining references to `wall_construction`, `tAtRestartWinterC`, `measured_cold_soak`,
   `'no_gas'` (as validation_status), `underheat_narrative` in `thermal-character.js`
