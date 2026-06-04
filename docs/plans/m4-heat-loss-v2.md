@@ -1,7 +1,7 @@
 # M4 Heat Loss — v2 implementation
 
 **Date:** 2026-06-04
-**Status:** ⚠ Approved with edits — 2026-06-04. Implementation may begin.
+**Status:** ✅ Implemented — 2026-06-04. Commit `8d7e72e`.
 
 ---
 
@@ -710,7 +710,7 @@ T26. **Whole-day presence-gating (§5 Test 5.16).** Two sub-cases:
 ## Implementation Deviations
 
 **Date:** 2026-06-04
-**Commit:** [see git log]
+**Commit:** `8d7e72e`
 
 **D1 — Downstream `solar_aperture_m2` rename propagated to v1 consumers (unplanned scope).**
 `js/thermal-character.js` (line 94) and `js/scenario-consumption.js` (lines 183, 213) still
