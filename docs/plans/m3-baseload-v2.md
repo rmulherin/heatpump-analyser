@@ -536,7 +536,7 @@ Verdict: ✅ APPROVED — full fork scope, faithful to the design; all review fi
 
 ## Approval
 
-**Status:** Implemented — 2026-06-04, commit <pending>.
+**Status:** Implemented — 2026-06-04, commit 98d47ae.
 **Approved by:** Rhiannon (via Opus review)
 **Clarifications confirmed:**
 - Null `electricity_baseload` (< 30 qualifying elec days) → Step J **skips attribution** (`elec_heating
