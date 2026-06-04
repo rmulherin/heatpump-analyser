@@ -1,13 +1,13 @@
 # M4 Heat Loss — v2 implementation
 
 **Date:** 2026-06-04
-**Status:** Awaiting review — Opus architect review pending.
+**Status:** ⚠ Approved with edits — 2026-06-04. Implementation may begin.
 
 ---
 
 ## Task description
 
-Re-implement `js/heat-loss.js` (Module 4) from v1 to v2 per `m4-heat-loss-v2.md` (commit bb098ec,
+Re-implement `js/heat-loss.js` (Module 4) from v1 to v2 per `m4-heat-loss-v2.md` (commit 35c98a0,
 2026-06-04). The load-bearing changes are: (1) combined-fuel Siviour LHS (`gas×η + elec×1.0` — one
 source-blind fit for all household types, replacing v1's gas-only / no-gas-early-return / Check-4D
 branches); (2) the η-move (η leaves HTC recovery, enters LHS — gas-only HTC provably unchanged);
@@ -562,7 +562,7 @@ T9. **Cooling consideration** — (R ≥ 7, HTC < 250) → `'significant'`; (R =
     `'worth_noting'`; (R = 1, HTC = 400) → `'minimal'`.
 T10. **Degree-day base echo** — `result.degree_day_base_c === 15.5`.
 
-#### v2-specific (T11–T25, per design §5)
+#### v2-specific (T11–T26, per design §5)
 
 T11. **Gas-only η-equivalence (§5 Test 5.1 — the η-move regression).** Same gas-only data, no
      elec heating (`elec_heating_kwh = 0` throughout). Call at η = 0.85 to get `htc_v2`. Call at
@@ -713,3 +713,90 @@ T26. **Whole-day presence-gating (§5 Test 5.16).** Two sub-cases:
 **Commit:** [commit hash]
 
 None.
+
+---
+
+## Design Review
+
+**Reviewer:** Claude (Praxis Insight — Opus architect window)
+**Date:** 2026-06-04
+**Review type:** Plan review (pre-implementation)
+**Authoritative design:** `~/Documents/git-repos/praxis-claude-hub/projects/tools/heatpump-analyser/design/m4-heat-loss-v2.md` (commit `35c98a0`)
+
+### Context
+
+Plan for the m4 heat-loss v2 rewrite (combined-fuel Siviour, the η-move, per-HH thermal mint, the
+±20% HTC rescale, and removal of Check 4D / the no-gas short-circuit / net_flow / internal_gains /
+floor_area+HLP). Reviewed against the realigned design doc. The plan's codebase claims were verified
+via a read-only Explore sub-agent — the `estimateHeatLoss` call site + v1 6-arg signature; the
+`app.js` field/line anchors (floor-area input, `no_gas` display block, `htc_w_per_k_adjusted` / `hlp`
+rows, `solar_aperture_m2`, the `|| 0.90` default, the diagnostic getters); the `index.html` boiler /
+floor-area inputs; `heat-loss.js` no-gas:209 / recovery:306 / Check-4D:329–346; and m3-v2 (Implemented
+at `98d47ae`, emitting `elec_heating_kwh` per HH) — all confirmed accurate against current code.
+
+The first-cut review surfaced one HIGH finding (the whole-day completeness rule). The design doc was
+itself ambiguous on the point, so it was clarified at source (§2.5.2, commit `35c98a0`) and the plan
+was re-cut in the live Sonnet loop. This review is of the re-cut (`a51e200`).
+
+### Required changes for implementation
+
+**1. Presence-gated whole-day rule (HIGH).** The first-cut both-null exclusion silently undercounted
+gas-gap days — a `heating_kwh = null` HH on a gas home (where `elec_heating_kwh = 0`) is not
+both-null, so the day was included with the gap coerced to 0 → downward HTC bias. An `OR` rule would
+have broken the all-electric unblock (m3 sets `heating_kwh = null` for every HH when there is no gas
+meter). Required: distinguish an **absent fuel** (null home-wide → contributes 0, does not gate) from
+a **gap** (present fuel, missing reading → excludes the whole day) via two home-level presence flags;
+the fit gates per present fuel, the mint keeps the looser both-null rule.
+
+**2. Test coverage for the rule.** T13 (all-electric) corrected to `heating_kwh = null` throughout;
+T26 added (gas-gap excludes; absent-gas does not gate).
+
+**3. `applyHtcRescale` export + diagnostic field retention.** Export `applyHtcRescale` (pure function)
+so the rescale band/idempotence tests unit-test it directly; keep `htc_w_per_k` and add `htc_used` in
+the diagnostic getter (no rename) so a fitted-vs-used comparison survives.
+
+### Resolution of review changes
+
+1. **Presence-gated whole-day rule** — Step 2 computes `gas_present`/`elec_present` and gates per
+   present fuel; `?? 0` now only coerces absent fuels; the mint-vs-fit distinction is documented and
+   the incorrect Flag 2 rationale replaced. Design §2.5.2 clarified at source (`35c98a0`).
+2. **Tests** — T13 corrected; T26 added (both sub-cases). ~27 cases total.
+3. **`applyHtcRescale` export + diagnostic** — named export; T21–T23 + T21-int retargeted; the
+   diagnostic retains both `htc_w_per_k` and `htc_used`.
+
+### Items noted but not edited
+
+- **LOW — line-number anchors.** The plan references `app.js` / `heat-loss.js` line numbers
+  (discouraged per sizing guidance). Verified accurate against current post-m3 code and recoverable
+  by content; non-blocking. Re-locate by function/pattern if anything lands before m4.
+- **LOW — η-equivalence test (T11).** v1 cannot be run; the `htc_v2(η) == htc_v2(1.0)×η` construction
+  correctly catches a double-applied η (it would give a η² ratio). Verified sound.
+
+## Review Summary
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| CRITICAL | 0     | ✓ pass |
+| HIGH     | 1     | ✅ resolved |
+| MEDIUM   | 0     | — |
+| LOW      | 2     | — note |
+
+Verdict: ⚠ APPROVED WITH EDITS — the presence-gated whole-day rule resolves the one HIGH finding; two
+hygiene edits applied inline (stale design-commit ref `bb098ec`→`35c98a0`; the `T11–T26` sub-header
+numbering).
+
+---
+
+## Approval
+
+**Status:** ⚠ Approved with edits — 2026-06-04
+**Approved by:** Rhiannon (via Opus review)
+**Clarifications confirmed:**
+- The whole-day rule is **presence-gated** (absent fuel vs gap); design §2.5.2 is authoritative
+  (commit `35c98a0`). The **mint** retains the both-null rule; only the **fit** is presence-gated.
+- `applyHtcRescale` is a **named export**; the rescale tests unit-test it directly.
+- The diagnostic getter **retains `htc_w_per_k` and adds `htc_used`** (no rename).
+- The setpoint-rescale feedback path is **dormant** until m7-v2 lands (first pass `htc_used = htc`);
+  the `app.js` call passes `null` for the payload.
+- m3-v2 (Implemented, `98d47ae`) is the prerequisite for `app.js` integration; the `test-m4-v2.mjs`
+  suite runs independently on synthetic data.
