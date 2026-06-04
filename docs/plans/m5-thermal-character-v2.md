@@ -1,69 +1,140 @@
-# m5-thermal-character-v2 — User-driven thermal mass with data-derived defaults
+# M5 Thermal Character — v2 implementation
 
-**Date:** 2026-06-02
+**Date:** 2026-06-04
 **Status:** Awaiting review — Opus architect review pending.
+
+> **Supersedes the 2026-06-02 draft** in this file, which was a partial alignment plan for
+> an older v2 design. The authoritative design is now `m5-thermal-character-v2.md`
+> (praxis-claude-hub, 2026-06-04), self-contained and agreed with Rhiannon.
 
 ---
 
 ## Task description
 
-Rewrite M5 (thermal character) per `m5-thermal-character-v2.md`. The v1 architecture
-preferred data-derived Path A and fell back to user input (Path B). v2 inverts this:
-the user's `tau_bucket` dropdown is the authoritative operating value; Path A short-event
-computation provides the initial default (with which the UI pre-populates the dropdown)
-and an informational callout when the user's selection diverges from the data. Path A's
-long-event branch and `t_at_restart_winter_c` input are deleted entirely. The
-`wall_construction_type` input is also deleted. A `'medium'` fallback guarantees
-`thermal_mass_kj_per_k` is non-null whenever `htc_w_per_k` is non-null.
-
-**Prerequisite:** m4-heat-loss-v2 must be implemented before this plan is executed
-(m5-v2 reads the new `htc_low_plausibility_callout` output that m4-v2 adds). The
-passthrough in Step 6 guards with `=== 'all_electric_dual_handed'` so it fails safe
-(null) until m4-v2 is in place.
+Re-implement `js/thermal-character.js` (Module 5) from v1 to v2 per `m5-thermal-character-v2.md`
+(praxis-claude-hub, 2026-06-04). This is a redesign, not a transcription. Path A (the two-estimator
+τ-fit) and the gains assembly (Step 1b) are new code. Only the tau-bucket dropdown mapping, the
+time-constant derivation, the rating bands, and the heating-frequency readout are reproduced from v1.
+Create `test-m5-v2.mjs` covering all 13 §5 test criteria. Update `js/scenario-consumption.js` to
+remove the `setpoint_c` dependency and consume `internal_gains_w` from m5. Update `js/app.js` call
+site and display (gated on m4-v2 being implemented first).
 
 ---
 
 ## Research findings
 
-**Existing code reviewed:**
+### `js/thermal-character.js` — v1 (701 lines, fully read)
 
-`js/thermal-character.js` — the full module. Key structure:
-- `TC_CONFIG` constants block — needs enum renames + constant deletions.
-- `TAU_BUCKET_HOURS_MAP` — v1 uses `{fast:4, evening:10, all_day:20, stays_for_days:40}`;
-  v2 renames to `{low:4, medium:10, high:20, very_high:40}`.
-- `estimateThermalMass()` — currently handles both short and long events. Long-event
-  branch (lines around the `isLongEvent` classification) to be deleted entirely; only
-  the short-event iterative loop remains. Return value changes from
-  `{thermal_mass_kj_per_k, thermal_mass_source, events_used, ...}` to
-  `{data_derived_tau_h, events_used, any_off_period_found}`.
-- `checkWallConstruction()` — DELETE.
-- `checkTauBucketSanity()` — DELETE (replaced by divergence-ratio computation inline in
-  main function).
-- `computeValidationStatus()` — remove the `source === 'measured_cold_soak'` gate.
-- Main export `estimateThermalCharacter()` — signature currently:
-  `(heating, external, heatLoss, baseloadMethod, wallConstructionType, tAtRestartWinterC, tauBucket)`.
-  v2 removes `wallConstructionType` and `tAtRestartWinterC`, leaving:
-  `(heating, external, heatLoss, baseloadMethod, tauBucket)`.
+Reproduced from v1 (defer to working code; flag in plan if live code diverges from design wording):
 
-`index.html` — thermal-char-card currently has `#wall-construction` select, `#t-at-restart`
-number input, and `#tau-bucket` select with v1 enum values. Both deleted inputs have their
-form-groups removed. `#tau-bucket` option values renamed to match v2 enum.
+| v1 symbol | Location | v2 status |
+|---|---|---|
+| `TAU_BUCKET_HOURS_MAP` | `:51` | **Reproduced unchanged** — `{fast:4, evening:10, all_day:20, stays_for_days:40}` |
+| `computeRatingAndTimeConstant` | `:446` | **Reproduced** — rating bands 6k/15k/30k kJ/K; `C/(htc×3.6)`; source changes to `htc_used` |
+| `computeOccupancyWeights` | `:211` | **Reproduced as `computeHeatingFrequencyByHh`** — same per-HH fraction mechanic, renamed; source-blind: checks `thermal_heat_delivered_kwh > 0` not `heating_kwh > 0` |
 
-`js/app.js` — references to remove: `wallConstructionInput`, `tAtRestartInput` DOM refs;
-the `wallConstruction`/`tAtRestart` local variables in `runThermalChar()`; the v1
-`thermal_mass_source` label map (`measured_cold_soak`/`user_tau`); the stale B3 notice
-handler that focused `#t-at-restart`; the `__getThermalDiagnostics()` getter that reads
-`_path_diagnostics`.
+Deleted from v1 (do not carry forward):
 
-`test-m5.mjs` — T10 (wall construction mismatch) to be deleted. T7/T8 assertions on
-`thermal_mass_kj_per_k === null` must change (v2 fallback produces non-null). All call
-signatures need one fewer positional parameter (wallConstruction removed from position 5).
+| v1 symbol | Reason |
+|---|---|
+| `estimateSetpoint` `:237` | Retired — FINDING §7.1 |
+| `estimateThermalMass` `:292` | Replaced by Path A two-estimator redesign |
+| `buildDaySummaries` `:165` | Replaced (logic changes with source-blind signal) |
+| `checkWallConstruction`, `WALL_CONSTRUCTION_RANGES` `:45,497` | Dropped — §2.5.7, approved |
+| `computeModelledHeatingByHh`, `computeUnderheatStatus`, `buildUnderheatNarrative` `:92,110,140` | Relocated to m7's trace — §2.8, approved |
+| `computeValidationStatus` `:512` | Replaced — new CI-banded version |
+| `no_gas` early return `:545` | Deleted — source-blind; the no_gas branch is gone |
+| `checkTauBucketSanity` `:472` | Dropped — the tau-bucket pair surfaces data vs user as informational comparison already |
+| `TC_CONFIG.*` fields for setpoint, cold-soak, long-event, underheat | All deleted with their dependants |
 
-`test-m5b.mjs` — T11, T12 (long-event tests), T20a/b/c (tAtRestart tests) to be deleted.
-T13, T14, T14b: signature update only. T15/T16/T17/T18/T19/T21a/T21b/T21c: signature
-update + assertions updated per v2 semantics (source enum, user-wins logic, fallback).
+The `_path_diagnostics` block (added by investigation-instrumentation) is subsumed into the new
+`thermal_mass_fit` and `data_derived_tau_h` output fields — no direct carry-over needed.
 
-No new external libraries needed. All logic is vanilla JS arithmetic.
+**Flag — divergence confirmed (mandate, not conflict):** `computeOccupancyWeights` uses `heating_kwh > 0`
+(gas-only). v2 changes this to `thermal_heat_delivered_kwh > 0` (source-blind). This is an explicit
+§7 mandate, not a conflict with the "defer to working code" guardrail.
+
+### m4-v2 plan — confirmed m5 input contract
+
+m4-v2 plan (`docs/plans/m4-heat-loss-v2.md`, Status `⚠ Approved with edits — 2026-06-04`) confirmed:
+- `estimateHeatLoss` mints `thermal_heat_delivered_kwh[]` — a standalone per-HH array in the return
+  object (`gas_kwh × η + elec_kwh × 1.0`, null only where BOTH fuels are null).
+- Output field `htc_used` is added (first-pass = `htc_w_per_k`; the rescale mechanism is dormant).
+- `solar_aperture_m2` → **renamed** to `solar_aperture` in m4-v2 output.
+- `boiler_efficiency_used` (η) remains in the m4 output but is **NOT an m5 input** — m5 never
+  re-applies η; the thermal series already carries it.
+- **Prerequisite gate:** m4-v2 must be `Status: Implemented` before the app.js integration step
+  (Step 15). Steps 1–13 can proceed immediately using synthetic test data with the m4-v2 contract.
+
+### m3-v2 outputs — gains ingredients
+
+From `baseload.js` (fully read):
+- `supplementary_loads.electricity_baseload` — `computeElectricityBaseload` returns the **5th
+  percentile of per-HH non-absence electricity consumption** in **kWh/HH** (a scalar). Null if
+  fewer than 30 days of complete electricity data.
+- `heating[i].nonheat_residual_kwh` — per-HH, kWh/HH. Set by `applyElectricHeatingAttribution`;
+  null if electricity data missing for that day.
+- `baseload_metadata.baseload_median_kwh_per_day` — daily gas baseload kWh/day. For no-gas homes
+  this is 0 (not null). Used to derive `gas_baseload_w = (median_kwh_per_day / 48) × 2000` W.
+  **There is no named `gas_baseload` field in m3's current output** — m5 derives it from this field.
+
+### `js/scenario-consumption.js` — thermalChar reads (fully read)
+
+m7 currently reads from `thermalChar`:
+- `thermalChar?.setpoint_c` — **4 locations**: `simulatePostHocTIndoor` (null-guard + T_init),
+  `simulateCurrentRcTrace` (`sp`), overshoot check. All replaced by the `operativeSetpoint` param
+  added in Step 14.
+- `thermalChar?.thermal_mass_kj_per_k` — unchanged name; still provided by m5-v2.
+- `thermalChar?.underheat_ratio` (~line 334) — used in `demandScale` for the "Heat to Comfort"
+  slider. **Removed from m5-v2** (relocated to m7's trace). Will be null after this plan, making
+  `demandScale = 1.0` always. Known interim regression; flagged for m7-v2.
+- Solar-gains computed inline in both RC traces using `heatLoss.solar_aperture_m2`. Step 14b
+  replaces `solar_aperture_m2` → `solar_aperture` (m4-v2 rename) and wires `internal_gains_w`
+  into the smart-scenario post-hoc trace.
+
+### OLS patterns in the codebase
+
+`baseload.js:computeMultiOls` — full OLS with standard errors (not exported). `heat-loss.js:runOLSTwoPredictor`
+— through-origin 2-predictor OLS. Neither fits Method A (which needs OLS with intercept). A private
+`ols2WithIntercept(xs, ys)` helper is written in `thermal-character.js` — closed-form for
+[intercept, slope].
+
+**JS learnings note:** "Origin-forced regression R² collapses for signals with constant baseline
+offset" (learnings.md, 2026-06-02) — confirms Method A's with-intercept fit is correct; the intercept
+absorbs the gains/setpoint offset as designed.
+
+### Algorithm choices
+
+- **Method A τ-fit**: 1D profile-LS — minimize `Var(z_i(τ))` over a log-spaced grid, then
+  golden-section refinement. SE(τ) from numerical Hessian of RSS at τ_hat. No external library.
+- **Mode estimator**: half-sample-mode (HSM) — `O(n log n)`, no external deps, robust for small
+  samples. Used by `max_load`, Method B C-mode, and bootstrap CI.
+- **Method B bootstrap**: 1000 resamples of C_events; SE from bootstrap std of τ estimates.
+- **No new imports** — vanilla JS throughout, consistent with project standards.
+
+---
+
+## Open constants — decisions for Opus review
+
+The following constants appear in `TC_CONFIG` (Step 1). Values are proposals; Opus should confirm
+or redirect before implementation begins.
+
+| Constant | Proposed | Used by | Flag |
+|---|---|---|---|
+| `F_GAS` | `0.35` | Step 1b — gas_baseload term | Fraction of gas HW+cooking that becomes indoor heat. 35% ≈ UK norm. **Flag for Opus calibration.** |
+| `METHOD_A_MIN_EVENTS` | `20` | Method A fire gate | Min morning-reheat events for regression to be meaningful. **Flag.** |
+| `METHOD_A_PREDAWN_START_H` | `3` | Step 2a event collection | Start of pre-dawn window (03:00). **Flag.** |
+| `METHOD_A_PREDAWN_END_H` | `7` | Step 2a event collection | End of pre-dawn window exclusive (07:00). **Flag.** |
+| `METHOD_B_MIN_COOLDOWN_HH` | `8` | Step 2b recovery detection | Min preceding low-heat HH (4 h) before ceiling run. **Flag.** |
+| `PCTILE_UPPER_TAIL` | `0.95` | Step 2b max_load | 95th percentile for upper tail. Confirmed §3. |
+| `CEILING_FACTOR` | `0.9` | Step 2b at-ceiling gate | 0.9 × max_load. Confirmed §3. |
+| `SUSTAINED_MIN_HH` | `3` | Step 2b at-ceiling run | Min HH at ceiling. Confirmed §3. |
+| `MIN_EVENTS_METHOD_B` | `5` | Step 2b fire gate | Min recovery events. Confirmed §3. |
+| `FIRE_THRESHOLD_SE` | `0.25` | Confidence selection | ±25% relative SE on τ. Confirmed §3. |
+| `GOOD_SE_THRESHOLD` | `0.12` | Validation status | ~12% → 'good'. Confirmed §2.5.8. |
+| `EV_CAP_K` | `2` | Step 1b EV clip | k = 2 × electricity_baseload. Confirmed §2.5.2b. |
+| `BOOTSTRAP_ITER` | `1000` | Method B CI | Not specified in design; 1000 is standard. |
+| `WINTER_MAX_T_C` | `10` | Method A event filter | T_out < 10°C for winter. Same as v1. |
 
 ---
 
@@ -71,585 +142,919 @@ No new external libraries needed. All logic is vanilla JS arithmetic.
 
 | Action | File | Purpose |
 |--------|------|---------|
-| MODIFY | `js/thermal-character.js` | Core module rewrite per v2 spec |
-| MODIFY | `index.html` | Remove deleted inputs; rename tau-bucket option values |
-| MODIFY | `js/app.js` | Update call site, DOM refs, display logic, diagnostic getter |
-| MODIFY | `test-m5.mjs` | Update signature + affected assertions; add 14 v2 tests |
-| MODIFY | `test-m5b.mjs` | Delete long-event + tAtRestart tests; update remaining |
+| MODIFY (full rewrite) | `js/thermal-character.js` | Complete v2 redesign — Path A, gains assembly, new contract |
+| CREATE | `test-m5-v2.mjs` | 13 test cases covering all §5 criteria; synthetic data |
+| MODIFY | `js/scenario-consumption.js` | Add `operativeSetpoint` param; remove `setpoint_c` reads; wire `internal_gains_w` |
+| MODIFY | `js/app.js` | New m5 call site; display changes; **gated on m4-v2 Implemented** |
 
 ---
 
 ## Implementation steps
 
-### Step 1 — thermal-character.js: Update constants
+**Prerequisite gate for Steps 14–15:** m4-v2 plan must show `Status: Implemented`. Steps 1–13 use
+synthetic test data with m4-v2 contract fields (`thermal_heat_delivered_kwh`, `htc_used`,
+`solar_aperture`) and can proceed at any time.
 
-In `TC_CONFIG`:
-- Remove: `T_AT_RESTART_MIN_C`, `T_AT_RESTART_MAX_C`, `LONG_EVENT_OFF_HH`.
-- Keep unchanged: all other constants.
+---
 
-Replace `WALL_CONSTRUCTION_RANGES` constant: DELETE entirely.
+### Step 1 — Constants, config, and module skeleton (`js/thermal-character.js`)
 
-Rename `TAU_BUCKET_HOURS_MAP` keys:
-```js
+Delete the entire v1 file. Start from scratch.
+
+```javascript
+// ===== Thermal Character Module (Module 5) — v2 =====
+// Owns: internal_gains_w (Q_gains → m7); thermal_mass_kj_per_k (C); time_constant_hours (τ).
+// Does NOT: infer setpoint; re-apply η; gate on no-gas; auto-fill thermal mass.
+
+let _thermalCharacterResult = null;
+export function setThermalCharacterResult(r) { _thermalCharacterResult = r; }
+export function getThermalCharacterResult()   { return _thermalCharacterResult; }
+
+const TC_CONFIG = {
+  // Gains assembly (§2.5.2b)
+  EV_CAP_K:                    2,       // EV overnight cap multiplier on electricity_baseload
+  F_GAS:                       0.35,    // Fraction of gas baseload → indoor heat  [OPUS DECISION]
+  OCCUPANCY_W_PER_PERSON:      70,      // Body-heat per occupant (W)
+  EV_WINDOW_START_SLOT:        2,       // 01:00 (slot 2 in 0-indexed 30-min day)
+  EV_WINDOW_END_SLOT:          9,       // 04:30 (inclusive)
+
+  // Method A (§2.5.3)
+  METHOD_A_PREDAWN_START_H:    3,       // Pre-dawn window start hour  [OPUS DECISION]
+  METHOD_A_PREDAWN_END_H:      7,       // Pre-dawn window end hour (exclusive)  [OPUS DECISION]
+  METHOD_A_MIN_OFF_HH:         4,       // Min overnight off HH before a morning event
+  METHOD_A_MIN_REHEAT_HH:      2,       // Min reheat HH to count as an event
+  METHOD_A_MAX_REHEAT_HH:      16,      // Max reheat HH included (cap at 8 h)
+  METHOD_A_MIN_EVENTS:         20,      // Min morning events to fire  [OPUS DECISION]
+  METHOD_A_HEAT_THRESH_KWH:    0.05,    // Below this = "off" in the thermal series
+
+  // Method B (§2.5.3)
+  PCTILE_UPPER_TAIL:           95,      // 95th percentile for upper tail (as %)
+  CEILING_FACTOR:              0.9,     // At/near ceiling threshold
+  SUSTAINED_MIN_HH:            3,       // Min consecutive at-ceiling HH
+  METHOD_B_MIN_COOLDOWN_HH:    8,       // Min preceding low-heat HH  [OPUS DECISION]
+  MIN_EVENTS_METHOD_B:         5,       // Min recovery events to fire
+  BOOTSTRAP_ITER:              1000,    // Bootstrap resamples for Method B CI
+
+  // Confidence selection + validation (§2.5.3 / §2.5.8)
+  FIRE_THRESHOLD_SE:           0.25,    // Relative SE on τ to fire (±25%)
+  GOOD_SE_THRESHOLD:           0.12,    // Relative SE → 'good' status (~12%)
+
+  // Heating-frequency readout (v1 mechanic — §2.5.2)
+  MIN_DAYS_HEATING_FREQ:       14,      // Min non-absence whole days
+
+  // Rating bands (v1 — §2.5.7)
+  MASS_RATING_MEDIUM_KJ:       6000,
+  MASS_RATING_HIGH_KJ:         15000,
+  MASS_RATING_VERY_HIGH_KJ:    30000,
+
+  // Event filters
+  WINTER_MAX_T_C:              10,      // Overnight T_out filter for Method A
+};
+
 const TAU_BUCKET_HOURS_MAP = {
-  low:       4,
-  medium:   10,
-  high:     20,
-  very_high: 40,
+  fast:            4,
+  evening:        10,
+  all_day:        20,
+  stays_for_days: 40,
 };
 ```
 
-Add bucket-mapping boundary constants (or define inline in `mapTauToBucket`):
-```js
-// Used in Step 4b bucket mapping (§4.4 of design doc)
-const BUCKET_THRESHOLDS = [7, 15, 30]; // boundaries between low/medium/high/very_high
-const BUCKET_KEYS = ['low', 'medium', 'high', 'very_high'];
-const FALLBACK_BUCKET = 'medium';
-```
+---
 
-### Step 2 — thermal-character.js: Delete removed functions
+### Step 2 — Private helpers (`js/thermal-character.js`)
 
-Delete `checkWallConstruction()` in its entirety.
+Add five private helpers immediately after constants.
 
-Delete `checkTauBucketSanity()` in its entirety. The divergence-ratio equivalent is
-computed inline in the main function in Step 6.
-
-### Step 3 — thermal-character.js: Revise `estimateThermalMass()` → Path A short-event only
-
-Rename to `runPathAShortEvent(heating, external, htc, eta, setpointC)` to clarify its
-new, narrower scope.
-
-**Delete from the function body:**
-- The `isLongEvent` classification block (the `(offEnd - offStart > LONG_EVENT_OFF_HH) || containsAbsenceInOff` branch).
-- The `longC` array and its population loop (`for (const ev of validEvents.filter(ev => ev.kind === 'long'))`).
-- The `tAtRestartWinterC` parameter.
-- The `longEventDiscardedForMissingUserTemp` flag.
-
-**Keep unchanged:**
-- The off-period detection loop (`while (i < n)` scan for `< OFF_PERIOD_THRESHOLD_KWH`).
-- The `anyOffPeriodFound` flag tracking.
-- Anchor check (preceding HH must have positive non-absent heating).
-- T_outdoor_off mean computation.
-- Winter filter (`T_outdoor_off >= WINTER_TEMP_MAX_C`).
-- Warm-up phase scan.
-- The absence checks (warmup must be absence-free; relaxed filter allows absence in off period for short events).
-- Classify remaining events as short-only (discard any long events silently — they no longer qualify).
-- The iterative short-event C estimation loop (3 iterations, outlier filter, median).
-
-**NOTE:** Off-period detection runs regardless of whether `setpointC` is non-null. The
-`any_off_period_found` flag is tracked across the scan. However, C estimation requires
-`setpointC` — if null, the off-period scan still runs (tracking the flag) but produces
-no C estimates (events_used = 0).
-
-**New return value:**
-```js
-return {
-  data_derived_tau_h,      // median(shortC) / (htc × 3.6) if events_used >= MIN_EVENTS_FOR_MASS; else null
-  events_used,             // count of short events that contributed a C estimate (before outlier filter)
-  any_off_period_found,    // whether ≥1 off period of ≥ OFF_PERIOD_MIN_HH was detected
-};
-```
-
-The old `thermal_mass_kj_per_k` and `thermal_mass_source` are no longer returned here
-— those are computed in the main function's Step 4c resolution (Step 6 below).
-
-Export `mapTauToBucket` for direct testing in `test-m5.mjs`:
-
-### Step 4 — thermal-character.js: Add exported `mapTauToBucket()` function
-
-```js
-export function mapTauToBucket(tauH) {
-  if (tauH === null || tauH === undefined) return null;
-  if (tauH < 7)  return 'low';
-  if (tauH < 15) return 'medium';
-  if (tauH < 30) return 'high';
-  return 'very_high';
+**`percentile(arr, p)`** — p is 0–100; input unsorted, nulls filtered:
+```javascript
+function percentile(arr, p) {
+  const vals = arr.filter(v => v !== null && v !== undefined && !isNaN(v)).sort((a, b) => a - b);
+  if (!vals.length) return null;
+  const idx = (p / 100) * (vals.length - 1);
+  const lo = Math.floor(idx), hi = Math.ceil(idx);
+  return lo === hi ? vals[lo] : vals[lo] + (idx - lo) * (vals[hi] - vals[lo]);
 }
 ```
 
-Export this function so `test-m5.mjs` can test the boundary mapping directly (T_V2_5).
+**`halfSampleMode(arr)`** — half-sample-mode (HSM) estimator; O(n log n); robust for small samples:
+```javascript
+function halfSampleMode(arr) {
+  const sorted = arr.filter(v => v !== null && !isNaN(v)).sort((a, b) => a - b);
+  if (!sorted.length) return null;
+  if (sorted.length <= 2) return (sorted[0] + sorted[sorted.length - 1]) / 2;
+  let cur = sorted;
+  while (cur.length > 2) {
+    const half = Math.ceil(cur.length / 2);
+    let best = Infinity, bestIdx = 0;
+    for (let i = 0; i <= cur.length - half; i++) {
+      const span = cur[i + half - 1] - cur[i];
+      if (span < best) { best = span; bestIdx = i; }
+    }
+    cur = cur.slice(bestIdx, bestIdx + half);
+  }
+  return (cur[0] + cur[cur.length - 1]) / 2;
+}
+```
 
-### Step 5 — thermal-character.js: Revise `computeValidationStatus()`
+**`ols2WithIntercept(xs, ys)`** — closed-form OLS with intercept for (xs, ys) arrays; returns
+`{intercept, slope, ss_res, r2}` or null if degenerate:
+```javascript
+function ols2WithIntercept(xs, ys) {
+  const n = xs.length;
+  if (n < 3) return null;
+  const mx = xs.reduce((s, v) => s + v, 0) / n;
+  const my = ys.reduce((s, v) => s + v, 0) / n;
+  let sxx = 0, sxy = 0;
+  for (let i = 0; i < n; i++) { const dx = xs[i] - mx; sxx += dx * dx; sxy += dx * (ys[i] - my); }
+  if (Math.abs(sxx) < 1e-12) return null;
+  const slope = sxy / sxx;
+  const intercept = my - slope * mx;
+  let ss_res = 0, ss_tot = 0;
+  for (let i = 0; i < n; i++) {
+    ss_res += (ys[i] - (intercept + slope * xs[i])) ** 2;
+    ss_tot += (ys[i] - my) ** 2;
+  }
+  return { intercept, slope, ss_res, r2: ss_tot > 0 ? 1 - ss_res / ss_tot : 0 };
+}
+```
 
-Remove the `source === 'measured_cold_soak'` gate. New logic:
+**`goldenSectionMin(f, lo, hi, tol)`** — 1D golden-section minimisation on [lo, hi]:
+```javascript
+function goldenSectionMin(f, lo, hi, tol = 1e-4) {
+  const phi = (Math.sqrt(5) - 1) / 2;
+  let a = lo, b = hi;
+  let c = b - phi * (b - a), d = a + phi * (b - a);
+  let fc = f(c), fd = f(d);
+  for (let i = 0; i < 100 && (b - a) > tol; i++) {
+    if (fc < fd) { b = d; d = c; fd = fc; c = b - phi * (b - a); fc = f(c); }
+    else         { a = c; c = d; fc = fd; d = a + phi * (b - a); fd = f(d); }
+  }
+  return (a + b) / 2;
+}
+```
 
-```js
-function computeValidationStatus(setpointC, thermalMassKjPerK, setpointDaysUsed, eventsUsed) {
-  if (setpointC === null || thermalMassKjPerK === null) return 'insufficient_data';
-  if (setpointDaysUsed >= 50 && eventsUsed >= 10) return 'good';
+**`sampleWithReplacement(arr)`** — bootstrap resample:
+```javascript
+function sampleWithReplacement(arr) {
+  return arr.map(() => arr[Math.floor(Math.random() * arr.length)]);
+}
+```
+
+---
+
+### Step 3 — Step 0: null passthrough (`js/thermal-character.js`)
+
+Define the null-result helper and the null-passthrough gate. Delete the `no_gas` branch — m5 is
+source-blind and does not gate on baseload method.
+
+```javascript
+function nullResult(validation_status) {
+  return {
+    internal_gains_w:        null,
+    thermal_mass_kj_per_k:   null,
+    time_constant_hours:     null,
+    thermal_mass_rating:     null,
+    heating_frequency_by_hh: null,
+    tau_bucket:              null,
+    tau_bucket_used:         null,
+    thermal_mass_source:     null,
+    thermal_mass_method:     null,
+    data_derived_tau_h:      null,
+    thermal_mass_fit:        null,
+    heat_system_capacity_kw: null,
+    validation_status,
+    warnings: [],
+  };
+}
+```
+
+At the top of `estimateThermalCharacter` (Step 12): bind to `htc_used`, return null on null.
+```javascript
+const htcUsed = heatLoss?.htc_used ?? null;
+if (htcUsed === null) return nullResult('no_htc');
+```
+
+---
+
+### Step 4 — Step 1: `computeHeatingFrequencyByHh` (`js/thermal-character.js`)
+
+Rename of `computeOccupancyWeights`. Source-blind: uses `thermalDelivered[i] > 0`, not
+`heating[i].heating_kwh > 0`. Same 14-day minimum and per-HH fraction mechanic.
+
+```javascript
+function computeHeatingFrequencyByHh(heating, thermalDelivered) {
+  const dayMap = new Map();
+  for (let i = 0; i < heating.length; i++) {
+    const day = heating[i].timestamp.slice(0, 10);
+    if (!dayMap.has(day)) dayMap.set(day, []);
+    dayMap.get(day).push(i);
+  }
+
+  const nonAbsenceDayIndices = [];
+  for (const [, indices] of dayMap) {
+    if (indices.length !== 48) continue;
+    if (indices.some(i => heating[i].is_absence)) continue;
+    nonAbsenceDayIndices.push(indices);
+  }
+
+  if (nonAbsenceDayIndices.length < TC_CONFIG.MIN_DAYS_HEATING_FREQ) {
+    return { heating_frequency_by_hh: null, warning: 'Not enough data to compute heating frequency.' };
+  }
+
+  const total = nonAbsenceDayIndices.length;
+  const countHeated = new Array(48).fill(0);
+  for (const indices of nonAbsenceDayIndices) {
+    for (let h = 0; h < 48; h++) {
+      const i = indices[h];
+      if (thermalDelivered[i] !== null && thermalDelivered[i] > 0) countHeated[h]++;
+    }
+  }
+  return {
+    heating_frequency_by_hh: countHeated.map(c => c / total),
+    warning: null,
+  };
+}
+```
+
+---
+
+### Step 5 — Step 1b: `assembleGains` (`js/thermal-character.js`)
+
+New function. Returns `internal_gains_w[]` in watts per HH. Inputs:
+- `heating[i]` for `is_absence`, `nonheat_residual_kwh`
+- `external[i]` for `solar_w_m2`
+- `supplementaryLoads.electricity_baseload` (kWh/HH scalar; null → 0)
+- `baseloadMetadata.baseload_median_kwh_per_day` (kWh/day; → W per HH)
+- `solarAperture` (m²; null → 0)
+- `householdSize` (integer ≥ 0)
+
+```javascript
+function assembleGains(heating, external, supplementaryLoads, baseloadMetadata,
+                        solarAperture, householdSize) {
+  const n = heating.length;
+  const elecBase_kwh = supplementaryLoads?.electricity_baseload ?? 0;
+  const elecBase_w   = elecBase_kwh * 2000;   // kWh/HH → W (× 2 HH/h × 1000 W/kW)
+  const gasBase_w    = ((baseloadMetadata?.baseload_median_kwh_per_day ?? 0) / 48)
+                       * 2000 * TC_CONFIG.F_GAS;
+  const R            = solarAperture ?? 0;
+  const nOcc         = householdSize ?? 0;
+  const gains        = new Array(n);
+
+  for (let i = 0; i < n; i++) {
+    const h   = heating[i];
+    const ext = external[i];
+    const absent    = !!h.is_absence;
+    const slotInDay = i % 48;
+
+    // Intermittent appliances: (nonheat_residual − elec_baseload) × 0.9, EV-capped overnight
+    const nonheat_kwh = h.nonheat_residual_kwh ?? 0;
+    let intermittent_kwh = Math.max(0, nonheat_kwh - elecBase_kwh) * 0.9;
+    if (slotInDay >= TC_CONFIG.EV_WINDOW_START_SLOT
+        && slotInDay <= TC_CONFIG.EV_WINDOW_END_SLOT) {
+      intermittent_kwh = Math.min(intermittent_kwh, TC_CONFIG.EV_CAP_K * elecBase_kwh);
+    }
+    const intermittent_w = intermittent_kwh * 2000;
+
+    // Occupancy: zeroed on absence
+    const occupancy_w = absent ? 0 : TC_CONFIG.OCCUPANCY_W_PER_PERSON * nOcc;
+
+    // Solar
+    const solar_w = R * (ext?.solar_w_m2 ?? 0);
+
+    gains[i] = elecBase_w + intermittent_w + gasBase_w + occupancy_w + solar_w;
+  }
+  return gains;
+}
+```
+
+---
+
+### Step 6 — Step 2a: Method A — `collectMorningEvents` + `fitTauMethodA` (`js/thermal-character.js`)
+
+**`collectMorningEvents(heating, external, thermalDelivered, htcUsed, operativeSetpoint)`:**
+
+Scans chronologically for morning-reheat episodes. For each episode returns
+`{y, T_out, t_off}` used by the τ-fit.
+
+Algorithm:
+1. Find a pre-dawn reheat start: a slot where `hour ∈ [PREDAWN_START_H, PREDAWN_END_H)` AND
+   `thermalDelivered > METHOD_A_HEAT_THRESH_KWH` AND NOT `is_absence`.
+2. Scan backwards to find the preceding overnight off-period:
+   consecutive slots with `thermalDelivered ≤ HEAT_THRESH` and no absence.
+3. If off-period < `METHOD_A_MIN_OFF_HH` → skip.
+4. Compute `T_out_night` = mean T_out over off period; skip if ≥ `WINTER_MAX_T_C`.
+5. Scan forward for the reheat run (capped at `METHOD_A_MAX_REHEAT_HH`).
+6. Skip if reheat < `METHOD_A_MIN_REHEAT_HH`.
+7. Compute: `correction = htcUsed × max(0, setpoint − T_out_night) × t_reheat_h / 1000`
+   (kWh loss during reheat — G-independent; absorbed into intercept A).
+8. `y_i = E_reheat − correction`; record `{y, T_out: T_out_night, t_off: t_off_h}`.
+
+```javascript
+function collectMorningEvents(heating, external, thermalDelivered, htcUsed, operativeSetpoint) {
+  const events = [];
+  const n = heating.length;
+  let i = 0;
+
+  while (i < n) {
+    const hour = parseInt(heating[i].timestamp.slice(11, 13), 10);
+    const isPreDawn = hour >= TC_CONFIG.METHOD_A_PREDAWN_START_H
+                   && hour < TC_CONFIG.METHOD_A_PREDAWN_END_H;
+    const hasThermal = thermalDelivered[i] !== null
+                    && thermalDelivered[i] > TC_CONFIG.METHOD_A_HEAT_THRESH_KWH;
+
+    if (!isPreDawn || !hasThermal || heating[i].is_absence) { i++; continue; }
+
+    // Scan backwards for the overnight off-period preceding this reheat start
+    let offStart = i - 1;
+    while (offStart >= 0
+           && (thermalDelivered[offStart] === null
+               || thermalDelivered[offStart] <= TC_CONFIG.METHOD_A_HEAT_THRESH_KWH)
+           && !heating[offStart].is_absence) {
+      offStart--;
+    }
+    offStart++;
+    const offHH = i - offStart;
+    if (offHH < TC_CONFIG.METHOD_A_MIN_OFF_HH) { i++; continue; }
+
+    // Overnight mean T_out and t_off
+    let tSum = 0, tCount = 0;
+    for (let j = offStart; j < i; j++) {
+      const tc = external[j]?.temp_c;
+      if (tc !== null && tc !== undefined) { tSum += tc; tCount++; }
+    }
+    if (tCount === 0 || tSum / tCount >= TC_CONFIG.WINTER_MAX_T_C) { i++; continue; }
+    const T_out = tSum / tCount;
+    const t_off = offHH * 0.5;
+
+    // Scan forward for the reheat run
+    let reEnd = i;
+    let E_reheat = 0;
+    while (reEnd < n
+           && thermalDelivered[reEnd] !== null
+           && thermalDelivered[reEnd] > TC_CONFIG.METHOD_A_HEAT_THRESH_KWH
+           && !heating[reEnd].is_absence
+           && (reEnd - i) < TC_CONFIG.METHOD_A_MAX_REHEAT_HH) {
+      E_reheat += thermalDelivered[reEnd];
+      reEnd++;
+    }
+    if (reEnd - i < TC_CONFIG.METHOD_A_MIN_REHEAT_HH) { i = reEnd + 1; continue; }
+
+    const t_reheat = (reEnd - i) * 0.5;
+    const correction = htcUsed * Math.max(0, operativeSetpoint - T_out) * t_reheat / 1000;
+    events.push({ y: E_reheat - correction, T_out, t_off });
+    i = reEnd;
+  }
+  return events;
+}
+```
+
+**`fitTauMethodA(events, htcUsed)`:**
+
+Minimises `Var(z_i(τ))` where `z_i(τ) = y_i + m_i(τ) × T_out_i` and
+`m_i(τ) = 3.6 × htcUsed × τ × (1 − exp(−t_off_i / τ))`. Correct τ makes z_i constant = A.
+
+Returns `{tau, r2, relative_se, ci95, n}` or null if < METHOD_A_MIN_EVENTS.
+
+```javascript
+function fitTauMethodA(events, htcUsed) {
+  if (events.length < TC_CONFIG.METHOD_A_MIN_EVENTS) return null;
+  const n = events.length;
+
+  const mi = (tau, ev) => 3.6 * htcUsed * tau * (1 - Math.exp(-ev.t_off / tau));
+
+  function rss(tau) {
+    const zs = events.map(ev => ev.y + mi(tau, ev) * ev.T_out);
+    const mz = zs.reduce((s, v) => s + v, 0) / n;
+    return zs.reduce((s, v) => s + (v - mz) ** 2, 0);
+  }
+
+  // Grid search on log-spaced τ, then golden-section refinement
+  const logLo = Math.log(0.5), logHi = Math.log(100);
+  const GRID_N = 200;
+  let bestRss = Infinity, bestTau = 5;
+  for (let k = 0; k <= GRID_N; k++) {
+    const tau = Math.exp(logLo + (logHi - logLo) * k / GRID_N);
+    const r = rss(tau);
+    if (r < bestRss) { bestRss = r; bestTau = tau; }
+  }
+  const step = Math.exp((logHi - logLo) / GRID_N);
+  const tau_hat = goldenSectionMin(rss, Math.max(0.1, bestTau / step), bestTau * step);
+
+  // R² relative to y_i
+  const A_hat = events.reduce((s, ev) => s + ev.y + mi(tau_hat, ev) * ev.T_out, 0) / n;
+  const my = events.reduce((s, ev) => s + ev.y, 0) / n;
+  let ss_res = 0, ss_tot = 0;
+  for (const ev of events) {
+    ss_res += (ev.y - (A_hat - mi(tau_hat, ev) * ev.T_out)) ** 2;
+    ss_tot += (ev.y - my) ** 2;
+  }
+  const r2 = ss_tot > 1e-12 ? 1 - ss_res / ss_tot : 0;
+  const sigma2 = ss_res / Math.max(n - 2, 1);
+
+  // SE(τ) from numerical Hessian of RSS at τ_hat (profile-likelihood approach)
+  const delta = tau_hat * 0.01;
+  const curvature = (rss(tau_hat + delta) - 2 * rss(tau_hat) + rss(tau_hat - delta))
+                    / (delta * delta);
+  const se_tau = curvature > 1e-12 ? Math.sqrt(sigma2) / Math.sqrt(curvature / 2) : Infinity;
+  const relative_se = se_tau / tau_hat;
+  const ci95 = [Math.max(0.1, tau_hat - 1.96 * se_tau), tau_hat + 1.96 * se_tau];
+
+  return { tau: tau_hat, r2, relative_se, ci95, n };
+}
+```
+
+---
+
+### Step 7 — Step 2b: Method B — `computeMaxLoad`, `collectRecoveryEvents`, `fitTauMethodB` (`js/thermal-character.js`)
+
+**`computeMaxLoad(thermalDelivered, heating)`:**
+```javascript
+function computeMaxLoad(thermalDelivered, heating) {
+  const all = thermalDelivered.filter((v, i) => v !== null && !heating[i].is_absence);
+  if (!all.length) return null;
+  const p95 = percentile(all, TC_CONFIG.PCTILE_UPPER_TAIL);
+  const tail = all.filter(v => v > p95);
+  return tail.length ? halfSampleMode(tail) : null;
+}
+```
+
+**`collectRecoveryEvents(heating, external, thermalDelivered, internalGains, htcUsed, operativeSetpoint)`:**
+
+Scans for sustained ceiling runs preceded by a long cool-down, pins T_start at equilibrium, and
+computes C_event from the energy balance. Returns `{events: number[], heat_system_capacity_kw}`.
+
+```javascript
+function collectRecoveryEvents(heating, external, thermalDelivered, internalGains,
+                                htcUsed, operativeSetpoint) {
+  const maxLoad = computeMaxLoad(thermalDelivered, heating);
+  if (maxLoad === null || maxLoad <= 0) return { events: [], heat_system_capacity_kw: null };
+  const ceiling               = TC_CONFIG.CEILING_FACTOR * maxLoad;
+  const heat_system_capacity_kw = maxLoad * 2;   // kWh/HH → kW
+
+  const n = heating.length;
+  const events = [];
+  let i = 0;
+
+  while (i < n) {
+    if (thermalDelivered[i] === null || thermalDelivered[i] < ceiling) { i++; continue; }
+    const ceilStart = i;
+    while (i < n && thermalDelivered[i] !== null && thermalDelivered[i] >= ceiling) i++;
+    const ceilEnd = i;
+    if (ceilEnd - ceilStart < TC_CONFIG.SUSTAINED_MIN_HH) continue;
+
+    // Preceding cool-down must be ≥ MIN_COOLDOWN_HH of low thermal
+    const coolStart = Math.max(0, ceilStart - TC_CONFIG.METHOD_B_MIN_COOLDOWN_HH);
+    if (ceilStart - coolStart < TC_CONFIG.METHOD_B_MIN_COOLDOWN_HH) continue;
+    const allLow = Array.from({ length: ceilStart - coolStart }, (_, k) => coolStart + k)
+      .every(j => thermalDelivered[j] === null
+                  || thermalDelivered[j] < ceiling * 0.5);
+    if (!allLow) continue;
+
+    // T_start: equilibrium from last 4 HH of cool-down
+    const anchorStart = Math.max(coolStart, ceilStart - 4);
+    let tSum = 0, tCount = 0, gSum = 0;
+    for (let j = anchorStart; j < ceilStart; j++) {
+      const tc = external[j]?.temp_c;
+      if (tc !== null && tc !== undefined) { tSum += tc; tCount++; }
+      gSum += (internalGains[j] ?? 0) * 0.5 / 1000;  // W × 0.5h / 1000 = kWh
+    }
+    if (tCount === 0) continue;
+    const T_eq_out = tSum / tCount;
+    const G_mean_w = (gSum / Math.max(tCount, 1)) * 2000;  // kWh back to W (for T_start)
+    // T_start = T_out_eq + G_w / htc_w_per_k  (equilibrium: G = htc × (T_in - T_out))
+    const T_start = T_eq_out + G_mean_w / (htcUsed * 1000);   // htcUsed in W/K
+    // Note: htcUsed field is in W/K; divide by 1000 converts G_mean_w from W to match.
+    // More precisely: T_in_eq = T_out + G[W] / htc[W/K] — no extra factor needed.
+    // Corrected: T_start = T_eq_out + G_mean_w / htcUsed  (W / (W/K) = K)
+    const T_start_corrected = T_eq_out + G_mean_w / htcUsed;
+
+    if (T_start_corrected >= operativeSetpoint) continue;
+
+    // Energy balance over ceiling run
+    let E_del = 0, E_gains = 0, tRunSum = 0, tRunCount = 0;
+    for (let j = ceilStart; j < ceilEnd; j++) {
+      E_del   += thermalDelivered[j] ?? 0;
+      E_gains += (internalGains[j] ?? 0) * 0.5 / 1000;
+      const tc = external[j]?.temp_c;
+      if (tc !== null && tc !== undefined) { tRunSum += tc; tRunCount++; }
+    }
+    const T_out_run = tRunCount > 0 ? tRunSum / tRunCount : T_eq_out;
+    const t_h = (ceilEnd - ceilStart) * 0.5;
+    const T_mean_during = (T_start_corrected + operativeSetpoint) / 2;
+    const E_loss = htcUsed * (T_mean_during - T_out_run) * t_h / 1000;
+    const deltaT = operativeSetpoint - T_start_corrected;
+    const C_event = ((E_del + E_gains - E_loss) * 3600) / deltaT;  // kWh × 3600 / K = kJ/K
+    if (C_event > 0) events.push(C_event);
+  }
+  return { events, heat_system_capacity_kw };
+}
+```
+
+**`fitTauMethodB(events, htcUsed)`:**
+```javascript
+function fitTauMethodB(events, htcUsed) {
+  if (events.length < TC_CONFIG.MIN_EVENTS_METHOD_B) return null;
+  const C_mode = halfSampleMode(events);
+  if (C_mode === null || C_mode <= 0) return null;
+  const tau_hat = C_mode / (3.6 * htcUsed);
+
+  // Bootstrap CI on τ (resample C_events, recompute mode, derive τ)
+  const bootTaus = [];
+  for (let b = 0; b < TC_CONFIG.BOOTSTRAP_ITER; b++) {
+    const sample = sampleWithReplacement(events);
+    const C_b = halfSampleMode(sample);
+    if (C_b !== null && C_b > 0) bootTaus.push(C_b / (3.6 * htcUsed));
+  }
+  bootTaus.sort((a, b) => a - b);
+  const ci_lo = percentile(bootTaus, 2.5) ?? tau_hat * 0.5;
+  const ci_hi = percentile(bootTaus, 97.5) ?? tau_hat * 1.5;
+  const se_boot = (ci_hi - ci_lo) / (2 * 1.96);
+  const relative_se = se_boot > 0 ? se_boot / tau_hat : Infinity;
+
+  return { tau: tau_hat, relative_se, ci95: [ci_lo, ci_hi], n: events.length };
+}
+```
+
+---
+
+### Step 8 — Step 2c: `selectTau` — confidence selection (`js/thermal-character.js`)
+
+Both estimators convert to relative SE on τ, then apply the three-way logic (§2.5.3 Selection).
+
+```javascript
+function selectTau(fitA, fitB) {
+  const fireA = fitA !== null && isFinite(fitA.relative_se)
+             && fitA.relative_se <= TC_CONFIG.FIRE_THRESHOLD_SE;
+  const fireB = fitB !== null && isFinite(fitB.relative_se)
+             && fitB.relative_se <= TC_CONFIG.FIRE_THRESHOLD_SE;
+
+  if (fireA && fireB) {
+    const seA = fitA.tau * fitA.relative_se;
+    const seB = fitB.tau * fitB.relative_se;
+    const overlap = Math.abs(fitA.tau - fitB.tau) < 1.96 * (seA + seB);
+    if (overlap) {
+      // Inverse-variance-weighted combine
+      const wA = 1 / (seA * seA), wB = 1 / (seB * seB);
+      const tau_c = (fitA.tau * wA + fitB.tau * wB) / (wA + wB);
+      const se_c  = 1 / Math.sqrt(wA + wB);
+      const rel_c = se_c / tau_c;
+      return {
+        tau: tau_c, relative_se: rel_c,
+        ci95: [Math.max(0.1, tau_c - 1.96 * se_c), tau_c + 1.96 * se_c],
+        method: 'combined', disagree: false,
+      };
+    }
+    // Both fire but CIs don't overlap — fall to dropdown
+    return { tau: null, relative_se: null, ci95: null, method: null, disagree: true };
+  }
+  if (fireA) return { tau: fitA.tau, relative_se: fitA.relative_se, ci95: fitA.ci95, method: 'reheat_regression', disagree: false };
+  if (fireB) return { tau: fitB.tau, relative_se: fitB.relative_se, ci95: fitB.ci95, method: 'recovery_events', disagree: false };
+  return { tau: null, relative_se: null, ci95: null, method: null, disagree: false };
+}
+```
+
+---
+
+### Step 9 — Step 3: `resolveEffectiveC` — dropdown-wins inversion (`js/thermal-character.js`)
+
+```javascript
+function resolveEffectiveC(selected, htcUsed, tauBucket) {
+  if (tauBucket && TAU_BUCKET_HOURS_MAP[tauBucket] !== undefined) {
+    const tau_user = TAU_BUCKET_HOURS_MAP[tauBucket];
+    return {
+      thermal_mass_kj_per_k: tau_user * htcUsed * 3.6,
+      thermal_mass_source: 'user_tau',
+      thermal_mass_method: null,
+    };
+  }
+  if (selected.tau !== null) {
+    return {
+      thermal_mass_kj_per_k: 3.6 * htcUsed * selected.tau,
+      thermal_mass_source: 'measured',
+      thermal_mass_method: selected.method,
+    };
+  }
+  return { thermal_mass_kj_per_k: null, thermal_mass_source: null, thermal_mass_method: null };
+}
+```
+
+---
+
+### Step 10 — Step 4: rating + time constant + tau-bucket pair (`js/thermal-character.js`)
+
+Reproduced from v1 `computeRatingAndTimeConstant` — now uses `htcUsed` (not `htc_w_per_k`).
+The TAU_HIGH/LOW_WARN checks (v1 lines 453–460) are dropped — they had no design-doc basis in v2.
+
+```javascript
+function computeRatingAndTimeConstant(C, htcUsed) {
+  if (C === null || htcUsed === null) return { time_constant_hours: null, thermal_mass_rating: null };
+  const time_constant_hours = C / (htcUsed * 3.6);
+  let thermal_mass_rating;
+  if      (C < TC_CONFIG.MASS_RATING_MEDIUM_KJ)    thermal_mass_rating = 'low';
+  else if (C < TC_CONFIG.MASS_RATING_HIGH_KJ)      thermal_mass_rating = 'medium';
+  else if (C < TC_CONFIG.MASS_RATING_VERY_HIGH_KJ) thermal_mass_rating = 'high';
+  else                                              thermal_mass_rating = 'very_high';
+  return { time_constant_hours, thermal_mass_rating };
+}
+
+function buildTauBucketPair(dataTau, tauBucket) {
+  // tau_bucket (bare) — nearest bucket to data-derived τ
+  let tau_bucket = null;
+  if (dataTau !== null) {
+    let best = null, bestDiff = Infinity;
+    for (const [bucket, h] of Object.entries(TAU_BUCKET_HOURS_MAP)) {
+      const diff = Math.abs(dataTau - h);
+      if (diff < bestDiff) { bestDiff = diff; best = bucket; }
+    }
+    tau_bucket = best;
+  }
+  // tau_bucket_used (effective) — user dropdown when set, else data-derived, else null
+  const tau_bucket_used = (tauBucket && TAU_BUCKET_HOURS_MAP[tauBucket] !== undefined)
+    ? tauBucket : tau_bucket;
+  return { tau_bucket, tau_bucket_used };
+}
+```
+
+---
+
+### Step 11 — Step 5: `computeValidationStatus` — CI-banded (`js/thermal-character.js`)
+
+```javascript
+function computeValidationStatus(C, source, relative_se) {
+  if (C === null) return 'insufficient_data';
+  if (source === 'user_tau') return 'acceptable';
+  if (relative_se !== null && isFinite(relative_se)
+      && relative_se <= TC_CONFIG.GOOD_SE_THRESHOLD) return 'good';
   return 'acceptable';
 }
 ```
 
-Note: `thermal_mass_source` is no longer a parameter. `eventsUsed` is the count from
-Path A (0 for fallback/user_selection cases) — so 'good' requires both strong setpoint
-evidence AND strong thermal-mass evidence regardless of how the mass was obtained.
+---
 
-### Step 6 — thermal-character.js: Revise main function `estimateThermalCharacter()`
+### Step 12 — Main export: `estimateThermalCharacter` (`js/thermal-character.js`)
 
-**Signature change:**
-```js
-export function estimateThermalCharacter(heating, external, heatLoss, baseloadMethod, tauBucket)
-```
-Remove `wallConstructionType` (was param 5) and `tAtRestartWinterC` (was param 6).
-`tauBucket` remains as param 5 (now takes v2 enum values: `'low'|'medium'|'high'|'very_high'|null`).
+New signature replaces the v1 signature entirely.
 
-**Remove from function body:**
-- The `tAtRestartWinterC` range-gate validation block (including `validatedTAtRestart`,
-  `inputWarnings` around t_at_restart plausibility, and the setpoint-comparison gate).
-- The Path B block (`if (thermal_mass_source === null && tauBucket && htc !== null)`).
-- The `path_b_kj_per_k` / `path_b_tau_h` capture.
-- The v1 Step 4c warning block references to `long_event_discarded_for_missing_user_temp`
-  and the `tauBucket` "providing indoor temp would unlock additional events" prompt.
-- The `checkWallConstruction()` call.
-- The `checkTauBucketSanity()` call.
+**Old:** `(heating, external, heatLoss, baseloadMethod, wallConstructionType, tAtRestartWinterC, tauBucket)`
+**New:** `(heating, external, heatLoss, supplementaryLoads, baseloadMetadata, operativeSetpoint, householdSize, tauBucket)`
 
-**Restructure Step 4 as follows:**
+```javascript
+export function estimateThermalCharacter(
+  heating,                    // m3 heating[] — is_absence, nonheat_residual_kwh per HH
+  external,                   // m2 external[] — temp_c, solar_w_m2 per HH
+  heatLoss,                   // m4 result — htc_used, solar_aperture, thermal_heat_delivered_kwh[]
+  supplementaryLoads,         // m3 supplementary_loads — electricity_baseload (kWh/HH scalar)
+  baseloadMetadata,           // m3 baseload_metadata — baseload_median_kwh_per_day
+  operativeSetpoint = 20,     // UI — default 20°C (D2 bootstrap)
+  householdSize = 1,          // UI — integer
+  tauBucket = null,           // UI — §8b dropdown or null
+) {
+  const htcUsed = heatLoss?.htc_used ?? null;
+  if (htcUsed === null) return nullResult('no_htc');
 
-```js
-// Step 4a — Run Path A (short-event only); always runs when setpoint_c is non-null
-// Off-period detection runs regardless (for any_off_period_found flag)
-const pathAResult = runPathAShortEvent(
-  heating, external, htc, eta,
-  setpoint_c   // null-safe: function still scans for off periods even if setpoint null
-);
-const { data_derived_tau_h, events_used: thermal_mass_events_used,
-        any_off_period_found } = pathAResult;
+  const thermalDelivered = heatLoss?.thermal_heat_delivered_kwh ?? [];
+  const solarAperture    = heatLoss?.solar_aperture ?? null;
+  const warnings         = [];
 
-// Step 4b — Bucket mapping
-const tau_dropdown_default_bucket = mapTauToBucket(data_derived_tau_h);
+  // Step 1 — Heating frequency (source-blind rename of occupancy_weights)
+  const { heating_frequency_by_hh, warning: hfWarn } =
+    computeHeatingFrequencyByHh(heating, thermalDelivered);
+  if (hfWarn) warnings.push(hfWarn);
 
-// Step 4c — Effective bucket resolution (user > data_default > fallback)
-let effective_bucket, thermal_mass_source;
-if (tauBucket !== null && tauBucket !== undefined && TAU_BUCKET_HOURS_MAP[tauBucket] !== undefined) {
-  effective_bucket     = tauBucket;
-  thermal_mass_source  = 'user_selection';
-} else if (tau_dropdown_default_bucket !== null) {
-  effective_bucket     = tau_dropdown_default_bucket;
-  thermal_mass_source  = 'data_default';
-} else {
-  effective_bucket     = FALLBACK_BUCKET;
-  thermal_mass_source  = 'fallback';
-}
-
-// Derive thermal_mass_kj_per_k from effective bucket
-let thermal_mass_kj_per_k = null;
-if (htc !== null) {
-  const tau_h = TAU_BUCKET_HOURS_MAP[effective_bucket];
-  thermal_mass_kj_per_k = tau_h * htc * 3.6;
-} else {
-  // htc null → Step 0 passthrough would have caught this; guard for safety
-  thermal_mass_source = null;
-}
-
-// Step 4d — Divergence ratio (for informational callout)
-let tau_data_user_divergence_ratio = null;
-if (thermal_mass_source === 'user_selection' && data_derived_tau_h !== null) {
-  const selected_tau_h = TAU_BUCKET_HOURS_MAP[effective_bucket];
-  tau_data_user_divergence_ratio = selected_tau_h / data_derived_tau_h;
-}
-
-// Step 4e — Failure-path warnings (revised)
-const stepCWarnings = [];
-if (thermal_mass_source === 'fallback') {
-  if (!any_off_period_found) {
-    stepCWarnings.push(
-      'Heating appears to run continuously overnight — not enough cold-soak data '
-      + 'to estimate thermal mass from your usage pattern. Using a typical UK-home '
-      + 'default. Update the dropdown below if you know your home holds its warmth differently.'
-    );
-  } else {
-    stepCWarnings.push(
-      'Not enough overnight cold-soak events to estimate thermal mass from your data. '
-      + 'Using a typical UK-home default. Update the dropdown below if you know your '
-      + 'home holds its warmth differently.'
-    );
-  }
-}
-if (thermal_mass_source === 'data_default') {
-  // Soft note; included in warnings for UI to optionally surface as tooltip
-  stepCWarnings.push(
-    'Thermal mass estimated from cool-down patterns in your heating data. Adjust the '
-    + 'dropdown below if you\'d describe your home differently.'
+  // Step 1b — Gains assembly (m5-owned → m7)
+  const internal_gains_w = assembleGains(
+    heating, external, supplementaryLoads, baseloadMetadata, solarAperture, householdSize
   );
-}
-if (thermal_mass_source === 'user_selection' && tau_data_user_divergence_ratio !== null) {
-  if (tau_data_user_divergence_ratio > TC_CONFIG.TAU_SANITY_HIGH_RATIO
-      || tau_data_user_divergence_ratio < TC_CONFIG.TAU_SANITY_LOW_RATIO) {
-    const data_tau_h = data_derived_tau_h;
-    const sel_tau_h  = TAU_BUCKET_HOURS_MAP[effective_bucket];
-    stepCWarnings.push(
-      `Your data suggests a thermal time constant of ~${data_tau_h.toFixed(0)}h; `
-      + `you've selected ~${sel_tau_h}h. Using your selection.`
-    );
+
+  // Step 2 — Path A: two independent estimators of τ
+  const morningEvents = collectMorningEvents(
+    heating, external, thermalDelivered, htcUsed, operativeSetpoint
+  );
+  const fitA = fitTauMethodA(morningEvents, htcUsed);
+
+  const { events: recovEvents, heat_system_capacity_kw } = collectRecoveryEvents(
+    heating, external, thermalDelivered, internal_gains_w, htcUsed, operativeSetpoint
+  );
+  const fitB = fitTauMethodB(recovEvents, htcUsed);
+
+  const selected = selectTau(fitA, fitB);
+
+  // Step 3 — Effective C: user dropdown wins
+  const { thermal_mass_kj_per_k, thermal_mass_source, thermal_mass_method } =
+    resolveEffectiveC(selected, htcUsed, tauBucket);
+
+  // Step 4 — Rating + time constant + tau-bucket pair
+  const { time_constant_hours, thermal_mass_rating } =
+    computeRatingAndTimeConstant(thermal_mass_kj_per_k, htcUsed);
+  const data_derived_tau_h = selected.tau ?? null;
+  const { tau_bucket, tau_bucket_used } = buildTauBucketPair(data_derived_tau_h, tauBucket);
+
+  // Step 5 — Validation status (CI-banded from winning estimator)
+  const validation_status = computeValidationStatus(
+    thermal_mass_kj_per_k, thermal_mass_source, selected.relative_se
+  );
+
+  const thermal_mass_fit = (thermal_mass_source === 'measured' && selected.relative_se !== null)
+    ? { relative_se: selected.relative_se, ci95: selected.ci95 } : null;
+
+  // Failure-path warnings (no auto-'medium')
+  if (thermal_mass_kj_per_k === null) {
+    if (selected.disagree) {
+      warnings.push('Two estimators of thermal mass gave conflicting results — using your warmth-retention description (if set) or awaiting your input.');
+    } else if (morningEvents.length >= TC_CONFIG.METHOD_A_MIN_EVENTS) {
+      warnings.push('Not enough deep cool-down events to read your home\'s thermal mass. Describe how your home holds warmth (below) to unlock smart pre-heating.');
+    } else {
+      warnings.push('Your home holds heat too steadily overnight to read its thermal mass from the data. Describe how your home holds warmth (below) to unlock smart pre-heating.');
+    }
   }
+  if (thermal_mass_source === 'user_tau') {
+    warnings.push('Thermal mass estimated from your warmth-retention description (indicative).');
+  }
+
+  return {
+    internal_gains_w,
+    thermal_mass_kj_per_k,
+    time_constant_hours,
+    thermal_mass_rating,
+    heating_frequency_by_hh,
+    tau_bucket,
+    tau_bucket_used,
+    thermal_mass_source,
+    thermal_mass_method,
+    data_derived_tau_h,
+    thermal_mass_fit,
+    heat_system_capacity_kw,
+    validation_status,
+    warnings,
+  };
 }
 ```
 
-**Step 7 — Existing-HP callout passthrough:**
-```js
-const htc_low_plausibility_callout_passthrough =
-  (heatLoss?.htc_low_plausibility_callout === 'all_electric_dual_handed')
-  ? 'all_electric_dual_handed' : null;
+---
+
+### Step 13 — `test-m5-v2.mjs` — 13 test cases
+
+Create at repo root. Uses the same `assert`/pass/fail harness pattern as `test-m3-v2.mjs`.
+All tests use synthetic data; no m4/m3/m2 runtime dependency.
+
+**Synthetic data helpers (local to test file):**
+- `makeHeating(n, opts)` — array of `{timestamp, heating_kwh, is_absence, nonheat_residual_kwh}`
+  where `opts` can override per-slot values.
+- `makeExternal(n, opts)` — array of `{temp_c, solar_w_m2}`.
+- `makeHeatLoss(htcUsed, solarAperture, thermalDelivered)` — m4 result stub:
+  `{htc_used: htcUsed, solar_aperture: solarAperture, thermal_heat_delivered_kwh: thermalDelivered}`.
+- `makeSupplementary(elecBase)` — `{electricity_baseload: elecBase}`.
+- `makeMeta(medianKwhPerDay)` — `{baseload_median_kwh_per_day: medianKwhPerDay}`.
+
+**Timestamp generation:** synthetic timestamps must parse correctly for hour-of-day detection.
+Use ISO format: `'2024-01-15T03:00:00Z'` for slot within pre-dawn window.
+
+**Test cases mapped to §5 criteria:**
+
+| TC | §5 | Description |
+|---|---|---|
+| TC1 | §5.1 | Output has no `setpoint_c`, `setpoint_days_used` keys; no `estimateSetpoint` in module |
+| TC2 | §5.2 | Method A τ-recovery: 40 synthetic morning-reheat events, known τ=16.67h; fitted τ within ±15% |
+| TC3 | §5.3 | Method A G-robust: same as TC2 but y_i shifted by constant G_offset; assert τ unchanged |
+| TC4 | §5.4 | Method B recovery: 8 deep cool-down events, known C=15000 kJ/K; C_mode within ±15% |
+| TC5 | §5.5 | Source-blind: `gas_heating_kwh=0`, recovery on elec thermal; C recovered, `validation_status ≠ 'no_gas'` |
+| TC6 | §5.6 | Continuous-heating → null: never cools, no tauBucket; `C=null`, `status='insufficient_data'` |
+| TC7 | §5.7 | Confidence selection: Method A wins for regular-schedule; Method B wins for irregular; both-agree → 'combined'; both-disagree → null |
+| TC8 | §5.8 | Dropdown overrides: estimator fires AND user sets tauBucket; `source='user_tau'`; data τ in `tau_bucket`/`data_derived_tau_h` |
+| TC9 | §5.9 | `heating_frequency_by_hh`: 48-element array; null if <14 days; weekday-only → high weekday slots |
+| TC10 | §5.10 | `no_gas` never produced: all-electric input → `validation_status ≠ 'no_gas'` |
+| TC11 | §5.11 | Bootstrap D2: operativeSetpoint defaults to 20; C computed; output has no `setpoint_c` field |
+| TC12 | §5.12 | Wall-construction dropped: no wall-construction-mismatch warning; no `wall_construction` parameter |
+| TC13 | §5.13 | Underheat diagnostic relocated: output has no `underheat_status`, `underheat_narrative`, `annual_modelled_demand_kwh` |
+
+**TC2 construction (concrete):**
+
+Build 40 synthetic morning-reheat events with known τ_true = 16.67 h (C=12000 kJ/K, htcUsed=200 W/K).
+For each event i:
+- `T_out_i` ~ uniform(-2, 8)°C
+- `t_off_i` = 8 h (fixed schedule → const t_off simplifies fit)
+- `T_start_i = T_out_i + (20 - T_out_i) × exp(-8 / 16.67)`
+- `E_reheat_i = (C × (20 - T_start_i) / 3600) + htcUsed × max(0, 20 - T_out_i) × t_reheat / 1000`
+  where `t_reheat = 1.5 h` (3 HH)
+- Build synthetic `thermalDelivered[i]` with `E_reheat / 3` per HH in the reheat slots
+- Timestamps: pre-dawn slots (hour=4), off period preceding (hour=21–03), winter T_out
+
+Assert: `|result.data_derived_tau_h - 16.67| / 16.67 < 0.15`.
+
+**TC3 construction:**
+Same as TC2, but add a constant offset to every `y_i` (shift by +100 W for the gains correction
+term). Assert: `|tau_with_offset - tau_without_offset| < 1.0 h`.
+
+**TC4 construction:**
+8 events where house cools from 20°C to T_start (via absence overnight), then fires at max_load
+for ≥3 HH. Known C = 15000 kJ/K, htcUsed = 180 W/K. Vary T_out across events for realism.
+Assert: `|C_mode - 15000| / 15000 < 0.15`, `result.thermal_mass_method = 'recovery_events'`.
+
+---
+
+### Step 14 — `js/scenario-consumption.js`: update thermalChar reads
+
+**Step 14a — Add `operativeSetpoint` parameter; replace `setpoint_c` reads:**
+
+Update `estimateScenarioConsumption` signature to add `operativeSetpoint = 20`.
+
+Replace ALL four reads of `thermalChar?.setpoint_c` / `thermalCharacter?.setpoint_c`:
+
+| Location | Old | New |
+|---|---|---|
+| `simulatePostHocTIndoor` null-guard | `thermalChar?.setpoint_c == null` | Remove this condition (setpoint is always provided via param default) |
+| `simulatePostHocTIndoor` T_init | `thermalCharacter?.setpoint_c ?? 20` | `operativeSetpoint ?? 20` |
+| `simulateCurrentRcTrace` | `const sp = thermalChar?.setpoint_c` | `const sp = operativeSetpoint` |
+| Overshoot check | `thermalCharacter?.setpoint_c` | `operativeSetpoint` |
+
+Also update `simulateCurrentRcTrace`'s `sp == null` guard to remove it (always non-null).
+
+**Flag — `underheat_ratio` / `demandScale`:** `thermalCharacter?.underheat_ratio` removed from m5.
+The existing `ratio != null` guard already makes `demandScale = 1.0` safe. No code change needed
+here — the "Heat to Comfort" slider becomes a no-op until m7-v2 adds the underheat diagnostic.
+
+**Step 14b — Wire `internal_gains_w` into the smart-scenario post-hoc RC trace:**
+
+In `simulatePostHocTIndoor`, replace the inline solar-aperture gain computation with consumption
+of `thermalChar.internal_gains_w[i]`:
+
+```javascript
+// Old (inline solar only):
+const aperture = (heatLoss?.solar_correction_applied && heatLoss?.solar_aperture_m2 != null)
+  ? heatLoss.solar_aperture_m2 : 0;
+// ...in loop:
+const solarGainKwh = aperture * sw * 0.5 / 1000;
+const dT = (q_delivered_per_hh[i] + solarGainKwh - lossKwh) * 3600 / C;
+
+// New (full Q_gains from m5):
+// Remove aperture declaration
+// ...in loop:
+const Q_gains_kwh = (thermalChar?.internal_gains_w?.[i] ?? 0) * 0.5 / 1000;
+const dT = (q_delivered_per_hh[i] + Q_gains_kwh - lossKwh) * 3600 / C;
 ```
 
-**Remove `_path_diagnostics` from the return object.** Replace with the new v2 diagnostic
-fields that are already top-level outputs.
-
-**Updated return object:**
-```js
-return {
-  // Primary outputs (v1 fields)
-  setpoint_c,
-  thermal_mass_kj_per_k,
-  thermal_mass_source,          // v2 enum: 'user_selection'|'data_default'|'fallback'|null
-  time_constant_hours,
-  thermal_mass_rating,
-  occupancy_weights,
-  setpoint_days_used,
-  thermal_mass_events_used,     // count of Path A short events (0 for fallback/data_default if 0 events)
-  validation_status,
-  // NEW v2 outputs
-  data_derived_tau_h,
-  tau_dropdown_default_bucket,
-  tau_data_user_divergence_ratio,
-  htc_low_plausibility_callout_passthrough,
-  // Underheat diagnostic (unchanged)
-  warnings: [...spWarns, ...stepCWarnings, ...(owWarn ? [owWarn] : []), ...tcWarns],
-  modelled_heating_kwh_by_hh: modelledByHh,
-  annual_modelled_demand_kwh:  underheat.annual_modelled_demand_kwh,
-  annual_observed_demand_kwh:  underheat.annual_observed_demand_kwh,
-  underheat_ratio:             underheat.underheat_ratio,
-  underheat_status:            underheat.underheat_status,
-  underheat_narrative:         underheatNarrative,
-};
+In `simulateCurrentRcTrace`, update `solar_aperture_m2` → `solar_aperture` (m4-v2 field rename):
+```javascript
+// Old: heatLoss.solar_aperture_m2
+// New: heatLoss.solar_aperture
 ```
 
-**Removed from return:** `long_event_discarded_for_missing_user_temp`, `_path_diagnostics`.
+**Flag — m7-v2 dependency:** `simulateCurrentRcTrace` (the boiler-scenario trace) retains its
+inline solar-gain computation until m7-v2 lands. The field rename above is the only change there.
 
-**Update `computeValidationStatus()` call** (Step 5 function):
-```js
-const validation_status = computeValidationStatus(
-  setpoint_c, thermal_mass_kj_per_k, setpoint_days_used, thermal_mass_events_used
-);
-```
-(Remove `thermal_mass_source` parameter that was previously passed.)
+---
 
-**Update `nullResult` inner function** to include the new output fields with appropriate
-null/fallback defaults, and remove `long_event_discarded_for_missing_user_temp`.
+### Step 15 — `js/app.js`: call site + display
 
-### Step 7 — index.html: Remove deleted inputs; rename tau-bucket options
+**Gated on m4-v2 `Status: Implemented`.** Once m4-v2 lands, apply these changes.
 
-In the `thermal-char-card` section:
+**Call site update (`runThermalCharacter` function):**
 
-**Delete the entire `#t-at-restart` form-group** (label + input + form-hint paragraph).
-
-**Delete the entire `#wall-construction` form-group** from the heat-loss card (it is in the heat-loss section, not thermal-char). The `#wall-construction` select is inside the heat-loss card, NOT the thermal-char card — remove it there.
-
-**Update intro text** in `#thermal-char-inputs` — the current copy refers to both optional
-inputs. Replace with copy appropriate for v2 (dropdown-only card):
-```html
-<p class="card-intro">
-  The dropdown below helps when your boiler runs continuously overnight, preventing the
-  data-driven estimate. Leave it on the default if you're unsure — you can refine it
-  later.
-</p>
+Remove:
+```javascript
+const wallConstruction = wallConstructionInput.value || null;
+const tAtRestartRaw    = tAtRestartInput.value.trim();
+let tAtRestart = null; if (tAtRestartRaw !== '') { ... }
 ```
 
-**Rename `#tau-bucket` option values** (user-facing labels unchanged):
-```html
-<select id="tau-bucket">
-  <option value="">Don't know</option>
-  <option value="low">Cools noticeably within a few hours</option>
-  <option value="medium">Stays warm into the evening, cooler by morning</option>
-  <option value="high">Holds its warmth for most of a day</option>
-  <option value="very_high">Stays warm for days — takes ages to cool</option>
-</select>
+Add:
+```javascript
+const operativeSetpoint = parseFloat(setpointInput?.value) || 20;
+const householdSize     = parseInt(householdSizeInput?.value, 10) || 1;
 ```
 
-### Step 8 — js/app.js: Update call site, DOM refs, display, diagnostic getter
-
-**a. Remove DOM constant declarations:**
-```js
-// DELETE these two lines:
-const wallConstructionInput = document.getElementById('wall-construction');
-const tAtRestartInput       = document.getElementById('t-at-restart');
-```
-
-**b. Update `runThermalChar()` (or equivalent function around line 1378):**
-Remove the `wallConstruction` and `tAtRestart` local variable declarations and the
-`tAtRestartInput.value` parsing block. The `estimateThermalCharacter()` call becomes:
-```js
+New call:
+```javascript
 result = estimateThermalCharacter(
   baseloadResult.heating,
   externalResult.external,
   heatLossResult,
-  baseloadResult.baseload_metadata.method,
+  baseloadResult.supplementary_loads,
+  baseloadResult.baseload_metadata,
+  operativeSetpoint,
+  householdSize,
   tauBucket,
 );
 ```
 
-**c. Update `displayThermalCharacterResults()` (around line 1320–1360):**
-
-Remove the v1 `thermal_mass_source === 'no_data'` check (was checking for a v1 source
-value that never existed as a string; dead code in v1 too).
-
-Update the `thermal_mass_source` label map to v2 enum values:
-```js
-const sourceLabel = ({
-  user_selection: 'From your description',
-  data_default:   'Estimated from your heating data',
-  fallback:       'UK typical default',
-})[result.thermal_mass_source] ?? result.thermal_mass_source;
-rows.push(['Thermal mass source', sourceLabel]);
+Pass `operativeSetpoint` to `runScenarioConsumption` so m7 receives it:
+```javascript
+// Add to the estimateScenarioConsumption call in runScenarioConsumption:
+operativeSetpoint,
 ```
 
-Add display of the informational callout when `tau_data_user_divergence_ratio` triggers
-the condition (ratio > 2.0 or < 0.5) — surface the relevant warning string from
-`result.warnings` as a `status-msg info` div below the summary DL. (The warning string
-is already built by the module; just conditionally add a div containing the matching
-warning text.)
+**`displayThermalCharacterResults` update:**
+- Remove `result.setpoint_c` display row (~line 1334–1336).
+- Remove the `no_gas` status branch (~lines 1310–1316).
+- Rename `result.occupancy_weights` → `result.heating_frequency_by_hh`; update label to "Heating
+  pattern" (was "Occupancy model").
+- Update `thermal_mass_source` label map:
+  - Replace `measured_cold_soak: 'Measured from your heating data'` → `measured: 'Measured from your heating data'`
+  - Drop `user_tau` rename (label already says 'Estimated from your description', keep as-is)
 
-**d. Update Bug B3 notice handler (around line 2006–2016):**
-
-The B3 handler currently focuses `#tau-bucket` or `#t-at-restart`. Remove all references
-to `#t-at-restart`. The handler should focus only `#tau-bucket`:
-```js
-const tauBucketEl = document.getElementById('tau-bucket');
-if (tauBucketEl && tauBucketEl.value === '') {
-  tauBucketEl.focus();
-  tauBucketEl.classList.add('highlight-flash');
-}
-```
-
-**e. Update `__getThermalDiagnostics()` (around line 3331–3348):**
-
-Replace the `_path_diagnostics` read with the v2 top-level fields:
-```js
-window.__getThermalDiagnostics = () => {
-  const tc = getThermalCharacterResult();
-  if (!tc) return { available: false };
-  return {
-    available:                     true,
-    thermal_mass_source:           tc.thermal_mass_source,
-    selected_kj_per_k:             tc.thermal_mass_kj_per_k,
-    selected_tau_h:                tc.time_constant_hours,
-    data_derived_tau_h:            tc.data_derived_tau_h,
-    tau_dropdown_default_bucket:   tc.tau_dropdown_default_bucket,
-    tau_data_user_divergence_ratio: tc.tau_data_user_divergence_ratio,
-    events_used:                   tc.thermal_mass_events_used,
-  };
-};
-```
-
-### Step 9 — test-m5.mjs: Update + add v2 tests
-
-**Add import for `mapTauToBucket`:**
-```js
-import { estimateThermalCharacter, mapTauToBucket } from './js/thermal-character.js';
-```
-
-**Update existing call signatures** — remove the `wallConstruction` positional parameter
-(was 5th, now absent). All existing calls that had `(..., 'gas', null)` where `null` was
-wallConstruction now remain `(..., 'gas', null)` where `null` is `tauBucket`. This is a
-no-op — the parameter just shifts. Calls that explicitly pass wallConstruction type need
-removing that argument.
-
-Specifically:
-- T1, T2, T3, T5, T6, T9, X1–X5: Call `(..., 'gas', null)` — no change in text, correct
-  by coincidence (5th param was null wallConstruction in v1, now null tauBucket in v2).
-- T4 (line 148): same — no change needed in text.
-
-**Update T7 assertions** (`T7a`, `T7c`):
-- `T7a`: Change `thermal_mass_kj_per_k === null` → `thermal_mass_source === 'fallback'`
-  (3 events → data_derived_tau_h null → fallback; mass is non-null via 'medium' default).
-- `T7c`: Update warning text match — v2 uses "Not enough overnight cold-soak events…
-  Using a typical UK-home default." (instead of "Not enough overnight cold-soak events
-  to estimate thermal mass. Either more winter data is needed, or you can describe how
-  your home holds its warmth…"). Change to match the v2 warning copy that includes
-  "Using a typical UK-home default."
-
-**Update T8 assertions** (`T8a`, `T8b`):
-- `T8a`: Change `thermal_mass_kj_per_k === null` → `thermal_mass_source === 'fallback'`.
-- `T8b`: Warning text match — v2 uses "Heating appears to run continuously overnight …
-  Using a typical UK-home default." Update assertion to match the longer v2 copy (check
-  for `'continuously overnight'` which still appears in the v2 text, so this may pass
-  without change — verify the exact match).
-
-**Delete T10** in its entirety (wall construction mismatch; feature removed).
-
-**Add v2-specific tests T_V2_1 through T_V2_14** per design doc §7:
-
-```
-T_V2_1 — Long-event branch removal regression
-  Setup: synthetic off period > 24h spanning is_absence days (what v1 would classify
-  as a long event). Confirm v2 silently discards it (events_used = 0 or unchanged by
-  the long event). Assert: result produced without error; long event does NOT contribute
-  to events_used.
-
-T_V2_2 — wall_construction_type input removal regression
-  Assert estimateThermalCharacter does NOT have 7 parameters (only 5). Call with 5
-  params and verify no "thermal mass … lower/higher … than typical" warning in output.
-
-T_V2_3 — Bucket enum rename regression
-  Call with tauBucket = 'low' → assert result.thermal_mass_kj_per_k non-null (valid).
-  Call with tauBucket = 'fast' → assert source is NOT 'user_selection' (old enum not
-  accepted; falls through to data_default or fallback).
-  Assert result.tau_dropdown_default_bucket (when non-null) uses new enum values.
-
-T_V2_4 — Path A short-event → data-derived tau
-  Uses T4 setup (HTC=250, η=0.9, target C=9000, 15 valid events). Expected:
-  - data_derived_tau_h ≈ 8.88h within ±15% (i.e. in [7.55, 10.21])
-  - tau_dropdown_default_bucket = 'medium' (8.88 in [7, 15))
-  - thermal_mass_source = 'data_default' (no user tauBucket supplied)
-  - thermal_mass_kj_per_k = 10 × 250 × 3.6 = 9000 kJ/K
-
-T_V2_5 — Bucket-mapping boundary tests (direct function test)
-  Call mapTauToBucket() with: 6.99→'low', 7.00→'medium', 14.99→'medium', 15.00→'high',
-  29.99→'high', 30.00→'very_high', 3.00→'low', 50.00→'very_high', null→null.
-
-T_V2_6 — User selection wins over data default
-  Uses T4 setup + tauBucket='very_high'. Expected:
-  - thermal_mass_source = 'user_selection'
-  - thermal_mass_kj_per_k = 40 × 250 × 3.6 = 36000 kJ/K
-  - tau_data_user_divergence_ratio = 40 / data_derived_tau_h (≈40/8.88 ≈ 4.5 > 2.0)
-  - warnings includes "Your data suggests a thermal time constant"
-
-T_V2_7 — Fallback to 'medium' (no off periods, no user selection)
-  480 HH of continuous heating (T8 setup), no tauBucket. Expected:
-  - thermal_mass_source = 'fallback'
-  - thermal_mass_kj_per_k = 10 × htc × 3.6 (= 9000 with htc=250)
-  - data_derived_tau_h = null
-  - tau_dropdown_default_bucket = null
-  - warnings includes 'continuously overnight'
-
-T_V2_8 — Fallback: Rhiannon's runtime case
-  T4 setup with only 4 events (events_used < 5), no tauBucket. Expected:
-  - data_derived_tau_h = null (events_used = 4 < 5)
-  - thermal_mass_source = 'fallback'
-  - thermal_mass_kj_per_k = 10 × 250 × 3.6 = 9000 kJ/K
-
-T_V2_9 — Divergence ratio: exact boundary (strict > 2.0)
-  data_derived_tau_h = 5, user selects tauBucket='medium' (τ=10h) → ratio=2.0 exactly.
-  Assert: warning about "data suggests a thermal time constant" NOT present (strict >).
-  Then data_derived_tau_h = 4.99 (construct setup that approximates this), user selects
-  'medium' → ratio ≈ 2.004 > 2.0. Assert: callout fires.
-  [Implementation note: exact tau values cannot be directly injected; use T_V2_9 to
-  test the mapping function output and the strict-boundary logic in isolation by checking
-  that ratio=2.0 does not fire.]
-
-T_V2_10 — Informational callout copy
-  T_V2_6 setup (user selects 'very_high', data≈8.88h, ratio≈4.5 > 2.0). Assert warning
-  text matches: "Your data suggests a thermal time constant of ~Xh; you've selected ~Yh.
-  Using your selection." — specifically contains "Using your selection."
-
-T_V2_11 — Existing-HP callout passthrough
-  Pass heatLoss = { htc_w_per_k: 250, boiler_efficiency_used: 0.9,
-                    htc_low_plausibility_callout: 'all_electric_dual_handed' }
-  Assert: result.htc_low_plausibility_callout_passthrough === 'all_electric_dual_handed'.
-  Pass same with htc_low_plausibility_callout = 'gas_only'.
-  Assert: passthrough = null.
-  Pass same with htc_low_plausibility_callout = null.
-  Assert: passthrough = null.
-
-T_V2_12 — thermal_mass_source enum migration
-  Run three scenarios (user selection, data default, fallback) and assert source is in
-  {'user_selection', 'data_default', 'fallback', null}. Assert source is never
-  'measured_cold_soak' or 'user_tau'.
-
-T_V2_13 — validation_status evidence-based gating
-  Setup with ≥15 short events (strong Path A data), setpoint_days_used ≥50, no user
-  bucket. Assert validation_status = 'good' AND thermal_mass_source = 'data_default'
-  (evidence-based gating is orthogonal to user engagement).
-  Same setup with setpoint_days_used=30. Assert 'acceptable'.
-
-T_V2_14 — thermal_mass non-null invariant
-  Test all combinations of {Path A succeeds / fails} × {user input present / absent}
-  with non-null htc. Assert: thermal_mass_kj_per_k is non-null in every case.
-```
-
-**Update summary assertion** at end of file to reflect new expected pass count.
-
-### Step 10 — test-m5b.mjs: Delete and update tests
-
-**Add import for mapTauToBucket** (if used in any test — not needed in m5b, skip).
-
-**Delete helper function `makeLongEventData()`** at the top of the file — only used by
-T11, T12, T20a, T20b, T20c (all deleted).
-
-**Delete test blocks:** T11, T12, T20a, T20b, T20c.
-
-**Update call signatures** (remove two positional null params) in all remaining tests.
-Current pattern: `estimateThermalCharacter(h, e, hl, 'gas', null, null, tauBucket)` → 
-v2: `estimateThermalCharacter(h, e, hl, 'gas', tauBucket)`.
-Current pattern: `estimateThermalCharacter(h, e, hl, 'gas', null, null, null)` →
-v2: `estimateThermalCharacter(h, e, hl, 'gas', null)`.
-
-**T13** — Signature update only. `events_used >= 1` assertion unchanged. ✅
-
-**T14** — Signature update only. `events_used === 0` assertion unchanged. ✅
-
-**T14b** — Signature update only. `events_used === 0` assertion unchanged. ✅
-
-**T15** — Signature update + enum rename + assertion updates:
-- Signature: `null, null, 'all_day'` → `'high'`
-- T15a-C: `14400` — unchanged (τ='high'=20h, htc=200, 20×200×3.6=14400). ✅
-- T15a-src: `'user_tau'` → `'user_selection'`
-- T15a-val: `'acceptable'` — still valid (events_used=0, setpoint days < 50). ✅
-- T15b-warn: Update warning text match — v2 does NOT emit a "description of how the home
-  holds" path-B warning for user_selection. Instead the step-4e data_default/fallback
-  warning is emitted. Update: when source='user_selection', no warning from step-4e.
-  Assert the OPPOSITE: no "description of how the home holds" warning (the v1 pathBWarning
-  is deleted). Delete T15b-warn assertion or change to assert no such warning exists.
-- T15b-no-step4c: `'continuously overnight'` warning NOT present for user_selection.
-  Still valid because step-4e only emits that warning for `thermal_mass_source === 'fallback'`. ✅
-
-**T16** — Complete assertion rewrite:
-  v1: Path A supersedes tau_bucket. v2: user wins.
-  - Signature: `null, null, 'fast'` → `'low'`
-  - T16a-src: `'measured_cold_soak'` → `'user_selection'`
-  - T16a-C: Was `[6791, 9189]` (Path A). Now = `4 × 250 × 3.6 = 3600` kJ/K.
-    Change assertion to `result.thermal_mass_kj_per_k === 3600`.
-  - T16b: Old "no Path B warning" — replace with assertion that divergence callout FIRES
-    (data_derived_tau_h≈8.88h, user selected 'low'=4h, ratio=4/8.88≈0.45 < 0.5).
-    Assert: `result.warnings.some(w => w.includes('data suggests a thermal time constant'))`.
-
-**T17** — Signature update + assertion updates:
-  v2: setpoint_c null → Path A not run → data_derived_tau_h null → fallback 'medium'.
-  - Signature: `null, null, null` → `null`
-  - T17a-C: `null` → update to `thermal_mass_source === 'fallback'` (mass is non-null).
-  - T17a-src: `null` → `'fallback'`
-  - T17a-val: `'insufficient_data'` — still valid (setpoint_c null). ✅
-  - T17b: `'continuously overnight'` warning — still fires (no off periods, source=fallback). ✅
-
-**T18** — Signature update + enum rename only:
-  v2: user selects 'very_high' (renamed from 'stays_for_days'). User wins.
-  data_derived_tau_h≈8.88h, selected=40h, ratio=40/8.88≈4.5 > 2.0 → callout fires.
-  - Signature: `null, null, 'stays_for_days'` → `'very_high'`
-  - T18a: Warning includes "data suggests a thermal time constant" — STILL fires with v2
-    informational callout. ✅ (Assertion passes without change to the string check.)
-  - T18b: `thermal_mass_kj_per_k !== null` — STILL valid (user_selection gives 40×250×3.6=36000). ✅
-
-**T19** — Signature update + enum rename only:
-  - Signature: `null, null, 'evening'` → `'medium'`
-  - T19: No "data suggests a thermal time constant" warning. In v2: user selects 'medium'
-    (τ=10h); data_derived_tau_h≈8.88h; ratio=10/8.88≈1.13 — within (0.5, 2.0] → no callout. ✅
-
-**T21a** — Signature update + assertion updates:
-  "Both paths fail" → in v2: no user selection, no data → fallback.
-  - Signature: `null, null, null` → `null`
-  - Assertion: `mass=null && source=null` → update to `source='fallback'` and `mass non-null`.
-
-**T21b** — Signature update + enum rename + source update:
-  - Signature: `null, null, 'all_day'` → `'high'`
-  - Source: `'user_tau'` → `'user_selection'`
-
-**T21c** — Signature update + source update:
-  Path A succeeds (T4 setup, no tau_bucket). In v2: source='data_default'.
-  - Signature: `null, null, null` → `null`
-  - Source: `'measured_cold_soak'` → `'data_default'`
-
-**Update summary assertion** to reflect new pass count (29 − deleted tests + unchanged = ~22, after deletions of T11, T12, T20a, T20b, T20c = 5 deletions → ~24 remaining).
+**Underheat display (`displayUnderheatPanel`, `setupHeatToComfortSlider`):**
+Add a null-guard at entry: `if (!result.underheat_status) return;`. Panel silently hides until
+m7-v2 implements the underheat diagnostic.
 
 ---
 
@@ -657,46 +1062,46 @@ v2: `estimateThermalCharacter(h, e, hl, 'gas', null)`.
 
 | Risk | Mitigation |
 |------|-----------|
-| Path A short-event computation change: removing the long-event pooling changes `allEstimates` — only short events remain. v1 pooled long + short for the percentile filter. | In v2 the percentile filter applies to `lastGoodShortFinal` only. No logic change to short-event path; confirmed by design doc §4.3 "Computation unchanged from v1 §Step 4a short-event branch." |
-| `runPathAShortEvent()` is called regardless of `setpoint_c` being null, but internally needs setpoint_c for the settled-state criterion. | Guard: `if (setpointC == null) { continue; }` within the warm-up scan's settled-state check. Off-period detection still runs; C estimation skips. |
-| `mapTauToBucket` exported — adds to the module's public API. | Acceptable: pure utility function with no side effects. |
-| T15b-warn assertion — v2 does not emit a path-B-style warning for user_selection. The assertion tested for a v1-specific string. | Delete the T15b-warn assertion; replace with assertion that source='user_selection' and no path-B warning is present. |
-| m4-v2 not yet implemented when this plan is approved: `heatLoss.htc_low_plausibility_callout` is undefined. | The passthrough guard `=== 'all_electric_dual_handed'` evaluates `undefined === '...'` as false → null. Safe until m4-v2 lands. |
-| Enum rename breaks any other consumer of `tau_bucket` values from HTML select. | The only consumer of the select's `.value` is `app.js` line ~1389. That value is passed directly to `estimateThermalCharacter()`. The v2 function accepts only new enum values. HTML and JS updated in same commit. |
-| `__getThermalDiagnostics` contract change (removes `path_a.kj_per_k` etc.). | Diagnostic getter is a dev-console tool, not a production contract. Update simultaneously with the module. |
+| m4-v2 not yet implemented; app.js integration blocked | Gate Step 15 on m4-v2 `Status: Implemented`. Steps 1–13 run with synthetic data. |
+| Method A produces no events for continuously-heated homes (Rhiannon's use case) | By design — degenerate → C = null → dropdown. TC6 covers this. |
+| Method A τ-fit degenerate: exp(-t_off/τ) ≈ 1 when t_off ≪ τ, so m_i ≈ 0 → RSS flat → SE = ∞ | `curvature < 1e-12` → `se_tau = Infinity` → `relative_se = Infinity` → `> FIRE_THRESHOLD` → estimator doesn't fire. Correct. |
+| `gas_baseload_w` derived from `baseload_median_kwh_per_day` — not a named m3 edge | Flagged in comment. If m3-v2 later adds a named `gas_baseload` field, update the derivation. |
+| Bootstrap `Math.random()` non-deterministic — Method B CI bounds may vary run-to-run | TC4 asserts only the C_mode (within ±15%), not the CI bounds. Bootstrap noise is expected. |
+| `underheat_ratio` removed → `demandScale = 1.0` → "Heat to Comfort" slider is a no-op | Known interim regression; flagged for m7-v2. No action in this plan. |
+| `solar_aperture_m2` reference in `simulateCurrentRcTrace` after m4-v2 renames to `solar_aperture` | Step 14b updates this reference. |
+| T_start in Method B: `G_mean_w / htcUsed` units — `htcUsed` is W/K; G_mean_w is W → result in K | `W / (W/K) = K` ✓. The unit check is correct: gains in W, HTC in W/K, offset in K. |
+| v1 test suites (test-m5.mjs, test-m5b.mjs) will fail after the signature change | Superseded test files. The new `test-m5-v2.mjs` covers all 13 §5 criteria. Retain the old files for reference; they will fail until explicitly updated (separate task). |
 
 ---
 
 ## Success criteria
 
-- [ ] `node test-m5.mjs` — all tests pass. Expected: prior 39 minus T10 (1 deleted) + 14 new v2 = ~52 assertions (exact count depends on sub-assertions per test).
-- [ ] `node test-m5b.mjs` — all tests pass. Expected: prior 29 minus T11, T12, T20a, T20b, T20c (9 assertions) + updated T15-T21 = ~20 assertions.
-- [ ] All other test suites unaffected (M3 18/18, M6 24/24, M7 39/39, M8 24/24, M9 24/24) — run at the end to confirm no regressions.
-- [ ] `thermal_mass_kj_per_k` non-null whenever `htc_w_per_k` non-null (T_V2_14 invariant).
-- [ ] v2 enum values (`'low'`, `'medium'`, `'high'`, `'very_high'`) accepted; v1 values (`'fast'`, `'evening'`, etc.) treated as null (fall through to data_default or fallback).
-- [ ] `#wall-construction` select and `#t-at-restart` input absent from `index.html`.
-- [ ] `estimateThermalCharacter()` function signature is 5 parameters.
-- [ ] Informational callout fires when `tau_data_user_divergence_ratio > 2.0` or `< 0.5`.
-- [ ] `htc_low_plausibility_callout_passthrough` echoes `'all_electric_dual_handed'` from `heatLoss` when present; null otherwise.
-- [ ] No console errors on page load (browser verification by Rhiannon).
+- [ ] `node test-m5-v2.mjs` — all 13 test cases pass
+- [ ] TC2: `|data_derived_tau_h - 16.67| / 16.67 < 0.15` (Method A recovers τ)
+- [ ] TC3: τ with constant G offset ≈ τ without (within 1.0 h); intercept absorbs the offset
+- [ ] TC4: `|C_mode - 15000| / 15000 < 0.15` (Method B recovers C); `method = 'recovery_events'`
+- [ ] TC6: `C = null`, `validation_status = 'insufficient_data'` for continuously-heated home
+- [ ] TC8: `source = 'user_tau'` when dropdown set; data τ in `tau_bucket` / `data_derived_tau_h`
+- [ ] Output contract has no `setpoint_c`, `setpoint_days_used`, `occupancy_weights`,
+  `underheat_status`, `underheat_narrative`, `annual_modelled_demand_kwh`, `wall_construction` (TC1, TC12, TC13)
+- [ ] `heating_frequency_by_hh` is a 48-element array; null < 14 non-absence days (TC9)
+- [ ] `validation_status` never equals `'no_gas'` for any input (TC10)
+- [ ] No `\.setpoint_c` references remaining in `scenario-consumption.js` (grep check)
+- [ ] `internal_gains_w` is a non-null numeric array for all non-htcUsed-null inputs
+- [ ] Existing passing test suites (M3 v2, M6, M7, M8, M9) still pass after Steps 14–15
+- [ ] No remaining references to `wall_construction`, `tAtRestartWinterC`, `measured_cold_soak`,
+  `'no_gas'` (as validation_status), `underheat_narrative` in `thermal-character.js`
 
 ---
 
 ## Implementation Deviations
 
-**Date:** yyyy-mm-dd
-**Commit:** [commit hash]
-
-None.
+_None at plan time. Record D1, D2, … during implementation._
 
 <!--
-The Design Review section is appended by the Opus reviewer when the plan is
-amended. See `coding/agents/plan-reviewer.md` for the review record template
-and the post-review Status values.
-
-Status values (canonical, from plan-reviewer.md):
+Status values (canonical):
 - Awaiting review — Opus architect review pending.    (planner sets)
-- ✅ Approved — yyyy-mm-dd. Implementation may begin.  (reviewer sets)
+- ✅ Approved — yyyy-mm-dd. Implementation may begin.
 - ⚠ Approved with edits — yyyy-mm-dd. Implementation may begin [once <prereq>].
 - ⏸ Blocked — yyyy-mm-dd. See Design Review below; rewrite required.
 - Implemented — yyyy-mm-dd, commit <hash>.            (implementer sets)
