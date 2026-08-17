@@ -1,3 +1,38 @@
+> # ⚠ REWRITE REQUIRED — DO NOT FOLLOW THIS FILE AS WRITTEN
+>
+> **Flagged 2026-08-18.** Dormant since 2026-06. Every filesystem path in this file points at a machine that no longer exists.
+>
+> **Measured defects in this file:**
+>
+> - **Every `claude-coding-hub` path reads `~/Documents/git-repos/...`** — the layout of the *previous* machine. Repositories are at `~/repos/` on the K12, so nothing in this file resolves.
+> - **Line 21 declares `**Model:** Sonnet. **Role:** Implementer.`** — role-neutrality, below.
+> - **Five pointers to `coding/agents/`**, archived 2026-08-18.
+> - **A Session Start Routine at §96** which has never fired.
+> - **Line 70 requires `dd-mmm-yyyy` dates.** The standard is `yyyy-mm-dd`.
+> - **No hub `README.md` exists** at `praxis-claude-hub/projects/tools/heatpump-analyser/`, so `/startup heatpump` stops at step 2.4 by design.
+>
+> ### The standard these files must be rewritten to
+>
+> - **Roles are declared by `/startup <project> <role>`, not by a header.** A repo
+>   `CLAUDE.md` must be **role-neutral**: an architect session that reads any file
+>   in this repo loads it too, so a file addressing "the implementer" hands one
+>   role the other's instructions.
+> - **Agents and commands are no longer files read by instruction.** Six skills,
+>   three commands and one agent load natively from `~/.claude/`. The definitions
+>   under `claude-coding-hub/coding/agents/` were archived on 2026-08-18; anything
+>   pointing there points at nothing.
+> - **A Session Start Routine in a file has never fired**, because every session
+>   starts at `~` and no repo file is in context at session start. `/startup`
+>   replaced it.
+> - **Where knowledge goes:** a durable rule → this `CLAUDE.md`; current position
+>   → `docs/STATUS.md`; spotted-but-not-actioned → `docs/NOTES.md`; something that
+>   must fire before anyone acts, whatever the project → memory.
+> - **Dates `yyyy-mm-dd`.** Not `dd-mmm-yy`, not `dd-mmm-yyyy`.
+>
+> Authoritative: `claude-coding-hub/governance/2026-08-15-agent-and-command-review.md`.
+
+---
+
 # CLAUDE.md — Heat Pump Analyser
 
 This file is auto-loaded by Claude Code. It contains **operational rules only**.
