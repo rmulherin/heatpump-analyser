@@ -10,6 +10,13 @@
 > - **A Session Start Routine at §96** which has never fired.
 > - **Line 70 requires `dd-mmm-yyyy` dates.** The standard is `yyyy-mm-dd`.
 > - **No hub `README.md` exists** at `praxis-claude-hub/projects/tools/heatpump-analyser/`, so `/startup heatpump` stops at step 2.4 by design.
+> - **Added 2026-08-19: `claude-coding-hub` was restructured**, so the remaining
+>   `coding/rules/`, `coding/languages/` and `context/` paths in this file are
+>   dead for a second, unrelated reason. `coding/rules/` and `governance/` no
+>   longer exist at all. **The map of what moved where is
+>   `claude-coding-hub/README.md`.** Left uncorrected deliberately — this file is
+>   bannered rather than rewritten by ruling (Rhiannon, 2026-08-18), and patching
+>   paths in a file that must not be followed adds cost without benefit.
 >
 > ### The standard these files must be rewritten to
 >
@@ -19,7 +26,7 @@
 >   role the other's instructions.
 > - **Agents and commands are no longer files read by instruction.** Six skills,
 >   three commands and one agent load natively from `~/.claude/`. The definitions
->   under `claude-coding-hub/coding/agents/` were archived on 2026-08-18; anything
+>   under `claude-coding-hub/coding/agents/` (now `docs/archive/agents/`) were archived on 2026-08-18; anything
 >   pointing there points at nothing.
 > - **A Session Start Routine in a file has never fired**, because every session
 >   starts at `~` and no repo file is in context at session start. `/startup`
@@ -29,7 +36,10 @@
 >   must fire before anyone acts, whatever the project → memory.
 > - **Dates `yyyy-mm-dd`.** Not `dd-mmm-yy`, not `dd-mmm-yyyy`.
 >
-> Authoritative: `claude-coding-hub/governance/2026-08-15-agent-and-command-review.md`.
+> **What actually exists now:** `claude-coding-hub/process/methodology.md` §5 — a
+> live inventory whose test is runnable. Repository layout:
+> `claude-coding-hub/README.md`. *(The 2026-08-15 agent-and-command review that
+> stood here is archived and must not be cited as a record of what exists.)*
 
 ---
 
