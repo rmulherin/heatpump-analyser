@@ -26,7 +26,7 @@
 >   role the other's instructions.
 > - **Agents and commands are no longer files read by instruction.** Six skills,
 >   three commands and one agent load natively from `~/.claude/`. The definitions
->   under `claude-coding-hub/coding/agents/` (now `docs/archive/agents/`) were archived on 2026-08-18; anything
+>   were archived on 2026-08-18 and are now records in `claude-coding-hub/docs/archive/agents/`; anything
 >   pointing there points at nothing.
 > - **A Session Start Routine in a file has never fired**, because every session
 >   starts at `~` and no repo file is in context at session start. `/startup`
